@@ -1,4 +1,7 @@
-# The Ocho War Room - Netlify config
+# The Ocho War Room
 [build]
   publish = "."
   functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"

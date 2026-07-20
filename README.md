@@ -1,57 +1,76 @@
-# The Ocho War Room
+# The Ocho War Room (full intelligence edition, v4)
 
-Live dynasty intelligence app for the Sleeper league "The Ocho."
-Four tabs: Roster Holes, Trades, Pickups, Sit/Start.
+Always-on dynasty engine. Watches the league, harvests the NFL wire,
+pulls structured analytics, mines owner behavior, remembers its own
+calls, reacts to trades instantly, and pushes to your phone.
 
-## How the data works
+## The intelligence pipeline
 
-Three layers, three refresh speeds:
+LAYER 1: LEAGUE WATCHER (snapshot.mjs, every 2 hours)
+  Full Sleeper pull, roster survey, transaction diff, change feed.
+  NEW in v4: when a TRADE is detected it immediately fires a fresh
+  trades analysis instead of waiting for the morning run, and sends
+  a push notification to your phone.
 
-1. LIVE, every pull: rosters, records, traded picks, trending adds,
-   NFL season state. Fetched from Sleeper's public API (no key needed,
-   CORS is open) every time you press Pull Live Data. Holes, surplus,
-   stance, and the future pick ledger are computed on this fresh data,
-   so they update the moment any owner makes a move.
+LAYER 2: NEWS WIRE (news.mjs, hourly at :15)
+  PFT, Yahoo NFL, CBS NFL, Rotowire, ESPN, r/nfl, r/fantasyfootball.
+  Scored against live league rosters (your players 100, league 40,
+  trending 25, breaking-news term bumps). 72h rolling digest, Wire tab.
+  Schefter/Rapoport breaks arrive via r/nfl + ESPN/PFT propagation;
+  X's API is paywalled so we capture the stream, not the platform.
+  Reddit sometimes blocks datacenter IPs; fails gracefully.
 
-2. CACHED: the NFL player database (14MB raw, trimmed and cached
-   locally, refreshed when older than 20 hours) and the owner history
-   block (career trade tendencies from 4 seasons of league history,
-   embedded in the code, refresh after each season).
+LAYER 3: HARD NUMBERS (stats.mjs, daily 11:30 UTC)
+  nflverse: per-team pass rate, plays/game, pass/rush EPA, sacks
+  allowed; official injury reports for league-rostered players; snap
+  trends for your players. Offseason uses latest completed season,
+  labeled; sharpens automatically when camp data goes live.
 
-3. ON-DEMAND: the Trades / Pickups / Sit-Start analysis. Each run
-   sends the live league context to Claude with web search turned on,
-   so the answer is grounded in that day's news, injuries, depth
-   charts, and coaching situations. Nothing is pre-baked.
+LAYER 4: OWNER BEHAVIOR DEEP-MINE (baked into lib/ocho.mjs, v4)
+  Computed from four seasons of per-player scoring data:
+  - lineup efficiency (actual vs optimal lineup, every week, 4 years)
+  - avg points left on bench per week
+  - dead starts: started a <=0 pt player with a 5+ pt bench option
+    (owmyballs: 64 of these; the signature of an inattentive owner)
+  - trade rest-of-season net points (caveat baked into the prompt:
+    picks score 0, so pick-acquirers look artificially bad)
+  Raw numbers in owner_behavior_metrics.json. Refresh each offseason.
 
-## Deploying to Netlify (same flow as your other apps)
+LAYER 5: ANALYSIS with MEMORY (analyze-background.mjs)
+  Every run gets: live league context + behavior metrics + news digest
+  + nflverse numbers + its own live web searches, AND its own last 3
+  recommendations, with orders to state which prior calls still stand,
+  which are now stale or wrong, and never repeat old advice as new.
+  Push notification when a fresh analysis is ready.
 
-1. Get an Anthropic API key at console.anthropic.com
-   (Settings > API keys > Create key). Web search on the API is
-   billed per search on top of tokens; a typical analysis run does
-   3 to 8 searches.
+## Deploy
 
-2. Push this folder to a GitHub repo (or drag-drop the folder into
-   Netlify, but repo is better since you'll iterate):
-   - index.html
-   - netlify.toml
-   - netlify/functions/claude.mjs
+1. API key: console.anthropic.com > Settings > API keys.
+2. Push this folder to GitHub, exact structure preserved.
+3. Netlify > Add new site > Import from GitHub. No build command.
+4. Environment variables:
+     ANTHROPIC_API_KEY = your key            (required)
+     NTFY_TOPIC = some-hard-to-guess-string  (optional, phone pushes)
+   For pushes: install the ntfy app (free, iOS/Android), subscribe to
+   the exact topic string you chose. No account needed. Anyone who
+   knows the topic string can read it, so make it long and random.
+5. Deploy, then visit once each to seed instead of waiting for crons:
+     /.netlify/functions/snapshot
+     /.netlify/functions/news
+     /.netlify/functions/stats
+6. Open the site. Wire + Roster Holes populate immediately; hit any
+   analysis button for the first AI run.
 
-3. In Netlify: Add new site > Import from GitHub > pick the repo.
-   Build settings are already in netlify.toml, no build command needed.
+## Cost
 
-4. Site settings > Environment variables > add:
-   ANTHROPIC_API_KEY = your key
+Sleeper, RSS, Reddit, nflverse, ntfy: free, always running.
+AI: a few cents to ~$0.25 per analysis run. Default schedule plus
+trade-triggered runs lands roughly $10-30/month. Cron lines at the
+bottom of snapshot.mjs / news.mjs / stats.mjs / analyze.mjs.
 
-5. Deploy. Done. The app auto-detects its environment: inside a
-   Claude artifact it calls the API directly with no key; on your
-   Netlify site it routes through the function so the key stays
-   server-side.
+## Season maintenance
 
-## Maintenance
-
-- After each league season ends: re-run the history pull to update
-  the OWNER_HISTORY block in index.html (career trades, tendencies,
-  titles). Everything else self-updates.
-- The league is auto-resolved by name each pull, so when Sleeper
-  rolls the league into a new season, the app follows it without a
-  code change. FALLBACK_LEAGUE_ID is the safety net.
+- Each offseason: rerun the behavior mine and history pull, refresh
+  OWNER_HISTORY in lib/ocho.mjs and index.html.
+- Everything else self-updates: league ID by name, nflverse season
+  rollover, news scoring dictionary rebuilt hourly from the snapshot.

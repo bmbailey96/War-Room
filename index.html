@@ -182,6 +182,24 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   .error-msg { border: 1px solid var(--rust); color: var(--rust); padding: 12px; font-size: 12px; margin-top: 10px; }
+  #change-feed { margin: 10px 0 0; }
+  .feed-box {
+    border: 1px dashed var(--amber);
+    background: rgba(232,163,61,0.06);
+    padding: 10px 14px;
+    font-size: 11px;
+  }
+  .feed-box .feed-title {
+    font-family: var(--display);
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--amber);
+    font-size: 11px;
+    margin-bottom: 5px;
+  }
+  .feed-item { color: var(--muted); padding: 2px 0; }
+  .feed-item b { color: var(--paper); font-weight: 500; }
+  .feed-item .when { color: var(--line-bright); }
   .empty-msg { color: var(--muted); padding: 30px 10px; text-align: center; }
   .footer-bar {
     position: fixed; bottom: 0; left: 0; right: 0;
@@ -223,11 +241,14 @@
     <span id="league-tag"></span>
   </div>
 
+  <div id="change-feed"></div>
+
   <div class="tab-bar" id="tab-bar">
     <div class="tab active" data-tab="holes">Roster Holes</div>
     <div class="tab" data-tab="trades">Trades</div>
     <div class="tab" data-tab="pickups">Pickups</div>
     <div class="tab" data-tab="sitstart">Sit / Start</div>
+    <div class="tab" data-tab="wire">The Wire</div>
   </div>
   <div class="tab-body" id="tab-body">
     <div class="empty-msg">Pull live data to begin the survey.</div>
@@ -255,7 +276,7 @@ const LEAGUE_NAME_PATTERN = /ocho|teenypetes/i;
 
 /* Owner history: slow-changing, computed from 4 seasons of league history (2022-2025).
    Refresh this block after each season by re-running the history pull. */
-const OWNER_HISTORY = {"460522508903247872":{"display_name":"AverageRedneck","championships":["2023"],"win_pct":0.589,"record":{"wins":33,"losses":23,"ties":0},"trades_count":12,"trade_positions_acquired":{"RB":5,"WR":3,"QB":4,"TE":2},"scoring":{"avg":171.22,"stdev":28.93}},"862447704859635712":{"display_name":"lackeymatt","championships":[],"win_pct":0.536,"record":{"wins":30,"losses":26,"ties":0},"trades_count":23,"trade_positions_acquired":{"QB":4,"WR":19,"TE":1,"RB":7,"DL":2},"scoring":{"avg":164.96,"stdev":31.87}},"862526263095586816":{"display_name":"owmyballs","championships":[],"win_pct":0.268,"record":{"wins":15,"losses":41,"ties":0},"trades_count":4,"trade_positions_acquired":{"QB":2,"WR":1},"scoring":{"avg":128.96,"stdev":39.82}},"863128676391383040":{"display_name":"SigourneyBeaver","championships":[],"win_pct":0.607,"record":{"wins":34,"losses":22,"ties":0},"trades_count":26,"trade_positions_acquired":{"TE":3,"RB":5,"WR":9},"scoring":{"avg":179.16,"stdev":29.45}},"863157773284864000":{"display_name":"Birkey","championships":["2024"],"win_pct":0.679,"record":{"wins":38,"losses":18,"ties":0},"trades_count":23,"trade_positions_acquired":{"RB":9,"WR":9,"QB":6,"DL":1},"scoring":{"avg":183.48,"stdev":29.84}},"863467130702671872":{"display_name":"MikahH","championships":["2022"],"win_pct":0.464,"record":{"wins":26,"losses":30,"ties":0},"trades_count":33,"trade_positions_acquired":{"QB":7,"WR":20,"RB":12,"TE":3},"scoring":{"avg":168.39,"stdev":27.51}},"994817581137604608":{"display_name":"SexyJexy19","championships":["2025"],"win_pct":0.429,"record":{"wins":18,"losses":24,"ties":0},"trades_count":11,"trade_positions_acquired":{"QB":2,"RB":3,"TE":1,"WR":4},"scoring":{"avg":164.37,"stdev":28.31}},"1027938591684538368":{"display_name":"aaronjy1999","championships":[],"win_pct":0.393,"record":{"wins":11,"losses":17,"ties":0},"trades_count":7,"trade_positions_acquired":{"RB":2,"WR":3,"QB":2},"scoring":{"avg":150.3,"stdev":34.01}},"501533314885087232":{"display_name":"vic2252","championships":[],"win_pct":0.357,"record":{"wins":5,"losses":9,"ties":0},"trades_count":3,"trade_positions_acquired":{"RB":1,"QB":2,"WR":1},"scoring":{"avg":174.02,"stdev":23.32}}};
+const OWNER_HISTORY = {"460522508903247872":{"display_name":"AverageRedneck","championships":["2023"],"win_pct":0.589,"record":{"wins":33,"losses":23,"ties":0},"trades_count":12,"trade_positions_acquired":{"RB":5,"WR":3,"QB":4,"TE":2},"scoring":{"avg":171.22,"stdev":28.93},"lineup_efficiency_pct":82.2,"dead_starts_4yr":11},"862447704859635712":{"display_name":"lackeymatt","championships":[],"win_pct":0.536,"record":{"wins":30,"losses":26,"ties":0},"trades_count":23,"trade_positions_acquired":{"QB":4,"WR":19,"TE":1,"RB":7,"DL":2},"scoring":{"avg":164.96,"stdev":31.87},"lineup_efficiency_pct":80.3,"dead_starts_4yr":13},"862526263095586816":{"display_name":"owmyballs","championships":[],"win_pct":0.268,"record":{"wins":15,"losses":41,"ties":0},"trades_count":4,"trade_positions_acquired":{"QB":2,"WR":1},"scoring":{"avg":128.96,"stdev":39.82},"lineup_efficiency_pct":81.4,"dead_starts_4yr":64},"863128676391383040":{"display_name":"SigourneyBeaver","championships":[],"win_pct":0.607,"record":{"wins":34,"losses":22,"ties":0},"trades_count":26,"trade_positions_acquired":{"TE":3,"RB":5,"WR":9},"scoring":{"avg":179.16,"stdev":29.45},"lineup_efficiency_pct":84.7,"dead_starts_4yr":10},"863157773284864000":{"display_name":"Birkey","championships":["2024"],"win_pct":0.679,"record":{"wins":38,"losses":18,"ties":0},"trades_count":23,"trade_positions_acquired":{"RB":9,"WR":9,"QB":6,"DL":1},"scoring":{"avg":183.48,"stdev":29.84},"lineup_efficiency_pct":84.9,"dead_starts_4yr":11},"863467130702671872":{"display_name":"MikahH","championships":["2022"],"win_pct":0.464,"record":{"wins":26,"losses":30,"ties":0},"trades_count":33,"trade_positions_acquired":{"QB":7,"WR":20,"RB":12,"TE":3},"scoring":{"avg":168.39,"stdev":27.51},"lineup_efficiency_pct":84.6,"dead_starts_4yr":14},"994817581137604608":{"display_name":"SexyJexy19","championships":["2025"],"win_pct":0.429,"record":{"wins":18,"losses":24,"ties":0},"trades_count":11,"trade_positions_acquired":{"QB":2,"RB":3,"TE":1,"WR":4},"scoring":{"avg":164.37,"stdev":28.31},"lineup_efficiency_pct":81.7,"dead_starts_4yr":10},"1027938591684538368":{"display_name":"aaronjy1999","championships":[],"win_pct":0.393,"record":{"wins":11,"losses":17,"ties":0},"trades_count":7,"trade_positions_acquired":{"RB":2,"WR":3,"QB":2},"scoring":{"avg":150.3,"stdev":34.01},"lineup_efficiency_pct":76.9,"dead_starts_4yr":36},"501533314885087232":{"display_name":"vic2252","championships":[],"win_pct":0.357,"record":{"wins":5,"losses":9,"ties":0},"trades_count":3,"trade_positions_acquired":{"RB":1,"QB":2,"WR":1},"scoring":{"avg":174.02,"stdev":23.32},"lineup_efficiency_pct":85.9,"dead_starts_4yr":3}};
 
 const STARTER_NEEDS = { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1, DL_eligible: 1 };
 
@@ -284,9 +305,40 @@ const S = {
   league: null, rosters: null, users: null, tradedPicks: null,
   playersDB: null, teams: null, nflState: null, trending: null,
   activeTab: 'holes',
-  aiResults: {},   // per-tab cached AI output for this session
+  aiResults: {},   // per-tab session AI output (artifact mode direct runs)
   aiRunning: {},
+  server: null,    // stored snapshot/changelog/analyses from the always-on backend
+  isDeployed: !window.storage,  // artifact has window.storage; deployed site doesn't
+  pollTimers: {},
 };
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+
+async function loadServerData() {
+  try {
+    const res = await fetch('/.netlify/functions/get-data', { cache: 'no-store' });
+    if (!res.ok) return;
+    S.server = await res.json();
+    renderChangeFeed();
+    renderTab();
+  } catch (e) { /* artifact mode or backend not deployed yet */ }
+}
+
+function renderChangeFeed() {
+  const el = document.getElementById('change-feed');
+  const log = (S.server && S.server.changelog) || [];
+  if (!log.length) { el.innerHTML = ''; return; }
+  const items = log.slice(0, 8).map(e =>
+    `<div class="feed-item"><span class="when">${timeAgo(e.at)}</span> · <b>${esc(e.type === 'trade' ? 'TRADE' : 'MOVE')}</b> ${esc(e.desc)}</div>`
+  ).join('');
+  el.innerHTML = `<div class="feed-box"><div class="feed-title">League activity / auto-detected by the 2-hour watcher</div>${items}</div>`;
+}
 
 /* ---------- utility ---------- */
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -608,16 +660,54 @@ For every recommendation, say specifically what current information from your se
 };
 
 async function runAI(tabKey) {
-  if (!S.teams) { alert('Pull live data first.'); return; }
+  if (!S.teams && !(S.server && S.server.snapshot)) { alert('Pull live data first.'); return; }
   S.aiRunning[tabKey] = true;
   renderTab();
+
+  if (!S.isDeployed) {
+    // Artifact mode: direct API call, no key needed
+    try {
+      const text = await callClaude(AI_TASKS[tabKey].prompt(), { useSearch: true, maxTokens: 3500 });
+      S.aiResults[tabKey] = { text, at: new Date() };
+    } catch (err) {
+      S.aiResults[tabKey] = { error: err.message, at: new Date() };
+    } finally {
+      S.aiRunning[tabKey] = false;
+      renderTab();
+    }
+    return;
+  }
+
+  // Deployed mode: queue a background run, then poll the stored result.
+  // Synchronous functions get killed at ~26s and research runs longer,
+  // so the long work happens server-side in a background function.
   try {
-    const text = await callClaude(AI_TASKS[tabKey].prompt(), { useSearch: true, maxTokens: 3500 });
-    S.aiResults[tabKey] = { text, at: new Date() };
+    const prevAt = (((S.server || {}).analyses || {})[tabKey] || {}).at || 0;
+    await fetch('/.netlify/functions/trigger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: tabKey }),
+    });
+    clearInterval(S.pollTimers[tabKey]);
+    let polls = 0;
+    S.pollTimers[tabKey] = setInterval(async () => {
+      polls++;
+      await loadServerData();
+      const cur = (((S.server || {}).analyses || {})[tabKey]) || {};
+      if ((cur.status === 'done' || cur.status === 'error') && (cur.at || 0) > prevAt) {
+        clearInterval(S.pollTimers[tabKey]);
+        S.aiRunning[tabKey] = false;
+        renderTab();
+      } else if (polls > 40) { // ~7 minutes cap
+        clearInterval(S.pollTimers[tabKey]);
+        S.aiRunning[tabKey] = false;
+        S.aiResults[tabKey] = { error: 'Timed out waiting for the background run. Check the Netlify function logs.', at: new Date() };
+        renderTab();
+      }
+    }, 10000);
   } catch (err) {
-    S.aiResults[tabKey] = { error: err.message, at: new Date() };
-  } finally {
     S.aiRunning[tabKey] = false;
+    S.aiResults[tabKey] = { error: err.message, at: new Date() };
     renderTab();
   }
 }
@@ -644,7 +734,7 @@ function renderHoles() {
       <div class="stat-line"><span>Future picks</span><b>${t.picks.length}</b></div>
       <div class="depth-row">${chips}</div>
       ${punch}
-      <div class="behavior-note"><span class="eng">${engagement(h.trades_count)}</span> · career ${h.trades_count ?? '?'} trades · hunts: ${Object.entries(h.trade_positions_acquired||{}).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([p,c])=>p).join(', ')||'?'}</div>
+      <div class="behavior-note"><span class="eng">${engagement(h.trades_count)}</span> · career ${h.trades_count ?? '?'} trades · hunts: ${Object.entries(h.trade_positions_acquired||{}).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([p,c])=>p).join(', ')||'?'}${h.lineup_efficiency_pct ? `<br/>Lineup eff ${h.lineup_efficiency_pct}% · ${h.dead_starts_4yr} dead starts in 4yrs${h.dead_starts_4yr >= 30 ? ' <span style="color:var(--amber)">(inattentive: buy low)</span>' : ''}` : ''}</div>
     </div>`;
   }).join('');
   return `<div class="grid">${cards}</div>`;
@@ -653,18 +743,28 @@ function renderHoles() {
 function renderAITab(tabKey) {
   const task = AI_TASKS[tabKey];
   const running = S.aiRunning[tabKey];
-  const result = S.aiResults[tabKey];
+  const session = S.aiResults[tabKey];
+  const stored = (((S.server || {}).analyses || {})[tabKey]) || null;
   let resultHtml = '';
+
   if (running) {
-    resultHtml = `<div class="ai-result"><span class="spinner"></span>Researching live: pulling current news, injuries, and values. This takes 30 to 90 seconds because it is doing real web searches.</div>`;
-  } else if (result && result.error) {
-    resultHtml = `<div class="error-msg">Analysis failed: ${esc(result.error)}. If this is the deployed site, check the Netlify function and API key. Inside Claude, just retry.</div>`;
-  } else if (result) {
-    resultHtml = `<div class="ai-result">${renderMd(result.text)}</div>
-      <div class="ai-note" style="margin-top:8px">Generated ${result.at.toLocaleTimeString()} using live web research. Rerun any time; every run pulls fresh.</div>`;
+    resultHtml = `<div class="ai-result"><span class="spinner"></span>Researching live: pulling current news, injuries, and values. Takes 30 to 90 seconds because it is doing real web searches.${S.isDeployed ? ' Running server-side; result appears here automatically.' : ''}</div>`;
+  } else if (session && session.error) {
+    resultHtml = `<div class="error-msg">Analysis failed: ${esc(session.error)}. ${S.isDeployed ? 'Check the Netlify function logs and API key.' : 'Inside Claude, just retry.'}</div>`;
+  } else if (session) {
+    resultHtml = `<div class="ai-result">${renderMd(session.text)}</div>
+      <div class="ai-note" style="margin-top:8px">Fresh run, generated ${session.at.toLocaleTimeString()} with live web research.</div>`;
+  } else if (stored && stored.status === 'done') {
+    resultHtml = `<div class="ai-result">${renderMd(stored.text)}</div>
+      <div class="ai-note" style="margin-top:8px">Auto-generated ${timeAgo(stored.at)} by the scheduled morning run (daily 7am MT, plus after league activity). Hit the button for an on-demand refresh.</div>`;
+  } else if (stored && stored.status === 'running') {
+    resultHtml = `<div class="ai-result"><span class="spinner"></span>The scheduled run is working on this right now. Refresh in a minute.</div>`;
+  } else if (stored && stored.status === 'error') {
+    resultHtml = `<div class="error-msg">Last scheduled run failed: ${esc(stored.error || 'unknown')}. Trigger a fresh run or check the function logs.</div>`;
   } else {
-    resultHtml = `<div class="empty-msg">No analysis run yet this session. Everything is computed fresh when you run it.</div>`;
+    resultHtml = `<div class="empty-msg">${S.isDeployed ? 'No stored analysis yet. The daily 7am run will populate this, or trigger one now.' : 'No analysis run yet this session.'}</div>`;
   }
+
   let extra = '';
   if (tabKey === 'pickups' && S.teams) {
     const rows = trendingBlock().split('\n').slice(0, 12).map(line => `<tr><td>${esc(line)}</td></tr>`).join('');
@@ -672,7 +772,7 @@ function renderAITab(tabKey) {
   }
   return `<div class="ai-panel">
     <div class="ai-controls">
-      <button onclick="runAI('${tabKey}')" ${running || !S.teams ? 'disabled' : ''}>${task.button}</button>
+      <button onclick="runAI('${tabKey}')" ${running ? 'disabled' : ''}>${task.button}</button>
       <span class="ai-note">${task.note}</span>
     </div>
     ${resultHtml}
@@ -680,9 +780,33 @@ function renderAITab(tabKey) {
   </div>`;
 }
 
+function renderWire() {
+  const news = (S.server || {}).news;
+  if (!news || !news.items || !news.items.length) {
+    return `<div class="empty-msg">${S.isDeployed
+      ? 'The hourly news harvester has not run yet, or found nothing. It pulls PFT, Yahoo, CBS, Rotowire, ESPN, and Reddit every hour and scores each item against league rosters.'
+      : 'The Wire runs on the deployed site, where the hourly harvester feeds it. In artifact mode the analysis tabs still do live web research on demand.'}</div>`;
+  }
+  const badge = i => {
+    if ((i.matched?.mine || []).length) return '<span style="color:var(--amber);font-weight:600">MY PLAYER</span>';
+    if ((i.matched?.league || []).length) return '<span style="color:var(--line-bright)">LEAGUE ROSTER</span>';
+    if ((i.matched?.trending || []).length) return '<span style="color:var(--green)">TRENDING</span>';
+    return '';
+  };
+  const rows = news.items.slice(0, 50).map(i => `
+    <div class="punch-item" style="align-items:baseline">
+      <span style="flex:none;font-size:10px;color:var(--muted);width:80px">${esc(i.source)}<br/><span class="ai-note">${timeAgo(i.at)}</span></span>
+      <span style="flex:1"><a href="${esc(i.link)}" target="_blank" rel="noopener" style="color:var(--paper);text-decoration:none">${esc(i.title)}</a>
+        <span style="font-size:10px;margin-left:6px">${badge(i)}</span></span>
+      <span style="flex:none;font-size:10px;color:var(--muted)">${i.score}</span>
+    </div>`).join('');
+  return `<div class="ai-note" style="margin-bottom:10px">Harvested ${timeAgo(news.at)}. Scored by relevance: your players 100pts, league rosters 40, trending 25, plus breaking-news term bumps. The analysis runs read this same feed.</div>${rows}`;
+}
+
 function renderTab() {
   const body = document.getElementById('tab-body');
   if (S.activeTab === 'holes') body.innerHTML = renderHoles();
+  else if (S.activeTab === 'wire') body.innerHTML = renderWire();
   else body.innerHTML = renderAITab(S.activeTab);
 }
 
@@ -697,6 +821,9 @@ document.getElementById('tab-bar').addEventListener('click', e => {
 document.getElementById('refresh-btn').addEventListener('click', pullLive);
 window.runAI = runAI;
 pullLive();
+loadServerData();
+// While the page is open, keep the stored data and change feed fresh
+setInterval(loadServerData, 1000 * 60 * 5);
 </script>
 </body>
 </html>

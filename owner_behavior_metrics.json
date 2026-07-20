@@ -1,0 +1,83 @@
+{
+  "862447704859635712": {
+    "display_name": "lackeymatt",
+    "lineup_efficiency_pct": 80.3,
+    "avg_pts_left_on_bench_per_week": 40.2,
+    "zero_point_starts": 13,
+    "weeks_tracked": 68,
+    "trade_ros_pts_net": 735.1,
+    "trades_graded": 20
+  },
+  "862526263095586816": {
+    "display_name": "owmyballs",
+    "lineup_efficiency_pct": 81.4,
+    "avg_pts_left_on_bench_per_week": 29.5,
+    "zero_point_starts": 64,
+    "weeks_tracked": 68,
+    "trade_ros_pts_net": 444.3,
+    "trades_graded": 3
+  },
+  "460522508903247872": {
+    "display_name": "AverageRedneck",
+    "lineup_efficiency_pct": 82.2,
+    "avg_pts_left_on_bench_per_week": 37.0,
+    "zero_point_starts": 11,
+    "weeks_tracked": 68,
+    "trade_ros_pts_net": 167.8,
+    "trades_graded": 10
+  },
+  "863128676391383040": {
+    "display_name": "SigourneyBeaver",
+    "lineup_efficiency_pct": 84.7,
+    "avg_pts_left_on_bench_per_week": 32.3,
+    "zero_point_starts": 10,
+    "weeks_tracked": 68,
+    "trade_ros_pts_net": -1647.1,
+    "trades_graded": 19
+  },
+  "863157773284864000": {
+    "display_name": "Birkey",
+    "lineup_efficiency_pct": 84.9,
+    "avg_pts_left_on_bench_per_week": 32.6,
+    "zero_point_starts": 11,
+    "weeks_tracked": 68,
+    "trade_ros_pts_net": -2601.1,
+    "trades_graded": 19
+  },
+  "863467130702671872": {
+    "display_name": "MikahH",
+    "lineup_efficiency_pct": 84.6,
+    "avg_pts_left_on_bench_per_week": 30.7,
+    "zero_point_starts": 14,
+    "weeks_tracked": 68,
+    "trade_ros_pts_net": 255.6,
+    "trades_graded": 28
+  },
+  "1027938591684538368": {
+    "display_name": "aaronjy1999",
+    "lineup_efficiency_pct": 76.9,
+    "avg_pts_left_on_bench_per_week": 45.4,
+    "zero_point_starts": 36,
+    "weeks_tracked": 34,
+    "trade_ros_pts_net": 516.3,
+    "trades_graded": 5
+  },
+  "994817581137604608": {
+    "display_name": "SexyJexy19",
+    "lineup_efficiency_pct": 81.7,
+    "avg_pts_left_on_bench_per_week": 36.8,
+    "zero_point_starts": 10,
+    "weeks_tracked": 51,
+    "trade_ros_pts_net": 699.3,
+    "trades_graded": 7
+  },
+  "501533314885087232": {
+    "display_name": "vic2252",
+    "lineup_efficiency_pct": 85.9,
+    "avg_pts_left_on_bench_per_week": 28.8,
+    "zero_point_starts": 3,
+    "weeks_tracked": 17,
+    "trade_ros_pts_net": 206.8,
+    "trades_graded": 3
+  }
+}
