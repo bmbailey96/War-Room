@@ -12,6 +12,8 @@ export default async (req) => {
   const tasks = ["trades", "pickups"];
   // Sit/start: Thu(4) Sat(6) Sun(0) in season; Mondays(1) offseason as a roster stress test
   if (inSeason ? [4, 6, 0].includes(day) : day === 1) tasks.push("sitstart");
+  // Team-by-team intel book: refresh weekly on Mondays
+  if (day === 1) tasks.push("teams");
 
   // Fire and forget: background function does the heavy lifting
   await fetch(`${base}/.netlify/functions/analyze-background`, {

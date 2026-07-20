@@ -69,6 +69,7 @@ function prompts(snapshot, trendingText, newsDigest, statsDigest) {
     : "";
   const wk = snapshot.nflState || {};
   const inSeason = wk.season_type === "regular" && wk.week >= 1;
+  const MOVE = `\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
   return {
     trades: `You are a dynasty fantasy football trade analyst for my league. Use web search to check CURRENT dynasty trade values, recent NFL news, injuries, and coaching or depth chart changes for players named below.
 
@@ -77,7 +78,7 @@ ${ctx}
 MY FULL ROSTER (The Nightmen):
 ${mine}
 
-TASK: Recommend my 3 to 5 best realistic trades right now. For each: (1) exact partner and why their stance, holes, tendencies, and engagement level make them likely to deal; (2) a specific package including future picks where sensible; (3) valuations grounded in your current web research, say what you found; (4) honest risk. Prioritize my flagged holes and monetize my flagged surplus. Weight owner behavior: fair deals with active traders beat perfect deals with owners who never trade. No filler.${groundNote}`,
+TASK: Recommend my 3 to 5 best realistic trades right now. For each: (1) exact partner and why their stance, holes, tendencies, and engagement level make them likely to deal; (2) a specific package including future picks where sensible; (3) valuations grounded in your current web research, say what you found; (4) honest risk. Prioritize my flagged holes and monetize my flagged surplus. Weight owner behavior: fair deals with active traders beat perfect deals with owners who never trade. No filler.${groundNote}${MOVE}`,
     pickups: `You are a dynasty fantasy football waiver analyst. Use web search for CURRENT news on the players below: role changes, injuries ahead of them, scheme fits, camp reports.
 
 ${ctx}
@@ -88,7 +89,7 @@ ${mine}
 PLAYERS TRENDING LEAGUE-WIDE ON SLEEPER (48h), UNROSTERED IN MY LEAGUE:
 ${trendingText || "(no trending players currently available)"}
 
-TASK: My 3 to 6 best pickups right now, and who to drop for each. Consider my flagged holes first, dynasty value over redraft (age, opportunity trajectory), and what your search found about each player's current situation. Rolling waiver priority league, no FAAB, so say when someone is worth burning priority on. Be honest if the pool is weak. No filler.${groundNote}`,
+TASK: My 3 to 6 best pickups right now, and who to drop for each. Consider my flagged holes first, dynasty value over redraft (age, opportunity trajectory), and what your search found about each player's current situation. Rolling waiver priority league, no FAAB, so say when someone is worth burning priority on. Be honest if the pool is weak. No filler.${groundNote}${MOVE}`,
     sitstart: inSeason
       ? `You are a fantasy football lineup analyst. It is ${wk.season} NFL regular season, week ${wk.week}. Use web search extensively: current injuries and practice reports, offensive coordinator and scheme tendencies for each player's NFL team (run/pass lean, pace, new-OC risk), depth chart changes, breaking news.
 
@@ -97,13 +98,27 @@ LINEUP SLOTS: ${JSON.stringify(snapshot.rosterPositions)}
 MY FULL ROSTER (The Nightmen):
 ${mine}
 
-Set my optimal lineup for the coming week. For every call, cite the specific current information from your search that drove it, with a confidence level. No filler.${groundNote}`
+Set my optimal lineup for the coming week. For every call, cite the specific current information from your search that drove it, with a confidence level. No filler.${groundNote}${MOVE}`
       : `You are a fantasy football roster analyst. It is the NFL offseason. Use web search extensively for current camp reports, depth chart battles, coaching and coordinator changes affecting my players.
 
 MY FULL ROSTER (The Nightmen):
 ${mine}
 
-Run a roster stress test: locked-in starters by position when the season opens, the closest lineup battles, and which player situations to monitor based on current news. Cite what your search found. No filler.${groundNote}`,
+Run a roster stress test: locked-in starters by position when the season opens, the closest lineup battles, and which player situations to monitor based on current news. Cite what your search found. No filler.${groundNote}${MOVE}`,
+    teams: `You are a dynasty fantasy football scout writing the intel book on every OTHER team in my league. Use web search for current news and values where it changes the read on a specific player.
+
+${ctx}
+
+MY FULL ROSTER (The Nightmen):
+${mine}
+
+For EACH of the other 7 teams, write a tight intel report:
+1. DIRECTION: where they are headed (their stance, age curve, pick capital)
+2. UNTOUCHABLES: 1-3 players they will never move, and why
+3. GETTABLE: 2-4 players realistically acquirable, using their surplus, holes, owner tendencies (positions they hunt, engagement level), and management data (high dead-start owners undervalue their bench; low-engagement owners need overwhelming clarity)
+4. THE ASK: the single best asset for ME to target on that roster and roughly what it costs
+5. THEIR ANGLE: what they would want from MY roster
+Be blunt and specific, position by position where it matters. Rookies and future picks count as assets.${groundNote}${MOVE}`,
   };
 }
 

@@ -200,6 +200,41 @@
   .feed-item { color: var(--muted); padding: 2px 0; }
   .feed-item b { color: var(--paper); font-weight: 500; }
   .feed-item .when { color: var(--line-bright); }
+  #the-call { margin: 12px 0 0; }
+  .call-box {
+    border: 2px solid var(--amber);
+    background: rgba(232,163,61,0.09);
+    padding: 14px 18px;
+    position: relative;
+  }
+  .call-box .call-label {
+    font-family: var(--display);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--amber);
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .call-box .call-text { color: var(--paper); font-size: 13px; }
+  .call-box .call-src { font-size: 10px; color: var(--muted); margin-top: 6px; }
+  .chart-block { margin-bottom: 26px; }
+  .chart-title {
+    font-family: var(--display);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 13px;
+    color: var(--line-bright);
+    margin-bottom: 8px;
+  }
+  .chart-note { font-size: 10.5px; color: var(--muted); margin-top: 4px; }
+  .team-card { background: var(--panel-2); border: 1px solid var(--line); padding: 14px 16px; margin-bottom: 14px; }
+  .pos-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; padding: 4px 0; border-top: 1px solid rgba(127,196,224,0.1); }
+  .pos-label { flex: none; width: 38px; font-family: var(--display); color: var(--line-bright); font-size: 12px; }
+  .player-chip { font-size: 10.5px; padding: 2px 7px; background: var(--panel); border: 1px solid var(--line); color: var(--paper); }
+  .player-chip .meta { color: var(--muted); }
+  .player-chip.old { border-color: var(--rust); }
+  .player-chip.young { border-color: var(--green); }
   .empty-msg { color: var(--muted); padding: 30px 10px; text-align: center; }
   .footer-bar {
     position: fixed; bottom: 0; left: 0; right: 0;
@@ -243,11 +278,15 @@
 
   <div id="change-feed"></div>
 
+  <div id="the-call"></div>
+
   <div class="tab-bar" id="tab-bar">
     <div class="tab active" data-tab="holes">Roster Holes</div>
+    <div class="tab" data-tab="teams">Teams</div>
     <div class="tab" data-tab="trades">Trades</div>
     <div class="tab" data-tab="pickups">Pickups</div>
     <div class="tab" data-tab="sitstart">Sit / Start</div>
+    <div class="tab" data-tab="data">Data</div>
     <div class="tab" data-tab="wire">The Wire</div>
   </div>
   <div class="tab-body" id="tab-body">
@@ -333,11 +372,21 @@ async function loadServerData() {
 function renderChangeFeed() {
   const el = document.getElementById('change-feed');
   const log = (S.server && S.server.changelog) || [];
-  if (!log.length) { el.innerHTML = ''; return; }
-  const items = log.slice(0, 8).map(e =>
-    `<div class="feed-item"><span class="when">${timeAgo(e.at)}</span> · <b>${esc(e.type === 'trade' ? 'TRADE' : 'MOVE')}</b> ${esc(e.desc)}</div>`
-  ).join('');
-  el.innerHTML = `<div class="feed-box"><div class="feed-title">League activity / auto-detected by the 2-hour watcher</div>${items}</div>`;
+  const alerts = (S.server && S.server.alerts) || [];
+  let html = '';
+  if (alerts.length) {
+    const items = alerts.slice(0, 5).map(a =>
+      `<div class="feed-item"><span class="when">${timeAgo(a.at)}</span> · <b style="color:var(--rust)">${esc(a.action)}</b> <b>${esc(a.title || a.player || '')}</b>: ${esc(a.message || '')}</div>`
+    ).join('');
+    html += `<div class="feed-box" style="border-color:var(--rust);background:rgba(217,105,79,0.07);margin-bottom:8px"><div class="feed-title" style="color:var(--rust)">Action alerts / pushed to your phone by the hourly scout</div>${items}</div>`;
+  }
+  if (log.length) {
+    const items = log.slice(0, 8).map(e =>
+      `<div class="feed-item"><span class="when">${timeAgo(e.at)}</span> · <b>${esc(e.type === 'trade' ? 'TRADE' : 'MOVE')}</b> ${esc(e.desc)}</div>`
+    ).join('');
+    html += `<div class="feed-box"><div class="feed-title">League activity / auto-detected by the 2-hour watcher</div>${items}</div>`;
+  }
+  el.innerHTML = html;
 }
 
 /* ---------- utility ---------- */
@@ -597,6 +646,8 @@ function trendingBlock() {
 }
 
 /* ---------- AI tab runners ---------- */
+const MOVE_REQ = `\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
+
 const AI_TASKS = {
   trades: {
     button: 'Run Trade Analysis',
@@ -613,7 +664,7 @@ TASK: Recommend my 3 to 5 best realistic trade targets or trade constructions ri
 2. Propose a specific package including future picks where sensible (this is dynasty, picks matter)
 3. Ground your player valuations in CURRENT news and consensus dynasty values from your web search, and say what you found
 4. Flag the risk in each deal honestly
-Prioritize fixing my flagged holes and monetizing my flagged surplus. Consider owner behavior: a great value trade with an owner who never trades is worth less than a fair trade with an active one. Keep it concrete, no filler.`,
+Prioritize fixing my flagged holes and monetizing my flagged surplus. Consider owner behavior: a great value trade with an owner who never trades is worth less than a fair trade with an active one. Keep it concrete, no filler.` + MOVE_REQ,
   },
   pickups: {
     button: 'Run Pickup Analysis',
@@ -633,7 +684,7 @@ TASK: Recommend my 3 to 6 best pickups right now, and who I should drop for each
 2. Dynasty value over redraft value: age, contract situation, opportunity trajectory
 3. What your web search found about each player's CURRENT situation, cite what you learned
 4. This league has rolling waiver priority, no FAAB, so note if a player is worth burning priority position on
-Be honest if the available pool is weak. No filler.`,
+Be honest if the available pool is weak. No filler.` + MOVE_REQ,
   },
   sitstart: {
     button: 'Run Sit/Start Analysis',
@@ -654,8 +705,26 @@ LINEUP SLOTS: ${JSON.stringify(S.league.roster_positions)}
 MY FULL ROSTER (The Nightmen):
 ${myRosterBlock()}
 
-For every recommendation, say specifically what current information from your search drove it (an injury report, a scheme note, a coordinator tendency). Confidence level on each call. No filler.`;
+For every recommendation, say specifically what current information from your search drove it (an injury report, a scheme note, a coordinator tendency). Confidence level on each call. No filler.` + MOVE_REQ;
     },
+  },
+  teams: {
+    button: 'Run Team Intel Scout',
+    note: 'Writes the book on all 7 opponents.',
+    prompt: () => `You are a dynasty fantasy football scout writing the intel book on every OTHER team in my league. Use web search for current news and values where it changes the read on a specific player.
+
+${leagueContextBlock()}
+
+MY FULL ROSTER (The Nightmen):
+${myRosterBlock()}
+
+For EACH of the other 7 teams, write a tight intel report:
+1. DIRECTION: where they are headed (stance, age curve, pick capital)
+2. UNTOUCHABLES: 1-3 players they will never move, and why
+3. GETTABLE: 2-4 players realistically acquirable, using their surplus, holes, and owner tendencies
+4. THE ASK: the single best asset for ME to target on that roster and roughly what it costs
+5. THEIR ANGLE: what they would want from MY roster
+Be blunt and specific. Rookies and future picks count as assets.` + MOVE_REQ,
   },
 };
 
@@ -710,6 +779,126 @@ async function runAI(tabKey) {
     S.aiResults[tabKey] = { error: err.message, at: new Date() };
     renderTab();
   }
+}
+
+/* ---------- THE CALL: the single directive, extracted from the freshest analysis ---------- */
+function renderTheCall() {
+  const el = document.getElementById('the-call');
+  const analyses = ((S.server || {}).analyses) || {};
+  let best = null;
+  for (const [key, a] of Object.entries(analyses)) {
+    if (!a || a.status !== 'done' || !a.text) continue;
+    const m = a.text.match(/##\s*THE MOVE\s*\n([\s\S]*?)(?=\n##|$)/i);
+    if (m && (!best || a.at > best.at)) best = { at: a.at, key, move: m[1].trim() };
+  }
+  for (const [key, r] of Object.entries(S.aiResults)) {
+    if (!r || !r.text) continue;
+    const m = r.text.match(/##\s*THE MOVE\s*\n([\s\S]*?)(?=\n##|$)/i);
+    if (m && (!best || +r.at > best.at)) best = { at: +r.at, key, move: m[1].trim() };
+  }
+  if (!best) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="call-box">
+    <div class="call-label">The Call</div>
+    <div class="call-text">${renderMd(best.move)}</div>
+    <div class="call-src">From the ${esc(best.key)} run, ${timeAgo(best.at)}. One move. Win now and later.</div>
+  </div>`;
+}
+
+/* ---------- Teams tab: position-by-position book on every roster ---------- */
+function renderTeams() {
+  if (!S.teams) return '<div class="empty-msg">Pull live data first.</div>';
+  const POS_ORDER = ['QB','RB','WR','TE','K','DEF'];
+  const cards = [...S.teams].sort((a,b) => (a.isMe?-1:0)-(b.isMe?-1:0) || b.winPct - a.winPct).map(t => {
+    const h = t.history || {};
+    const byPos = {};
+    t.players.forEach(p => { const k = p.pos || 'IDP'; (byPos[k] = byPos[k] || []).push(p); });
+    Object.values(byPos).forEach(list => list.sort((a,b) => (a.age||99) - (b.age||99)));
+    const posRows = [...POS_ORDER, ...Object.keys(byPos).filter(k => !POS_ORDER.includes(k))]
+      .filter(k => byPos[k])
+      .map(k => `<div class="pos-row"><span class="pos-label">${k}</span>${
+        byPos[k].map(p => {
+          const cls = p.age >= 29 ? 'old' : (p.age <= 24 ? 'young' : '');
+          return `<span class="player-chip ${cls}">${esc(p.name)} <span class="meta">${p.age || '?'}</span>${p.inj ? ` <span style="color:var(--rust)">${esc(p.inj)}</span>` : ''}</span>`;
+        }).join('')
+      }</div>`).join('');
+    const picksLine = t.picks.map(p => `${p.season} R${p.round}${p.original !== t.name ? `*` : ''}`).join(', ');
+    return `<div class="team-card" ${t.isMe ? 'style="border-color:var(--amber)"' : ''}>
+      <div class="card-head">
+        <div><h3>${esc(t.name)}${t.isMe ? ' ★' : ''}</h3><div class="owner-tag">${esc(h.display_name || '')} · ${t.wins}-${t.losses} · avg age ${t.avgAge ?? '?'}</div></div>
+        <div class="stance-badge ${t.stance.cls}">${t.stance.label}</div>
+      </div>
+      ${posRows}
+      <div class="behavior-note">Picks: ${picksLine || 'none'} (* = acquired) · ${engagement(h.trades_count)}${h.lineup_efficiency_pct ? ` · lineup eff ${h.lineup_efficiency_pct}%` : ''}${h.dead_starts_4yr >= 30 ? ' · <span style="color:var(--amber)">inattentive: assets gettable below value</span>' : ''}</div>
+    </div>`;
+  }).join('');
+
+  const intel = (((S.server || {}).analyses || {}).teams) || null;
+  const sessionIntel = S.aiResults.teams;
+  let intelHtml = '';
+  if (S.aiRunning.teams) intelHtml = `<div class="ai-result"><span class="spinner"></span>Scouting all 7 rosters with live research. This is the longest run, 1-3 minutes.</div>`;
+  else if (sessionIntel && sessionIntel.text) intelHtml = `<div class="ai-result">${renderMd(sessionIntel.text)}</div>`;
+  else if (intel && intel.status === 'done') intelHtml = `<div class="ai-result">${renderMd(intel.text)}</div><div class="ai-note" style="margin-top:8px">Intel book auto-refreshed ${timeAgo(intel.at)} (weekly, Mondays). Button below for a fresh scout.</div>`;
+  else intelHtml = `<div class="empty-msg">No intel book yet. Run the scout below: untouchables, gettable players, the ask, and their angle, for every roster.</div>`;
+
+  return `${cards}
+    <div class="ai-controls" style="margin-top:6px">
+      <button onclick="runAI('teams')" ${S.aiRunning.teams ? 'disabled' : ''}>Run Team Intel Scout</button>
+      <span class="ai-note">Writes the book on all 7 opponents: direction, untouchables, gettable pieces, what to ask for, what they want back.</span>
+    </div>
+    ${intelHtml}`;
+}
+
+/* ---------- Data tab: charts, dependency-free SVG ---------- */
+function barChart(rows, { unit = '', highlight = null, goodHigh = true } = {}) {
+  const max = Math.max(...rows.map(r => r.v), 0.001);
+  const W = 640, barH = 22, gap = 7, labelW = 150;
+  const H = rows.length * (barH + gap);
+  const bars = rows.map((r, i) => {
+    const y = i * (barH + gap);
+    const w = Math.max((r.v / max) * (W - labelW - 70), 2);
+    const isHl = r.k === highlight;
+    const rank = i / Math.max(rows.length - 1, 1);
+    const strong = goodHigh ? rank < 0.34 : rank > 0.66;
+    const color = isHl ? 'var(--amber)' : (strong ? 'var(--green)' : 'var(--line-bright)');
+    return `<text x="0" y="${y + 15}" fill="${isHl ? 'var(--amber)' : 'var(--muted)'}" font-size="11" font-family="IBM Plex Mono">${esc(r.k).slice(0, 20)}</text>
+      <rect x="${labelW}" y="${y + 3}" width="${w}" height="${barH - 8}" fill="${color}" opacity="${isHl ? 1 : 0.75}"/>
+      <text x="${labelW + w + 6}" y="${y + 15}" fill="var(--paper)" font-size="11" font-family="IBM Plex Mono">${r.v}${unit}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;overflow:visible">${bars}</svg>`;
+}
+
+function renderData() {
+  if (!S.teams) return '<div class="empty-msg">Pull live data first.</div>';
+  const teams = S.teams;
+  const meName = (teams.find(t => t.isMe) || {}).name;
+  const sortDesc = (arr) => [...arr].sort((a,b) => b.v - a.v);
+
+  const eff = sortDesc(teams.filter(t => t.history.lineup_efficiency_pct).map(t => ({ k: t.name, v: t.history.lineup_efficiency_pct })));
+  const avgScore = sortDesc(teams.filter(t => t.history.scoring).map(t => ({ k: t.name, v: t.history.scoring.avg })));
+  const dead = sortDesc(teams.filter(t => t.history.dead_starts_4yr != null).map(t => ({ k: t.name, v: t.history.dead_starts_4yr })));
+  const picks = sortDesc(teams.map(t => ({ k: t.name, v: t.picks.length })));
+  const leak = sortDesc(teams.filter(t => t.benchLeakage != null).map(t => ({ k: t.name, v: t.benchLeakage })));
+  const age = sortDesc(teams.map(t => ({ k: t.name, v: t.avgAge || 0 })));
+
+  return `
+    <div class="chart-block"><div class="chart-title">Lineup Efficiency, 4 Years (actual pts as % of optimal)</div>
+      ${barChart(eff, { unit: '%', highlight: meName })}
+      <div class="chart-note">The management skill chart. Gaps here are free points nobody is claiming.</div></div>
+    <div class="chart-block"><div class="chart-title">Career Avg Weekly Score</div>
+      ${barChart(avgScore, { highlight: meName })}
+      <div class="chart-note">Raw firepower across all seasons played.</div></div>
+    <div class="chart-block"><div class="chart-title">Dead Starts, 4 Years (started a 0-pt player over a 5+ pt bench option)</div>
+      ${barChart(dead, { highlight: meName, goodHigh: false })}
+      <div class="chart-note">The inattention chart. High numbers mean an owner who does not know what their bench is worth.</div></div>
+    <div class="chart-block"><div class="chart-title">Future Pick Capital (next two rookie drafts, picks currently owned)</div>
+      ${barChart(picks, { highlight: meName })}
+      <div class="chart-note">Live from Sleeper. Draft position depends on final standings.</div></div>
+    <div class="chart-block"><div class="chart-title">Points Left On Bench, Latest Season</div>
+      ${barChart(leak, { highlight: meName, goodHigh: false })}
+      <div class="chart-note">Live. What the sit/start engine exists to reclaim.</div></div>
+    <div class="chart-block"><div class="chart-title">Average Roster Age</div>
+      ${barChart(age, { highlight: meName, goodHigh: false })}
+      <div class="chart-note">Live. Youth is future capital; age is a win-now clock ticking.</div></div>`;
 }
 
 /* ---------- renderers ---------- */
@@ -806,8 +995,11 @@ function renderWire() {
 function renderTab() {
   const body = document.getElementById('tab-body');
   if (S.activeTab === 'holes') body.innerHTML = renderHoles();
+  else if (S.activeTab === 'teams') body.innerHTML = renderTeams();
+  else if (S.activeTab === 'data') body.innerHTML = renderData();
   else if (S.activeTab === 'wire') body.innerHTML = renderWire();
   else body.innerHTML = renderAITab(S.activeTab);
+  renderTheCall();
 }
 
 document.getElementById('tab-bar').addEventListener('click', e => {

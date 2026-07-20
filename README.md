@@ -1,76 +1,70 @@
-# The Ocho War Room (full intelligence edition, v4)
+# The Ocho War Room (v6: the directive edition)
 
-Always-on dynasty engine. Watches the league, harvests the NFL wire,
-pulls structured analytics, mines owner behavior, remembers its own
-calls, reacts to trades instantly, and pushes to your phone.
+Theme of the whole machine: ONE MOVE. Every analysis ends with
+"## THE MOVE", a single directive chosen to win now and in the
+future, and the freshest one sits in an amber banner at the top of
+the app: The Call. No menus of options. One thing to do.
 
-## The intelligence pipeline
+## Tabs
 
-LAYER 1: LEAGUE WATCHER (snapshot.mjs, every 2 hours)
-  Full Sleeper pull, roster survey, transaction diff, change feed.
-  NEW in v4: when a TRADE is detected it immediately fires a fresh
-  trades analysis instead of waiting for the morning run, and sends
-  a push notification to your phone.
+ROSTER HOLES  live survey, holes/surplus/stance per team
+TEAMS         the book: every roster position by position, age-coded
+              chips, pick capital, owner behavior flags, plus the AI
+              intel report (untouchables, gettable players, the ask,
+              their angle) auto-refreshed weekly on Mondays
+TRADES        directive-first trade analysis (daily + trade-triggered)
+PICKUPS       directive-first waiver analysis (daily)
+SIT / START   weekly lineup calls in season; roster stress test off
+DATA          charts: lineup efficiency, career avg score, dead
+              starts, future pick capital, bench leakage, roster age.
+              Your team highlighted in amber on every chart.
+THE WIRE      hourly harvested + relevance-scored NFL headlines
 
-LAYER 2: NEWS WIRE (news.mjs, hourly at :15)
-  PFT, Yahoo NFL, CBS NFL, Rotowire, ESPN, r/nfl, r/fantasyfootball.
-  Scored against live league rosters (your players 100, league 40,
-  trending 25, breaking-news term bumps). 72h rolling digest, Wire tab.
-  Schefter/Rapoport breaks arrive via r/nfl + ESPN/PFT propagation;
-  X's API is paywalled so we capture the stream, not the platform.
-  Reddit sometimes blocks datacenter IPs; fails gracefully.
+## Always-on pipeline
 
-LAYER 3: HARD NUMBERS (stats.mjs, daily 11:30 UTC)
-  nflverse: per-team pass rate, plays/game, pass/rush EPA, sacks
-  allowed; official injury reports for league-rostered players; snap
-  trends for your players. Offseason uses latest completed season,
-  labeled; sharpens automatically when camp data goes live.
+snapshot.mjs   every 2h: league watch, transaction diff, trade ->
+               instant analysis + phone push
+news.mjs       hourly :15: 7-source wire harvest, roster-scored
+scout.mjs      hourly :25: action scout, pushes GRAB/CUT/DEAL/INJ
+               only when new signal demands action, 48h cooldown
+stats.mjs      daily: nflverse team tendencies, injuries, snaps
+analyze.mjs    daily 13:00 UTC -> analyze-background.mjs: trades +
+               pickups daily, sit/start Thu/Sat/Sun in season +
+               Mondays offseason, team intel book Mondays, all with
+               memory of their own last 3 calls, all ending in
+               THE MOVE
 
-LAYER 4: OWNER BEHAVIOR DEEP-MINE (baked into lib/ocho.mjs, v4)
-  Computed from four seasons of per-player scoring data:
-  - lineup efficiency (actual vs optimal lineup, every week, 4 years)
-  - avg points left on bench per week
-  - dead starts: started a <=0 pt player with a 5+ pt bench option
-    (owmyballs: 64 of these; the signature of an inattentive owner)
-  - trade rest-of-season net points (caveat baked into the prompt:
-    picks score 0, so pick-acquirers look artificially bad)
-  Raw numbers in owner_behavior_metrics.json. Refresh each offseason.
+## New league rollover (the 2026 Ocho)
 
-LAYER 5: ANALYSIS with MEMORY (analyze-background.mjs)
-  Every run gets: live league context + behavior metrics + news digest
-  + nflverse numbers + its own live web searches, AND its own last 3
-  recommendations, with orders to state which prior calls still stand,
-  which are now stale or wrong, and never repeat old advice as new.
-  Push notification when a fresh analysis is ready.
+Nothing to do. The league resolves BY NAME on every single pull, so
+the moment the new league exists under your account, the whole
+system follows it: watcher, wire scoring, analyses, everything. The
+context block carries league status, so when the new league is
+pre_draft the analyses automatically factor rookie draft prep into
+THE MOVE.
 
 ## Deploy
 
 1. API key: console.anthropic.com > Settings > API keys.
-2. Push this folder to GitHub, exact structure preserved.
+2. Push this folder to GitHub, structure preserved.
 3. Netlify > Add new site > Import from GitHub. No build command.
-4. Environment variables:
-     ANTHROPIC_API_KEY = your key            (required)
-     NTFY_TOPIC = some-hard-to-guess-string  (optional, phone pushes)
-   For pushes: install the ntfy app (free, iOS/Android), subscribe to
-   the exact topic string you chose. No account needed. Anyone who
-   knows the topic string can read it, so make it long and random.
-5. Deploy, then visit once each to seed instead of waiting for crons:
+4. Env vars: ANTHROPIC_API_KEY (required), NTFY_TOPIC (phone pushes).
+5. Deploy, seed by visiting once each:
      /.netlify/functions/snapshot
      /.netlify/functions/news
      /.netlify/functions/stats
-6. Open the site. Wire + Roster Holes populate immediately; hit any
-   analysis button for the first AI run.
+     /.netlify/functions/notify-test
+6. Open the site. Run Team Intel Scout for your first book.
 
 ## Cost
 
-Sleeper, RSS, Reddit, nflverse, ntfy: free, always running.
-AI: a few cents to ~$0.25 per analysis run. Default schedule plus
-trade-triggered runs lands roughly $10-30/month. Cron lines at the
-bottom of snapshot.mjs / news.mjs / stats.mjs / analyze.mjs.
+Free: Sleeper, RSS, Reddit, nflverse, ntfy, charts, silent scout
+hours. AI: a few cents to ~$0.25 per Sonnet run (teams intel is the
+longest); Haiku scout decisions are fractions of a cent. Realistic:
+$12-35/month in season with the weekly intel book.
 
 ## Season maintenance
 
-- Each offseason: rerun the behavior mine and history pull, refresh
-  OWNER_HISTORY in lib/ocho.mjs and index.html.
-- Everything else self-updates: league ID by name, nflverse season
-  rollover, news scoring dictionary rebuilt hourly from the snapshot.
+Each offseason: rerun the behavior mine + history pull, refresh
+OWNER_HISTORY in lib/ocho.mjs and index.html. Everything else
+self-updates.

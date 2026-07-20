@@ -145,6 +145,7 @@ export function computeSnapshot(core, playersDB) {
       ownerName: (OWNER_HISTORY[r.owner_id] || {}).display_name || "",
       wins, losses, winPct: Math.round(winPct * 1000) / 1000, avgAge,
       benchLeakage: ppts ? Math.round((ppts - fpts) * 10) / 10 : null,
+      waiverPosition: st.waiver_position || null,
       depth, holes, surplus, injured,
       players: players.map(p => ({ name: p.name, pos: p.pos, team: p.team, age: p.age, inj: p.inj })),
       picks: ledger[r.roster_id].sort((a, b) => a.season.localeCompare(b.season) || a.round - b.round),
@@ -164,6 +165,7 @@ export function computeSnapshot(core, playersDB) {
       draft_rounds: draftRounds,
       pick_trading: (league.settings || {}).pick_trading,
     },
+    leagueStatus: league.status,
     nflState: {
       week: core.nflState.week, season_type: core.nflState.season_type, season: core.nflState.season,
     },
@@ -206,7 +208,7 @@ export function leagueContextBlock(snapshot) {
       `  Injuries: ${t.injured.slice(0, 6).join(", ") || "none flagged"}`,
     ].join("\n");
   }).join("\n\n");
-  return `LEAGUE: ${snapshot.leagueName}, ${snapshot.season} season, ${snapshot.settings.num_teams}-team dynasty, ${snapshot.settings.draft_rounds}-round rookie drafts, pick trading ${snapshot.settings.pick_trading ? "allowed" : "off"}, no FAAB (rolling waivers). Lineup: ${JSON.stringify(snapshot.rosterPositions)}.\n\n${lines}`;
+  return `LEAGUE: ${snapshot.leagueName}, ${snapshot.season} season, status: ${snapshot.leagueStatus || "unknown"} (pre_draft means the rookie draft is coming; factor draft prep into every recommendation), ${snapshot.settings.num_teams}-team dynasty, ${snapshot.settings.draft_rounds}-round rookie drafts, pick trading ${snapshot.settings.pick_trading ? "allowed" : "off"}, no FAAB (rolling waivers). Lineup: ${JSON.stringify(snapshot.rosterPositions)}.\n\n${lines}`;
 }
 
 export function myRosterBlock(snapshot) {
@@ -234,9 +236,9 @@ export function trendingBlock(core, snapshot, playersDB) {
     .join("\n");
 }
 
-export async function callClaude(prompt, { maxTokens = 3500, useSearch = true } = {}) {
+export async function callClaude(prompt, { maxTokens = 3500, useSearch = true, model = "claude-sonnet-4-6" } = {}) {
   const body = {
-    model: "claude-sonnet-4-6",
+    model,
     max_tokens: maxTokens,
     messages: [{ role: "user", content: prompt }],
   };
