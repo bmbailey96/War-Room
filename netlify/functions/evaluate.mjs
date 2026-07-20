@@ -7,7 +7,7 @@
 // uses, so the app renders it as the same visual card.
 
 import {
-  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock,
+  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock, valuesBlock,
 } from "./lib/ocho.mjs";
 
 export default async (req) => {
@@ -26,15 +26,17 @@ export default async (req) => {
   const store = blobs();
   const snapshot = await store.get("snapshot", { type: "json" });
   if (!snapshot) return new Response(JSON.stringify({ error: "no snapshot yet" }), { status: 409 });
-  const [newsDigest, statsDigest, trends] = await Promise.all([
+  const [newsDigest, statsDigest, trends, playerValues] = await Promise.all([
     store.get("news_digest", { type: "json" }),
     store.get("stats_digest", { type: "json" }),
     store.get("trends", { type: "json" }),
+    store.get("player_values", { type: "json" }),
   ]);
 
   const newsLine = (newsDigest?.items || []).filter(i => i.score >= 40).slice(0, 12)
     .map(i => `- ${i.title}`).join("\n");
   const trendLine = trendBlock(trends);
+  const valueLine = valuesBlock(snapshot, playerValues);
 
   const prompt = `You are my dynasty trade evaluator. Someone in my league has offered me a trade (or I'm considering one). Judge it honestly and tell me accept, decline, or counter. Use web search for current dynasty values, injuries, and news on the players involved.
 
@@ -42,7 +44,7 @@ ${leagueContextBlock(snapshot)}
 
 MY FULL ROSTER (The Nightmen):
 ${myRosterBlock(snapshot)}
-${newsLine ? `\nRELEVANT RECENT HEADLINES:\n${newsLine}` : ""}${trendLine}
+${newsLine ? `\nRELEVANT RECENT HEADLINES:\n${newsLine}` : ""}${trendLine}${valueLine}
 
 THE TRADE ON THE TABLE (as I described it):
 "${offer}"

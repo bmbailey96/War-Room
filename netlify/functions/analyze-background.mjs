@@ -4,7 +4,7 @@
 
 import {
   blobs, OWNER_HISTORY, leagueContextBlock, myRosterBlock,
-  callClaude, pInfo, getPlayersTrim, trendBlock,
+  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock,
 } from "./lib/ocho.mjs";
 
 function buildTrendingBlock(trendingRaw, rostersRaw, playersDB) {
@@ -71,15 +71,16 @@ function digestBlocks(newsDigest, statsDigest, snapshot) {
   return { newsBlock, statsBlock };
 }
 
-function prompts(snapshot, trendingText, newsDigest, statsDigest, trends) {
+function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues) {
   const ctx = leagueContextBlock(snapshot);
   const mine = myRosterBlock(snapshot);
   const { newsBlock, statsBlock } = digestBlocks(newsDigest, statsDigest, snapshot);
   const groundData = [newsBlock, statsBlock].filter(Boolean).join("\n\n");
   const trendData = trendBlock(trends);
+  const valueData = valuesBlock(snapshot, playerValues);
   const groundNote = (groundData
     ? `\n\nGROUND DATA COLLECTED BY MY SYSTEM (verify anything surprising with your own web search; recency beats this data):\n${groundData}`
-    : "") + trendData;
+    : "") + trendData + valueData;
   const wk = snapshot.nflState || {};
   const inSeason = wk.season_type === "regular" && wk.week >= 1;
   const MOVE = `\n\nTWO REQUIREMENTS FOR EVERY RECOMMENDATION ABOVE: (a) tag each with a confidence level (High/Medium/Low); (b) add a one-line "Case against:" naming the strongest reason it could be wrong. Never present a call as risk-free.\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
@@ -114,7 +115,11 @@ ${mine}
 PLAYERS TRENDING LEAGUE-WIDE ON SLEEPER (48h), UNROSTERED IN MY LEAGUE:
 ${trendingText || "(no trending players currently available)"}
 
-TASK: My 3 to 6 best pickups right now, and who to drop for each. Consider my flagged holes first, dynasty value over redraft (age, opportunity trajectory), and what your search found about each player's current situation. Rolling waiver priority league, no FAAB, so say when someone is worth burning priority on. Be honest if the pool is weak. No filler.${groundNote}${MOVE}`,
+TASK: My 3 to 6 best pickups right now, and who to drop for each. Consider my flagged holes first, dynasty value over redraft (age, opportunity trajectory), and what your search found about each player's current situation. Rolling waiver priority league, no FAAB, so say when someone is worth burning priority on. Be honest if the pool is weak. No filler.
+
+CRITICAL: before any prose, emit a block wrapped in <PICKUP_JSON> and </PICKUP_JSON> with this exact shape naming your single best grab and the single best drop to make room:
+{"grab":{"name":"player to add","pos":"RB"|null,"why":"one short line"},"drop":{"name":"player to drop","pos":"RB"|null,"why":"one short line"}}
+If the pool is too weak to justify a move, use null for grab and/or drop. Valid JSON only. Then write the prose.${groundNote}${MOVE}`,
     sitstart: inSeason
       ? `You are a fantasy football lineup analyst. It is ${wk.season} NFL regular season, week ${wk.week}. Use web search extensively: current injuries and practice reports, offensive coordinator and scheme tendencies for each player's NFL team (run/pass lean, pace, new-OC risk), depth chart changes, breaking news.
 
@@ -177,9 +182,10 @@ export default async (req) => {
   const newsDigest = await store.get("news_digest", { type: "json" });
   const statsDigest = await store.get("stats_digest", { type: "json" });
   const trends = await store.get("trends", { type: "json" });
+  const playerValues = await store.get("player_values", { type: "json" });
   const gradingRecord = await store.get("grading_record", { type: "json" });
   const trendingText = buildTrendingBlock(trendingRaw, rostersRaw, playersDB);
-  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends);
+  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues);
 
   // Track-record block: shows the model its own calibrated hit rate
   let trackBlock = "";

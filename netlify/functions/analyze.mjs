@@ -17,7 +17,7 @@ export default async (req) => {
 
   // Fire the standalone scheduled helpers too (they self-gate on league state)
   const fire = (fn) => fetch(`${base}/.netlify/functions/${fn}`).catch(() => {});
-  await Promise.all([fire("draft")]); // draft board (only acts in pre_draft/drafting)
+  await Promise.all([fire("draft"), fire("values"), fire("gameplan")]); // draft board + market values + season plan
 
   // Fire and forget: background function does the heavy lifting
   await fetch(`${base}/.netlify/functions/analyze-background`, {

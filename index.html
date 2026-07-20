@@ -218,6 +218,10 @@
   }
   .call-box .call-text { color: var(--paper); font-size: 13px; }
   .call-box .call-src { font-size: 10px; color: var(--muted); margin-top: 6px; }
+  .call-slot { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0; border-top: 1px solid rgba(232,163,61,0.15); }
+  .call-slot:first-of-type { border-top: none; }
+  .call-slot-label { flex: none; width: 130px; font-family: var(--display); text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; font-weight: 600; padding-top: 2px; }
+  .call-slot-body { flex: 1; font-size: 13px; color: var(--paper); }
   .chart-block { margin-bottom: 26px; }
   .chart-title {
     font-family: var(--display);
@@ -321,6 +325,8 @@
     <div class="tab" data-tab="sitstart">Sit / Start</div>
     <div class="tab" data-tab="draft" id="draft-tab" style="display:none">Draft Room</div>
     <div class="tab" data-tab="standings">Standings</div>
+    <div class="tab" data-tab="odds">Odds</div>
+    <div class="tab" data-tab="plan">Game Plan</div>
     <div class="tab" data-tab="data">Data</div>
     <div class="tab" data-tab="trends">Trends</div>
     <div class="tab" data-tab="ask">Ask</div>
@@ -530,6 +536,22 @@ async function pullLive() {
 
     setStatus('Computing survey...', 'stale');
     S.teams = computeTeams();
+
+    // Pull the season schedule (matchups by week) for playoff simulation.
+    // In-season: unplayed weeks feed the Monte Carlo. Preseason: no games yet,
+    // sim falls back to a full-season projection from scoring distributions.
+    try {
+      const wk = nflState.week || 1;
+      const start = (nflState.season_type === 'regular') ? wk : 1;
+      const regWeeks = (league.settings || {}).playoff_week_start ? (league.settings.playoff_week_start - 1) : 14;
+      const weeksToPull = [];
+      for (let w = 1; w <= regWeeks; w++) weeksToPull.push(w);
+      const matchupsByWeek = await Promise.all(
+        weeksToPull.map(w => fetch(`https://api.sleeper.app/v1/league/${id}/matchups/${w}`).then(r => r.json()).catch(() => null))
+      );
+      S.schedule = { regWeeks, currentWeek: start, byWeek: matchupsByWeek, seasonType: nflState.season_type };
+    } catch (e) { S.schedule = null; }
+
     document.getElementById('season-stamp').textContent = 'SEASON ' + league.season;
     document.getElementById('pull-time').textContent = 'Pulled ' + new Date().toLocaleString();
     setStatus('Live', '');
@@ -727,7 +749,9 @@ TASK: Recommend my 3 to 6 best pickups right now, and who I should drop for each
 2. Dynasty value over redraft value: age, contract situation, opportunity trajectory
 3. What your web search found about each player's CURRENT situation, cite what you learned
 4. This league has rolling waiver priority, no FAAB, so note if a player is worth burning priority position on
-Be honest if the available pool is weak. No filler.` + MOVE_REQ,
+Be honest if the available pool is weak.
+
+CRITICAL: before any prose, emit a <PICKUP_JSON> ... </PICKUP_JSON> block: {"grab":{"name":"...","pos":"RB"|null,"why":"one line"},"drop":{"name":"...","pos":"RB"|null,"why":"one line"}} naming your single best grab and single best drop. Use null if the pool is too weak. Valid JSON only, then prose.` + MOVE_REQ,
   },
   sitstart: {
     button: 'Run Sit/Start Analysis',
@@ -824,46 +848,122 @@ async function runAI(tabKey) {
   }
 }
 
-/* ---------- THE CALL: the single directive, extracted from the freshest analysis ---------- */
+/* ---------- THE CALL: three fixed daily moves - one trade, one grab, one drop ---------- */
+function extractMove(text) {
+  if (!text) return null;
+  const m = text.match(/##\s*THE MOVE\s*\n([\s\S]*?)(?=\n##|$)/i);
+  return m ? m[1].trim() : null;
+}
+function splitPickupText(text) {
+  if (!text) return { pick: null, prose: '' };
+  const m = text.match(/<PICKUP_JSON>([\s\S]*?)<\/PICKUP_JSON>/i);
+  if (!m) return { pick: null, prose: text };
+  let pick = null;
+  try {
+    let clean = m[1].replace(/```json|```/gi, '').trim();
+    const a = clean.indexOf('{'), b = clean.lastIndexOf('}');
+    if (a !== -1 && b !== -1) clean = clean.slice(a, b + 1);
+    clean = clean.replace(/,\s*([\]}])/g, '$1');
+    pick = JSON.parse(clean);
+  } catch (e) { pick = null; }
+  const prose = text.replace(/<PICKUP_JSON>[\s\S]*?<\/PICKUP_JSON>/i, '').trim();
+  return { pick, prose };
+}
+
+function freshest(key) {
+  // returns the newer of session result or stored analysis for a task
+  const analyses = ((S.server || {}).analyses) || {};
+  const stored = analyses[key] && analyses[key].status === 'done' ? { text: analyses[key].text, at: analyses[key].at } : null;
+  const session = S.aiResults[key] && S.aiResults[key].text ? { text: S.aiResults[key].text, at: +S.aiResults[key].at } : null;
+  if (session && stored) return session.at >= stored.at ? session : stored;
+  return session || stored;
+}
+
 function renderTheCall() {
   const el = document.getElementById('the-call');
-  const analyses = ((S.server || {}).analyses) || {};
-  let best = null;
-  for (const [key, a] of Object.entries(analyses)) {
-    if (!a || a.status !== 'done' || !a.text) continue;
-    const m = a.text.match(/##\s*THE MOVE\s*\n([\s\S]*?)(?=\n##|$)/i);
-    if (m && (!best || a.at > best.at)) best = { at: a.at, key, move: m[1].trim() };
+
+  // TRADE slot: the trade directive + the matching card for message drafting
+  const tradesSrc = freshest('trades');
+  const tradeMove = tradesSrc ? extractMove(tradesSrc.text) : null;
+  S.callTrade = null;
+  if (tradeMove) {
+    const { cards } = splitTradesText(tradesSrc.text);
+    if (cards && cards.length) {
+      const moveLc = tradeMove.toLowerCase();
+      let bestCard = null, bestHits = -1;
+      for (const c of cards) {
+        const names = [c.partner, ...(c.iSend||[]).map(a=>a.name), ...(c.iGet||[]).map(a=>a.name)];
+        let hits = 0;
+        for (const n of names) {
+          if (!n) continue;
+          const key = n.toLowerCase().split(/\s+/).slice(-1)[0];
+          if (key.length >= 3 && moveLc.includes(key)) hits++;
+        }
+        if (hits > bestHits) { bestHits = hits; bestCard = c; }
+      }
+      if (bestCard && bestHits >= 1) S.callTrade = bestCard;
+    }
   }
-  for (const [key, r] of Object.entries(S.aiResults)) {
-    if (!r || !r.text) continue;
-    const m = r.text.match(/##\s*THE MOVE\s*\n([\s\S]*?)(?=\n##|$)/i);
-    if (m && (!best || +r.at > best.at)) best = { at: +r.at, key, move: m[1].trim() };
-  }
-  if (!best) { el.innerHTML = ''; return; }
-  const showMsg = /trade|deal|send|offer|package|acquire/i.test(best.move);
+
+  // GRAB + DROP slots: from the pickups analysis structured block
+  const pickSrc = freshest('pickups');
+  const { pick } = splitPickupText(pickSrc ? pickSrc.text : '');
+  const grab = pick && pick.grab && pick.grab.name ? pick.grab : null;
+  const drop = pick && pick.drop && pick.drop.name ? pick.drop : null;
+
+  if (!tradeMove && !grab && !drop) { el.innerHTML = ''; return; }
+
+  const slot = (label, color, body) => `<div class="call-slot">
+    <div class="call-slot-label" style="color:${color}">${label}</div>
+    <div class="call-slot-body">${body}</div>
+  </div>`;
+
+  const tradeBody = tradeMove
+    ? `${renderMd(tradeMove)}${S.callTrade ? `<button style="margin-top:8px" onclick="draftMessage()" ${S.draftingMsg?'disabled':''}>${S.draftingMsg?'Writing...':'Draft the message'}</button>` : ''}${S.draftedMsg ? `<div class="ai-result" style="margin-top:8px"><div class="ai-note" style="margin-bottom:6px">Paste into league chat:</div>${esc(S.draftedMsg)}<br/><button style="margin-top:6px" onclick="copyMsg()">Copy</button></div>` : ''}`
+    : `<span style="color:var(--muted)">No trade worth proposing right now. Run the Trades tab to refresh.</span>`;
+
+  const grabBody = grab
+    ? `<b>${esc(grab.name)}</b>${grab.pos?` <span style="color:var(--muted)">${esc(grab.pos)}</span>`:''}${grab.why?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(grab.why)}</div>`:''}`
+    : `<span style="color:var(--muted)">Nothing worth grabbing. Pool is thin.</span>`;
+
+  const dropBody = drop
+    ? `<b>${esc(drop.name)}</b>${drop.pos?` <span style="color:var(--muted)">${esc(drop.pos)}</span>`:''}${drop.why?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(drop.why)}</div>`:''}`
+    : `<span style="color:var(--muted)">Hold your roster. No clear drop.</span>`;
+
   el.innerHTML = `<div class="call-box">
-    <div class="call-label">The Call</div>
-    <div class="call-text">${renderMd(best.move)}</div>
-    <div class="call-src">From the ${esc(best.key)} run, ${timeAgo(best.at)}. One move. Win now and later.</div>
-    ${showMsg ? `<button style="margin-top:10px" onclick="draftMessage()" ${S.draftingMsg ? 'disabled' : ''}>${S.draftingMsg ? 'Writing...' : 'Draft the message'}</button>` : ''}
-    ${S.draftedMsg ? `<div class="ai-result" style="margin-top:10px"><div class="ai-note" style="margin-bottom:6px">Paste this into the league chat:</div>${esc(S.draftedMsg)}<br/><button style="margin-top:8px" onclick="copyMsg()">Copy</button></div>` : ''}
+    <div class="call-label">The Call &mdash; today's three moves</div>
+    ${slot('Propose this trade', 'var(--line-bright)', tradeBody)}
+    ${slot('Grab this player', 'var(--green)', grabBody)}
+    ${slot('Drop this player', 'var(--rust)', dropBody)}
+    <div class="call-src">Refreshed from your latest trades and pickups runs. Rerun those tabs to update.</div>
   </div>`;
 }
 
+// Turn a single structured trade into a plain-language line the drafter can't misread
+function tradeToLine(t) {
+  const side = arr => (arr||[]).map(a => a.name + (a.pos ? ` (${a.pos})` : '')).join(' and ') || 'nothing';
+  return `Trade with ${t.partner}. I send: ${side(t.iSend)}. I get: ${side(t.iGet)}.${t.verdict ? ' Rationale: ' + t.verdict : ''}`;
+}
+
 async function draftMessage() {
-  S.draftingMsg = true; renderTheCall();
+  S.draftingMsg = true; S.draftedMsg = null; renderTheCall();
   try {
+    // Prefer the ONE trade The Call is about; fall back to the directive text itself
+    const target = S.callTrade ? tradeToLine(S.callTrade) : null;
     if (S.isDeployed) {
       const res = await fetch('/.netlify/functions/draft-message', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recommendation: ((S.server.analyses || {}).trades || {}).text || '' }),
+        body: JSON.stringify({ recommendation: target || '' }),
       });
       const data = await res.json();
       S.draftedMsg = data.message || 'This one is not a trade with another manager, so there is no message to send.';
     } else {
-      const rec = ((S.aiResults.trades || {}).text || (((S.server || {}).analyses || {}).trades || {}).text || '').replace(/<TRADES_JSON>[\s\S]*?<\/TRADES_JSON>/i, '').trim();
-      const text = await callClaude(`Write the actual casual message I'd paste into my fantasy league group chat to propose the top trade in this analysis. Sound like a real person texting, no em dashes, no corporate tone, 2-4 sentences, lead with the offer and a quick honest reason it helps them. If it's not a trade with another manager, return only: NOMESSAGE.\n\n${rec.slice(0,2500)}\n\nReturn only the message.`, { useSearch: false, maxTokens: 500 });
-      S.draftedMsg = text.trim() === 'NOMESSAGE' ? 'This one is not a trade, so there is no message to send.' : text.trim();
+      const rec = target || '';
+      if (!rec) { S.draftedMsg = 'This one is not a specific trade, so there is no single message to draft.'; }
+      else {
+        const text = await callClaude(`Write the actual casual message I'd paste into my fantasy league group chat to propose THIS EXACT trade. Do not change the players. Sound like a real person texting, no em dashes, no corporate tone, 2-4 sentences, lead with the offer and a quick honest reason it helps them. If it is somehow not a tradeable offer, return only: NOMESSAGE.\n\n${rec}\n\nReturn only the message.`, { useSearch: false, maxTokens: 500 });
+        S.draftedMsg = text.trim() === 'NOMESSAGE' ? 'This one is not a trade, so there is no message to send.' : text.trim();
+      }
     }
   } catch (e) {
     S.draftedMsg = 'Could not draft the message: ' + e.message;
@@ -1172,16 +1272,33 @@ function renderHoles() {
 }
 
 function splitTradesText(text) {
-  // returns { cards: [...] or null, prose: string }
-  const m = text.match(/<TRADES_JSON>([\s\S]*?)<\/TRADES_JSON>/i);
-  if (!m) return { cards: null, prose: text };
-  let cards = null;
+  // returns { cards: [...] or null, prose: string, parseFailed: bool }
+  if (!text) return { cards: null, prose: '', parseFailed: false };
+  let jsonStr = null, prose = text;
+  const tagged = text.match(/<TRADES_JSON>([\s\S]*?)<\/TRADES_JSON>/i);
+  if (tagged) {
+    jsonStr = tagged[1];
+    prose = text.replace(/<TRADES_JSON>[\s\S]*?<\/TRADES_JSON>/i, '').trim();
+  } else {
+    // Fallback: model may have emitted a bare JSON array before the prose
+    const bare = text.match(/^\s*(\[\s*\{[\s\S]*?\}\s*\])/);
+    if (bare) { jsonStr = bare[1]; prose = text.slice(bare[0].length).trim(); }
+  }
+  if (!jsonStr) return { cards: null, prose: text, parseFailed: false };
+
+  // Clean common model slop: code fences, smart quotes, trailing commas
+  let clean = jsonStr.replace(/```json|```/gi, '').trim();
+  const first = clean.indexOf('['), last = clean.lastIndexOf(']');
+  if (first !== -1 && last !== -1) clean = clean.slice(first, last + 1);
+  clean = clean.replace(/,\s*([\]}])/g, '$1'); // trailing commas
+  let cards = null, parseFailed = false;
   try {
-    cards = JSON.parse(m[1].trim());
-    if (!Array.isArray(cards)) cards = null;
-  } catch (e) { cards = null; }
-  const prose = text.replace(/<TRADES_JSON>[\s\S]*?<\/TRADES_JSON>/i, '').trim();
-  return { cards, prose };
+    cards = JSON.parse(clean);
+    if (!Array.isArray(cards) || !cards.length) { cards = null; }
+  } catch (e) {
+    parseFailed = true;
+  }
+  return { cards, prose, parseFailed };
 }
 
 function assetChip(a) {
@@ -1234,12 +1351,17 @@ function tradeCard(t, i) {
 }
 
 function renderTradesVisual(text, meta) {
-  const { cards, prose } = splitTradesText(text);
+  const { cards, prose, parseFailed } = splitTradesText(text);
   let html = '';
   if (cards && cards.length) {
     html += `<div class="trade-cards">${cards.map(tradeCard).join('')}</div>`;
     html += `<details class="prose-toggle"><summary>Full written analysis</summary><div class="ai-result" style="margin-top:10px">${renderMd(prose)}</div></details>`;
   } else {
+    if (parseFailed) {
+      html += `<div class="ai-note" style="border:1px solid var(--amber);color:var(--amber);padding:8px 10px;margin-bottom:10px">Showing the written version. The visual cards need this run's data in the right format; rerun the analysis to get cards.</div>`;
+    } else {
+      html += `<div class="ai-note" style="margin-bottom:10px">This analysis predates visual cards. Hit the button above to rerun and it'll come back as cards.</div>`;
+    }
     html += `<div class="ai-result">${renderMd(prose)}</div>`;
   }
   if (meta) html += `<div class="ai-note" style="margin-top:8px">${meta}</div>`;
@@ -1251,8 +1373,10 @@ function renderAITab(tabKey) {
   const running = S.aiRunning[tabKey];
   const session = S.aiResults[tabKey];
   const stored = (((S.server || {}).analyses || {})[tabKey]) || null;
-  const isTrades = tabKey === 'trades';
   let resultHtml = '';
+
+  const isTrades = tabKey === 'trades';
+  const clean = (txt) => tabKey === 'pickups' ? (txt || '').replace(/<PICKUP_JSON>[\s\S]*?<\/PICKUP_JSON>/i, '').trim() : txt;
 
   if (running) {
     resultHtml = `<div class="ai-result"><span class="spinner"></span>Researching live: pulling current news, injuries, and values. Takes 30 to 90 seconds because it is doing real web searches.${S.isDeployed ? ' Running server-side; result appears here automatically.' : ''}</div>`;
@@ -1260,10 +1384,10 @@ function renderAITab(tabKey) {
     resultHtml = `<div class="error-msg">Analysis failed: ${esc(session.error)}. ${S.isDeployed ? 'Check the Netlify function logs and API key.' : 'Inside Claude, just retry.'}</div>`;
   } else if (session) {
     const meta = `Fresh run, generated ${session.at.toLocaleTimeString()} with live web research.`;
-    resultHtml = isTrades ? renderTradesVisual(session.text, meta) : `<div class="ai-result">${renderMd(session.text)}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
+    resultHtml = isTrades ? renderTradesVisual(session.text, meta) : `<div class="ai-result">${renderMd(clean(session.text))}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
   } else if (stored && stored.status === 'done') {
     const meta = `Auto-generated ${timeAgo(stored.at)} by the scheduled run. Hit the button for an on-demand refresh.`;
-    resultHtml = isTrades ? renderTradesVisual(stored.text, meta) : `<div class="ai-result">${renderMd(stored.text)}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
+    resultHtml = isTrades ? renderTradesVisual(stored.text, meta) : `<div class="ai-result">${renderMd(clean(stored.text))}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
   } else if (stored && stored.status === 'running') {
     resultHtml = `<div class="ai-result"><span class="spinner"></span>The scheduled run is working on this right now. Refresh in a minute.</div>`;
   } else if (stored && stored.status === 'error') {
@@ -1366,6 +1490,8 @@ function renderTab() {
   if (S.activeTab === 'holes') body.innerHTML = renderHoles();
   else if (S.activeTab === 'teams') body.innerHTML = renderTeams();
   else if (S.activeTab === 'standings') body.innerHTML = renderStandings();
+  else if (S.activeTab === 'odds') body.innerHTML = renderOdds();
+  else if (S.activeTab === 'plan') body.innerHTML = renderPlan();
   else if (S.activeTab === 'draft') body.innerHTML = renderDraftRoom();
   else if (S.activeTab === 'briefing') body.innerHTML = renderBriefing();
   else if (S.activeTab === 'data') body.innerHTML = renderData();
@@ -1374,6 +1500,243 @@ function renderTab() {
   else if (S.activeTab === 'wire') body.innerHTML = renderWire();
   else body.innerHTML = renderAITab(S.activeTab);
   renderTheCall();
+}
+
+/* ---------- Game Plan tab: the multi-move arc to a title ---------- */
+function renderPlan() {
+  if (!S.teams) return '<div class="empty-msg">Pull live data first.</div>';
+  const stored = (S.server || {}).gamePlan;
+  const session = S.planResult;
+  let out = '';
+  if (S.planRunning) out = `<div class="ai-result"><span class="spinner"></span>Mapping the arc: contention window, what to sell high, the move sequence to a title. 30 to 90 seconds.</div>`;
+  else if (session) out = `<div class="ai-result">${renderMd(session)}</div><div class="ai-note" style="margin-top:8px">Fresh run.</div>`;
+  else if (stored && stored.text) out = `<div class="ai-result">${renderMd(stored.text)}</div><div class="ai-note" style="margin-top:8px">Auto-built ${timeAgo(stored.at)} (weekly, Mondays). Rerun for a fresh plan.</div>`;
+  else out = `<div class="empty-msg">No game plan yet. This is the one that thinks in moves ahead: are you a contender, a move away, or a rebuild, and the 3-move sequence to a title. Run it below.</div>`;
+  return `<div class="chart-title">Season Game Plan</div>
+    <div class="chart-note" style="margin-bottom:10px">Everything else optimizes one decision. This optimizes the arc: sell high, build around the right core, and sequence the moves that end in a ring.</div>
+    <div class="ai-controls"><button onclick="runPlan()" ${S.planRunning?'disabled':''}>Build the Game Plan</button>
+      <span class="ai-note">Names the one asset to build around and the one to sell while it is high.</span></div>
+    ${out}`;
+}
+
+async function runPlan() {
+  S.planRunning = true; S.planResult = null; renderTab();
+  try {
+    if (S.isDeployed) {
+      await fetch('/.netlify/functions/gameplan').catch(() => {});
+      // poll get-data for the result
+      let tries = 0;
+      const poll = async () => {
+        await loadServerData();
+        const gp = (S.server || {}).gamePlan;
+        if (gp && gp.text && (!S.planStartedAt || gp.at >= S.planStartedAt)) { S.planRunning = false; renderTab(); return; }
+        if (tries++ < 30) setTimeout(poll, 4000); else { S.planRunning = false; renderTab(); }
+      };
+      S.planStartedAt = Date.now();
+      setTimeout(poll, 4000);
+    } else {
+      const me = S.teams.find(t => t.isMe) || {};
+      const prompt = `You are my dynasty GM thinking about the WHOLE arc, not this week. Build my season-long game plan: the sequence of moves from where I am to a championship. Use web search for current values.
+
+${leagueContextBlock()}
+
+MY ROSTER (The Nightmen):
+${myRosterBlock()}
+
+MY STANCE: ${me.stance?(me.stance.label||me.stance):'unknown'}. HOLES: ${(me.holes||[]).join(', ')||'none'}. SURPLUS: ${(me.surplus||[]).join(', ')||'none'}. PICKS: ${(me.picks||[]).map(p=>`${p.season} R${p.round}`).join(', ')}.
+
+First, one line: am I a contender, a move away, or a rebuild. Then an ORDERED 3-4 move sequence, each building on the last, naming real players and picks and realistic owner partners. Call out the ONE asset to build around and the ONE to sell while high. End with "## THE MOVE" naming the single first action that starts the plan.`;
+      S.planResult = await callClaude(prompt, { useSearch: true, maxTokens: 3200 });
+      S.planRunning = false; renderTab();
+    }
+  } catch (e) {
+    S.planResult = 'Could not build the plan: ' + e.message;
+    S.planRunning = false; renderTab();
+  }
+}
+window.runPlan = runPlan;
+
+/* ---------- Odds tab: Monte Carlo playoff simulation + schedule luck ---------- */
+function gauss(mean, sd) {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return mean + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function teamDistributions() {
+  const dists = {};
+  const means = [];
+  for (const t of S.teams) {
+    const sc = (t.history || {}).scoring;
+    if (sc && sc.avg) {
+      const weekly = sc.avg > 400 ? sc.avg / 14 : sc.avg;
+      const sd = sc.stdev ? (sc.stdev > 80 ? sc.stdev / Math.sqrt(14) : sc.stdev) : weekly * 0.16;
+      dists[t.rosterId] = { mean: weekly, sd: Math.max(sd, weekly * 0.10) };
+      means.push(weekly);
+    }
+  }
+  const leagueMean = means.length ? means.reduce((a, b) => a + b, 0) / means.length : 110;
+  for (const t of S.teams) {
+    if (!dists[t.rosterId]) dists[t.rosterId] = { mean: leagueMean, sd: leagueMean * 0.16 };
+  }
+  return dists;
+}
+
+function currentStandings() {
+  const map = {};
+  for (const t of S.teams) map[t.rosterId] = { rosterId: t.rosterId, name: t.name, wins: t.wins || 0, losses: t.losses || 0, pf: t.pointsFor || 0, isMe: t.isMe };
+  return map;
+}
+
+function remainingMatchups() {
+  if (!S.schedule || !S.schedule.byWeek) return [];
+  const out = [];
+  const startWeek = S.schedule.seasonType === 'regular' ? S.schedule.currentWeek : 1;
+  S.schedule.byWeek.forEach((entries, i) => {
+    const week = i + 1;
+    if (week < startWeek) return;
+    if (!entries || !entries.length) return;
+    const groups = {};
+    for (const e of entries) {
+      if (e.matchup_id == null) continue;
+      (groups[e.matchup_id] = groups[e.matchup_id] || []).push(e.roster_id);
+    }
+    const pairs = Object.values(groups).filter(g => g.length === 2);
+    if (pairs.length) out.push({ week, pairs });
+  });
+  return out;
+}
+
+function leagueAvg(d) { const v = Object.values(d); return v.reduce((a, b) => a + b.mean, 0) / v.length; }
+function avgSd(d) { const v = Object.values(d); return v.reduce((a, b) => a + b.sd, 0) / v.length; }
+
+function simulatePlayoffs(iters) {
+  const dists = teamDistributions();
+  const base = currentStandings();
+  const remaining = remainingMatchups();
+  const playoffN = (S.server && S.server.snapshot && S.server.snapshot.playoffTeams) || (S.league && S.league.settings && S.league.settings.playoff_teams) || 6;
+  const madeCount = {}, seedSum = {};
+  for (const id in base) { madeCount[id] = 0; seedSum[id] = 0; }
+  const genericWeeks = remaining.length ? 0 : (S.schedule ? S.schedule.regWeeks : 14);
+  const lgAvg = leagueAvg(dists), lgSd = avgSd(dists);
+
+  for (let n = 0; n < iters; n++) {
+    const w = {};
+    for (const id in base) w[id] = { wins: base[id].wins, pf: base[id].pf };
+    if (remaining.length) {
+      for (const wk of remaining) {
+        for (const [a, b] of wk.pairs) {
+          if (!dists[a] || !dists[b]) continue;
+          const sa = gauss(dists[a].mean, dists[a].sd);
+          const sb = gauss(dists[b].mean, dists[b].sd);
+          w[a].pf += sa; w[b].pf += sb;
+          if (sa >= sb) w[a].wins++; else w[b].wins++;
+        }
+      }
+    } else {
+      for (const id in base) {
+        for (let g = 0; g < genericWeeks; g++) {
+          const s = gauss(dists[id].mean, dists[id].sd);
+          const opp = gauss(lgAvg, lgSd);
+          w[id].pf += s;
+          if (s >= opp) w[id].wins++;
+        }
+      }
+    }
+    const ranked = Object.keys(w).sort((x, y) => (w[y].wins - w[x].wins) || (w[y].pf - w[x].pf));
+    ranked.forEach((id, i) => { seedSum[id] += (i + 1); if (i < playoffN) madeCount[id]++; });
+  }
+
+  return Object.keys(base).map(id => ({
+    name: base[id].name, isMe: base[id].isMe,
+    made: madeCount[id] / iters,
+    avgSeed: seedSum[id] / iters,
+  })).sort((a, b) => b.made - a.made);
+}
+
+function scheduleLuck() {
+  if (!S.schedule || !S.schedule.byWeek) return null;
+  const scoresByWeek = [];
+  S.schedule.byWeek.forEach((entries, i) => {
+    if (!entries || !entries.length) return;
+    const wkScores = {}; let anyPlayed = false;
+    for (const e of entries) {
+      if (e.points != null && e.points > 0) { wkScores[e.roster_id] = e.points; anyPlayed = true; }
+    }
+    if (anyPlayed) scoresByWeek.push({ week: i + 1, scores: wkScores, entries });
+  });
+  if (!scoresByWeek.length) return null;
+
+  const luck = {};
+  for (const t of S.teams) luck[t.rosterId] = { name: t.name, isMe: t.isMe, actualWins: 0, expWins: 0, weeks: 0 };
+  for (const wk of scoresByWeek) {
+    const ids = Object.keys(wk.scores);
+    const n = ids.length;
+    if (n < 2) continue;
+    const groups = {};
+    for (const e of wk.entries) if (e.matchup_id != null) (groups[e.matchup_id] = groups[e.matchup_id] || []).push(e);
+    for (const g of Object.values(groups)) {
+      if (g.length !== 2) continue;
+      const [x, y] = g;
+      if (x.points == null || y.points == null) continue;
+      if (luck[x.roster_id]) luck[x.roster_id].actualWins += x.points >= y.points ? 1 : 0;
+      if (luck[y.roster_id]) luck[y.roster_id].actualWins += y.points >= x.points ? 1 : 0;
+    }
+    for (const id of ids) {
+      if (!luck[id]) continue;
+      let beat = 0;
+      for (const other of ids) if (other !== id && wk.scores[id] > wk.scores[other]) beat++;
+      luck[id].expWins += beat / (n - 1);
+      luck[id].weeks++;
+    }
+  }
+  return Object.values(luck).filter(l => l.weeks > 0).map(l => ({
+    name: l.name, isMe: l.isMe, actualWins: l.actualWins,
+    expWins: Math.round(l.expWins * 10) / 10,
+    luck: Math.round((l.actualWins - l.expWins) * 10) / 10,
+  })).sort((a, b) => b.luck - a.luck);
+}
+
+function renderOdds() {
+  if (!S.teams) return '<div class="empty-msg">Pull live data first.</div>';
+  const iters = 5000;
+  let simHtml;
+  try {
+    const sim = simulatePlayoffs(iters);
+    simHtml = sim.map(s => {
+      const pct = Math.round(s.made * 100);
+      const color = s.isMe ? 'var(--amber)' : (pct >= 60 ? 'var(--green)' : (pct <= 25 ? 'var(--rust)' : 'var(--line-bright)'));
+      return `<div class="pos-row" style="align-items:center">
+        <span style="flex:none;width:150px;font-family:var(--mono);font-size:11px;color:${s.isMe?'var(--amber)':'var(--muted)'}">${esc(s.name).slice(0,20)}${s.isMe?' ★':''}</span>
+        <div style="flex:1;background:var(--bg-deep);height:16px;border-radius:2px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${color}"></div></div>
+        <span style="flex:none;width:92px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--paper)">${pct}% · seed ${s.avgSeed.toFixed(1)}</span>
+      </div>`;
+    }).join('');
+  } catch (e) { simHtml = `<div class="empty-msg">Sim needs scoring history: ${esc(e.message)}</div>`; }
+
+  const luck = scheduleLuck();
+  let luckHtml = '';
+  if (luck) {
+    luckHtml = luck.map(l => {
+      const color = l.luck > 0.5 ? 'var(--green)' : (l.luck < -0.5 ? 'var(--rust)' : 'var(--muted)');
+      const tag = l.luck > 1 ? 'lucky, coasting on soft matchups' : l.luck < -1 ? 'unlucky, better than record: BUY LOW' : 'about fair';
+      return `<tr style="${l.isMe?'background:rgba(232,163,61,0.1)':''}">
+        <td><b>${esc(l.name)}${l.isMe?' ★':''}</b></td>
+        <td>${l.actualWins}</td><td>${l.expWins}</td>
+        <td style="color:${color};font-weight:600">${l.luck > 0 ? '+' : ''}${l.luck}</td>
+        <td style="font-size:10.5px;color:var(--muted)">${tag}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const remCount = remainingMatchups().length;
+  return `<div class="chart-title">Playoff Odds (${iters.toLocaleString()} simulated seasons)</div>
+    <div class="chart-note" style="margin-bottom:10px">${remCount ? `Simulating the remaining ${remCount} weeks from each team's real scoring mean and variance.` : "Preseason: no schedule yet, so this projects a full season from each team's scoring distribution. Rerun once games start for schedule-aware odds."} Green = likely in, red = long shot, you in amber.</div>
+    <div style="margin-bottom:24px">${simHtml}</div>
+    <div class="chart-title">Schedule Luck</div>
+    <div class="chart-note" style="margin-bottom:10px">Actual wins vs expected wins (the share of the league you would have beaten each week with your own scores). Negative luck means a team is better than its record: the best buy-low signal there is. Positive means it is coasting on soft matchups.</div>
+    ${luck ? `<table class="trend-table"><tr><th>Team</th><th>Actual W</th><th>Exp W</th><th>Luck</th><th></th></tr>${luckHtml}</table>` : '<div class="empty-msg">Schedule luck fills in once the season has scored games. Preseason has nothing to measure yet.</div>'}`;
 }
 
 /* ---------- Trends tab: what's moving over time ---------- */

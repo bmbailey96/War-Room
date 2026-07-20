@@ -27,17 +27,17 @@ export default async (req) => {
     return new Response(JSON.stringify({ error: "no recommendation available to draft from" }), { status: 409 });
   }
 
-  const prompt = `Write the actual message I would paste into my fantasy league's group chat to propose the trade described below. Rules:
+  const prompt = `Write the actual message I would paste into my fantasy league's group chat to propose THIS EXACT trade below. Rules:
+- Propose exactly the players named. Do NOT substitute, add, or drop any player. If the trade names Vidal, the message is about Vidal, not anyone else.
 - Sound like a real person texting a league mate, not a formal proposal. Casual, direct, a little personality.
 - Do NOT use em dashes.
 - No corporate or salesy tone. Don't oversell it. Lead with the offer, give a quick honest reason it makes sense for them, leave room to counter.
 - Keep it short, 2 to 4 sentences.
-- If the trade involves a specific person, address them naturally.
-- Do not invent details not in the recommendation.
+- Address the partner naturally.
 
-If the recommendation is a trade, write the proposal message. If it is a pickup or lineup call (not a trade with another manager), instead write nothing and return the single word: NOMESSAGE.
+If what follows is genuinely not a tradeable offer, return only the single word: NOMESSAGE.
 
-RECOMMENDATION:
+THE TRADE:
 ${recommendation}
 
 Return ONLY the message text (or NOMESSAGE), nothing else.`;

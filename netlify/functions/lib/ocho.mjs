@@ -305,3 +305,31 @@ export function trendBlock(trends) {
   if (!lines.length) return "";
   return `\n\nWHAT'S CHANGED IN THE LAST ~7 DAYS (trajectory matters more than the static picture; weigh momentum):\n${lines.join("\n")}`;
 }
+
+// Build a market-value anchor block for the trade prompts. Maps every
+// player on my roster + every player league-wide to DynastyProcess's
+// normalized 0-100 value so the analyzer anchors to consensus instead of
+// guessing. News in the prompt can still override.
+export function valuesBlock(snapshot, playerValues) {
+  if (!playerValues || !playerValues.players) return "";
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+  const me = snapshot.teams.find(t => t.isMe);
+  const lines = [];
+  const seen = new Set();
+  const add = (label, players) => {
+    const vals = players.map(p => {
+      const m = playerValues.players[norm(p.name)];
+      return m ? `${p.name} ${m.v}` : null;
+    }).filter(Boolean);
+    if (vals.length) lines.push(`${label}: ${vals.join(", ")}`);
+  };
+  if (me) add("MY roster market values (0-100)", me.players);
+  for (const t of snapshot.teams) {
+    if (t.isMe) continue;
+    add(`${t.name} values`, t.players.filter(p => {
+      const k = norm(p.name); if (seen.has(k)) return false; seen.add(k); return true;
+    }));
+  }
+  if (!lines.length) return "";
+  return `\n\nMARKET VALUE ANCHOR (DynastyProcess consensus, ${playerValues.scrapeDate || "recent"}, normalized 0-100; use these as your baseline "value" numbers in the JSON, then adjust for MY roster fit and any live news that moves a player):\n${lines.join("\n")}`;
+}

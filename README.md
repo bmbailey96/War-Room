@@ -1,42 +1,27 @@
-# The Ocho War Room (v10: reasoning edition)
+# The Ocho War Room (v13: the daily three)
 
-Theme: ONE MOVE. Every analysis ends in "## THE MOVE"; the freshest sits
-in The Call banner. v10 makes it reason across time and talk back.
-
-## New in v10
-
-TREND ENGINE (Trends tab)
-  The snapshot function now archives one datapoint per team per day
-  (roster shape, depth by position, injury count, picks, seed). A
-  "what's changed in the last ~7 days" block is computed and fed into
-  EVERY analysis, so the engine weighs momentum, not just the static
-  picture. A rising snap share or a team quietly stockpiling RBs now
-  changes the advice. The Trends tab shows the deltas, color-coded.
-
-TRADE EVALUATOR (Ask tab, top)
-  The missing half of your trade game. Paste a trade someone offered
-  you, in plain language ("Birkey offers Jeanty for Aiyuk and my 2026
-  1st"), and it grades accept / decline / counter, renders it as the
-  same visual trade card, and gives you the EXACT counter to send back.
-
-ASK ANYTHING (Ask tab, bottom)
-  A chat box with full context: your roster, the whole league, owner
-  tendencies, the news wire, trends, and the grading record. Ask
-  "should I worry about McCaffrey's age" or "who on Birkey's team is
-  actually gettable" and get a grounded answer on demand, no waiting
-  for a scheduled run. Keeps short conversation memory for follow-ups.
+THE CALL, at the top of the app, is now your fixed daily briefing:
+three moves, always the same three slots, always visible.
+  - PROPOSE THIS TRADE: the one trade to send right now, with a
+    "Draft the message" button that writes the exact proposal.
+  - GRAB THIS PLAYER: the single best pickup available.
+  - DROP THIS PLAYER: the single best cut to make room.
+When a slot has no worthwhile move it says so ("hold your roster",
+"pool is thin") instead of forcing a bad one. The trade and pickup
+slots refresh from your latest Trades and Pickups runs.
 
 ## All tabs
 
 Roster Holes, Teams, Trades, Pickups, Sit/Start, Draft Room
-(conditional), Standings, Data, Trends, Ask, Briefing, The Wire.
+(conditional), Standings, Odds, Game Plan, Data, Trends, Ask,
+Briefing, The Wire.
 
-## Pipeline (16 functions)
+## Pipeline (17 functions)
 
-snapshot 2h (now also archives trends) | news hourly :15 | scout
-hourly :25 | stats daily | analyze daily 13:00 UTC | draft daily
-(self-gates) | grade weekly Tue | briefing Sunday night. On-demand:
-trigger, evaluate, chat, draft-message, get-data, notify-test.
+snapshot 2h | news hourly :15 | scout hourly :25 | stats daily |
+values daily :45 | analyze daily 13:00 UTC | draft daily | gameplan
+weekly Mon | grade weekly Tue | briefing Sunday night. On-demand:
+evaluate, chat, draft-message, trigger, get-data, notify-test.
 
 ## Deploy
 
@@ -48,19 +33,18 @@ trigger, evaluate, chat, draft-message, get-data, notify-test.
      /.netlify/functions/snapshot
      /.netlify/functions/news
      /.netlify/functions/stats
+     /.netlify/functions/values
      /.netlify/functions/notify-test
-6. Open the site. Trends fills in after 2+ days of history; the Ask
-   tab works immediately.
+6. Open the site. Run Trades and Pickups once to fill The Call's
+   three slots.
 
 ## Cost
 
-Free: Sleeper, RSS, Reddit, nflverse, ntfy, charts, trends storage,
-standings, grading. AI runs a few cents to ~$0.25 each; chat and
-evaluator are per-question, only when you use them. Realistic:
-$12-40/month in season depending on how much you chat.
+Free data + charts + Odds sim. AI runs a few cents to ~$0.25 each.
+Realistic: $12-40/month in season.
 
 ## Season maintenance
 
 Each offseason: rerun the behavior mine + history pull, refresh
-OWNER_HISTORY in lib/ocho.mjs and index.html. Trend history builds
-itself. Everything else self-updates.
+OWNER_HISTORY in lib/ocho.mjs and index.html. Everything else
+self-updates.
