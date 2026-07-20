@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Ocho War Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-deep: #0c2033;
+    --panel: #15304a;
+    --panel-2: #1b3a5c;
+    --line: #3f6b8a;
+    --line-bright: #7fc4e0;
+    --paper: #e9eef2;
+    --muted: #8fa8bc;
+    --amber: #e8a33d;
+    --green: #6fbf8b;
+    --rust: #d9694f;
+    --mono: 'IBM Plex Mono', monospace;
+    --display: 'Oswald', sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg-deep);
+    background-image:
+      linear-gradient(rgba(127,196,224,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(127,196,224,0.05) 1px, transparent 1px);
+    background-size: 28px 28px;
+    color: var(--paper);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 90px; }
+
+  .title-block {
+    border: 2px solid var(--line-bright);
+    padding: 16px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+    position: relative;
+  }
+  .title-block::before {
+    content: "";
+    position: absolute; inset: 5px;
+    border: 1px solid rgba(127,196,224,0.35);
+    pointer-events: none;
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 28px;
+    letter-spacing: 0.03em;
+    margin: 0 0 2px;
+    text-transform: uppercase;
+  }
+  .sub { color: var(--line-bright); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
+  .stamp-col { text-align: right; font-size: 11px; color: var(--muted); }
+  .stamp {
+    border: 1px solid var(--amber); color: var(--amber);
+    padding: 3px 8px; display: inline-block; transform: rotate(-2deg);
+    letter-spacing: 0.08em; margin-bottom: 4px; font-weight: 600;
+  }
+  button {
+    background: var(--panel-2);
+    border: 1px solid var(--line-bright);
+    color: var(--line-bright);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--line-bright); color: var(--bg-deep); }
+  button:disabled { opacity: 0.45; cursor: wait; }
+
+  .tab-bar {
+    display: flex;
+    gap: 0;
+    margin: 20px 0 0;
+    border-bottom: 2px solid var(--line-bright);
+    overflow-x: auto;
+  }
+  .tab {
+    font-family: var(--display);
+    font-size: 13px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    padding: 10px 18px;
+    color: var(--muted);
+    cursor: pointer;
+    border: 1px solid transparent;
+    border-bottom: none;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .tab.active {
+    color: var(--paper);
+    background: var(--panel);
+    border-color: var(--line-bright);
+    position: relative;
+    top: 2px;
+  }
+  .tab-body { background: var(--panel); border: 1px solid var(--line-bright); border-top: none; padding: 18px; min-height: 300px; }
+
+  .status-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--muted);
+    padding: 8px 2px; flex-wrap: wrap; gap: 8px;
+  }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; }
+  .dot.stale { background: var(--amber); }
+  .dot.error { background: var(--rust); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--panel-2); border: 1px solid var(--line); padding: 14px 16px; }
+  .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .card-head h3 { font-family: var(--display); font-size: 17px; margin: 0; letter-spacing: 0.01em; }
+  .owner-tag { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .stance-badge {
+    font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 3px 7px; border: 1px solid; white-space: nowrap; font-weight: 600;
+  }
+  .st-winnow { color: var(--green); border-color: var(--green); }
+  .st-ascend { color: var(--line-bright); border-color: var(--line-bright); }
+  .st-rebuild { color: var(--amber); border-color: var(--amber); }
+  .st-retool { color: var(--rust); border-color: var(--rust); }
+  .st-mid { color: var(--muted); border-color: var(--muted); }
+
+  .stat-line { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); padding: 2px 0; }
+  .stat-line b { color: var(--paper); font-weight: 500; }
+  .depth-row { display: flex; gap: 4px; margin: 9px 0 6px; flex-wrap: wrap; }
+  .depth-chip { font-size: 10px; padding: 3px 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+  .depth-chip b { color: var(--paper); }
+  .depth-chip.thin { border-color: var(--amber); color: var(--amber); }
+  .depth-chip.thin b { color: var(--amber); }
+
+  .punch-item { display: flex; gap: 7px; font-size: 11px; padding: 4px 0; border-top: 1px solid rgba(127,196,224,0.12); align-items: flex-start; }
+  .punch-flag {
+    flex: none; width: 15px; height: 15px; border-radius: 50%;
+    border: 1.5px solid var(--amber); color: var(--amber);
+    font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; margin-top: 1px;
+  }
+  .punch-flag.surplus { border-color: var(--green); color: var(--green); }
+  .punch-item span { color: var(--muted); }
+  .punch-item b { color: var(--paper); }
+
+  .behavior-note { margin-top: 9px; padding-top: 7px; border-top: 1px dashed var(--line); font-size: 10.5px; color: var(--muted); }
+  .behavior-note .eng { color: var(--line-bright); font-weight: 600; }
+
+  .ai-panel { margin-top: 4px; }
+  .ai-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .ai-note { font-size: 11px; color: var(--muted); }
+  .ai-result {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line-bright);
+    padding: 16px 18px;
+    font-size: 12.5px;
+    white-space: normal;
+  }
+  .ai-result h2, .ai-result h3 { font-family: var(--display); letter-spacing: 0.03em; text-transform: uppercase; font-size: 15px; color: var(--line-bright); margin: 16px 0 6px; }
+  .ai-result h2:first-child, .ai-result h3:first-child { margin-top: 0; }
+  .ai-result p { margin: 8px 0; color: var(--paper); }
+  .ai-result ul { margin: 6px 0; padding-left: 20px; }
+  .ai-result li { margin: 4px 0; color: var(--paper); }
+  .ai-result strong { color: var(--amber); }
+  .ai-result em { color: var(--muted); font-style: normal; }
+  .spinner {
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid var(--line); border-top-color: var(--line-bright);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    vertical-align: middle; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-msg { border: 1px solid var(--rust); color: var(--rust); padding: 12px; font-size: 12px; margin-top: 10px; }
+  .empty-msg { color: var(--muted); padding: 30px 10px; text-align: center; }
+  .footer-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--bg-deep); border-top: 1px solid var(--line);
+    padding: 8px 16px; font-size: 10px; color: var(--muted);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px;
+  }
+  .trend-table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 10px; }
+  .trend-table th {
+    text-align: left; color: var(--line-bright); font-family: var(--display);
+    text-transform: uppercase; letter-spacing: 0.05em; font-size: 10.5px;
+    padding: 6px 8px; border-bottom: 1px solid var(--line-bright);
+  }
+  .trend-table td { padding: 6px 8px; border-bottom: 1px solid rgba(127,196,224,0.1); color: var(--muted); }
+  .trend-table td b { color: var(--paper); }
+  @media (max-width: 640px) {
+    .title-block { flex-direction: column; align-items: flex-start; }
+    .stamp-col { text-align: left; }
+    .tab { padding: 10px 12px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="title-block">
+    <div>
+      <h1>The Ocho War Room</h1>
+      <div class="sub">Live dynasty intelligence / roster survey / trade + pickup engine</div>
+    </div>
+    <div class="stamp-col">
+      <div class="stamp" id="season-stamp">SEASON --</div>
+      <div id="pull-time">not yet pulled</div>
+      <button id="refresh-btn" style="margin-top:8px">Pull Live Data</button>
+    </div>
+  </div>
+
+  <div class="status-row">
+    <span><span class="dot stale" id="status-dot"></span><span id="status-text">Idle</span></span>
+    <span id="league-tag"></span>
+  </div>
+
+  <div class="tab-bar" id="tab-bar">
+    <div class="tab active" data-tab="holes">Roster Holes</div>
+    <div class="tab" data-tab="trades">Trades</div>
+    <div class="tab" data-tab="pickups">Pickups</div>
+    <div class="tab" data-tab="sitstart">Sit / Start</div>
+  </div>
+  <div class="tab-body" id="tab-body">
+    <div class="empty-msg">Pull live data to begin the survey.</div>
+  </div>
+</div>
+
+<div class="footer-bar">
+  <span>Rosters, picks, trends: live from Sleeper each pull. Analysis tabs: AI research with live web search on demand.</span>
+  <span>SigourneyBeaver / The Nightmen</span>
+</div>
+
+<script>
+/* ============================================================
+   THE OCHO WAR ROOM
+   Data layers:
+   1. LIVE  : Sleeper API, fetched every pull (rosters, picks, trends)
+   2. CACHED: player DB (refreshed when >20h old), owner history (embedded)
+   3. ON-DEMAND: AI research w/ web search, run per question
+   ============================================================ */
+
+const USERNAME = "sigourneybeaver";
+const MY_USER_ID = "863128676391383040";
+const FALLBACK_LEAGUE_ID = "1205222463223365632";
+const LEAGUE_NAME_PATTERN = /ocho|teenypetes/i;
+
+/* Owner history: slow-changing, computed from 4 seasons of league history (2022-2025).
+   Refresh this block after each season by re-running the history pull. */
+const OWNER_HISTORY = {"460522508903247872":{"display_name":"AverageRedneck","championships":["2023"],"win_pct":0.589,"record":{"wins":33,"losses":23,"ties":0},"trades_count":12,"trade_positions_acquired":{"RB":5,"WR":3,"QB":4,"TE":2},"scoring":{"avg":171.22,"stdev":28.93}},"862447704859635712":{"display_name":"lackeymatt","championships":[],"win_pct":0.536,"record":{"wins":30,"losses":26,"ties":0},"trades_count":23,"trade_positions_acquired":{"QB":4,"WR":19,"TE":1,"RB":7,"DL":2},"scoring":{"avg":164.96,"stdev":31.87}},"862526263095586816":{"display_name":"owmyballs","championships":[],"win_pct":0.268,"record":{"wins":15,"losses":41,"ties":0},"trades_count":4,"trade_positions_acquired":{"QB":2,"WR":1},"scoring":{"avg":128.96,"stdev":39.82}},"863128676391383040":{"display_name":"SigourneyBeaver","championships":[],"win_pct":0.607,"record":{"wins":34,"losses":22,"ties":0},"trades_count":26,"trade_positions_acquired":{"TE":3,"RB":5,"WR":9},"scoring":{"avg":179.16,"stdev":29.45}},"863157773284864000":{"display_name":"Birkey","championships":["2024"],"win_pct":0.679,"record":{"wins":38,"losses":18,"ties":0},"trades_count":23,"trade_positions_acquired":{"RB":9,"WR":9,"QB":6,"DL":1},"scoring":{"avg":183.48,"stdev":29.84}},"863467130702671872":{"display_name":"MikahH","championships":["2022"],"win_pct":0.464,"record":{"wins":26,"losses":30,"ties":0},"trades_count":33,"trade_positions_acquired":{"QB":7,"WR":20,"RB":12,"TE":3},"scoring":{"avg":168.39,"stdev":27.51}},"994817581137604608":{"display_name":"SexyJexy19","championships":["2025"],"win_pct":0.429,"record":{"wins":18,"losses":24,"ties":0},"trades_count":11,"trade_positions_acquired":{"QB":2,"RB":3,"TE":1,"WR":4},"scoring":{"avg":164.37,"stdev":28.31}},"1027938591684538368":{"display_name":"aaronjy1999","championships":[],"win_pct":0.393,"record":{"wins":11,"losses":17,"ties":0},"trades_count":7,"trade_positions_acquired":{"RB":2,"WR":3,"QB":2},"scoring":{"avg":150.3,"stdev":34.01}},"501533314885087232":{"display_name":"vic2252","championships":[],"win_pct":0.357,"record":{"wins":5,"losses":9,"ties":0},"trades_count":3,"trade_positions_acquired":{"RB":1,"QB":2,"WR":1},"scoring":{"avg":174.02,"stdev":23.32}}};
+
+const STARTER_NEEDS = { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1, DL_eligible: 1 };
+
+/* ---------- storage abstraction: works in Claude artifacts (window.storage)
+   and on a normal deployed site (localStorage) ---------- */
+const store = {
+  async get(key) {
+    try {
+      if (window.storage) {
+        const r = await window.storage.get(key, false);
+        return r ? r.value : null;
+      }
+    } catch (e) { /* fall through */ }
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  },
+  async set(key, value) {
+    try {
+      if (window.storage) { await window.storage.set(key, value, false); return; }
+    } catch (e) { /* fall through */ }
+    try { localStorage.setItem(key, value); } catch (e) { /* ignore */ }
+  }
+};
+
+/* ---------- global state ---------- */
+const S = {
+  league: null, rosters: null, users: null, tradedPicks: null,
+  playersDB: null, teams: null, nflState: null, trending: null,
+  activeTab: 'holes',
+  aiResults: {},   // per-tab cached AI output for this session
+  aiRunning: {},
+};
+
+/* ---------- utility ---------- */
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function setStatus(text, kind) {
+  document.getElementById('status-text').textContent = text;
+  document.getElementById('status-dot').className = 'dot' + (kind ? ' ' + kind : '');
+}
+/* tiny markdown-ish renderer for AI text */
+function renderMd(text) {
+  let t = esc(text);
+  t = t.replace(/^### (.*)$/gm, '<h3>$1</h3>');
+  t = t.replace(/^## (.*)$/gm, '<h2>$1</h2>');
+  t = t.replace(/^# (.*)$/gm, '<h2>$1</h2>');
+  t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // bullet blocks
+  t = t.replace(/((?:^[-*] .*\n?)+)/gm, m => {
+    const items = m.trim().split(/\n/).map(l => '<li>' + l.replace(/^[-*] /, '') + '</li>').join('');
+    return '<ul>' + items + '</ul>';
+  });
+  // paragraphs
+  t = t.split(/\n{2,}/).map(chunk => {
+    if (/^<(h2|h3|ul)/.test(chunk.trim())) return chunk;
+    return '<p>' + chunk.replace(/\n/g, '<br/>') + '</p>';
+  }).join('');
+  return t;
+}
+
+/* ---------- player DB with trim + cache ---------- */
+async function getPlayersDB() {
+  const cached = await store.get('ocho_players_trim');
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      if (Date.now() - parsed.t < 1000 * 60 * 60 * 20) return parsed.d;
+    } catch (e) { /* refetch */ }
+  }
+  const res = await fetch('https://api.sleeper.app/v1/players/nfl');
+  const full = await res.json();
+  const trim = {};
+  for (const [pid, p] of Object.entries(full)) {
+    if (!p) continue;
+    // keep fantasy-relevant entries only, keeps cache under size limits
+    if (!p.position && !p.fantasy_positions) continue;
+    trim[pid] = {
+      n: p.full_name || ((p.first_name || '') + ' ' + (p.last_name || '')).trim() || pid,
+      p: p.position || null,
+      fp: p.fantasy_positions || null,
+      a: p.age || null,
+      e: p.years_exp,
+      t: p.team || null,
+      inj: p.injury_status || null,
+    };
+  }
+  await store.set('ocho_players_trim', JSON.stringify({ t: Date.now(), d: trim }));
+  return trim;
+}
+function pInfo(pid) {
+  const p = (S.playersDB || {})[pid];
+  if (!p) return { name: pid, pos: null, fps: [], age: null, exp: null, team: pid, inj: null };
+  return { name: p.n, pos: p.p, fps: p.fp || (p.p ? [p.p] : []), age: p.a, exp: p.e, team: p.t, inj: p.inj };
+}
+
+/* ---------- league resolution + core fetch ---------- */
+async function resolveLeague() {
+  const u = await (await fetch(`https://api.sleeper.app/v1/user/${USERNAME}`)).json();
+  const year = new Date().getFullYear();
+  for (const season of [year, year - 1]) {
+    try {
+      const leagues = await (await fetch(`https://api.sleeper.app/v1/user/${u.user_id}/leagues/nfl/${season}`)).json();
+      const match = (leagues || []).find(l => LEAGUE_NAME_PATTERN.test(l.name || ''));
+      if (match) return { id: match.league_id, src: `${season} league resolved live` };
+    } catch (e) { /* keep trying */ }
+  }
+  return { id: FALLBACK_LEAGUE_ID, src: 'fallback league id (no newer season found)' };
+}
+
+async function pullLive() {
+  const btn = document.getElementById('refresh-btn');
+  btn.disabled = true;
+  try {
+    setStatus('Resolving league...', 'stale');
+    const { id, src } = await resolveLeague();
+    document.getElementById('league-tag').textContent = src;
+
+    setStatus('Fetching league core...', 'stale');
+    const [league, rosters, users, tradedPicks, nflState, trending] = await Promise.all([
+      fetch(`https://api.sleeper.app/v1/league/${id}`).then(r => r.json()),
+      fetch(`https://api.sleeper.app/v1/league/${id}/rosters`).then(r => r.json()),
+      fetch(`https://api.sleeper.app/v1/league/${id}/users`).then(r => r.json()),
+      fetch(`https://api.sleeper.app/v1/league/${id}/traded_picks`).then(r => r.json()),
+      fetch('https://api.sleeper.app/v1/state/nfl').then(r => r.json()),
+      fetch('https://api.sleeper.app/v1/players/nfl/trending/add?lookback_hours=48&limit=40').then(r => r.json()),
+    ]);
+    Object.assign(S, { league, rosters, users, tradedPicks, nflState, trending });
+
+    setStatus('Loading player database...', 'stale');
+    S.playersDB = await getPlayersDB();
+
+    setStatus('Computing survey...', 'stale');
+    S.teams = computeTeams();
+    document.getElementById('season-stamp').textContent = 'SEASON ' + league.season;
+    document.getElementById('pull-time').textContent = 'Pulled ' + new Date().toLocaleString();
+    setStatus('Live', '');
+    renderTab();
+  } catch (err) {
+    console.error(err);
+    setStatus('Fetch failed: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---------- computation ---------- */
+function teamName(ownerId) {
+  const u = (S.users || []).find(x => x.user_id === ownerId) || {};
+  return ((u.metadata || {}).team_name) || u.display_name || ownerId;
+}
+function stance(winPct, avgAge) {
+  if (winPct >= 0.55 && avgAge >= 27) return { label: 'Win-Now', cls: 'st-winnow' };
+  if (winPct >= 0.55) return { label: 'Ascending', cls: 'st-ascend' };
+  if (winPct < 0.45 && avgAge < 26.5) return { label: 'Rebuilding', cls: 'st-rebuild' };
+  if (winPct < 0.45) return { label: 'Retool Needed', cls: 'st-retool' };
+  return { label: 'Middle of Pack', cls: 'st-mid' };
+}
+function engagement(count) {
+  if (count == null) return 'Unknown history';
+  if (count <= 5) return 'Low engagement, rarely trades';
+  if (count <= 15) return 'Moderate engagement';
+  return 'High engagement, frequent trader';
+}
+function computeTeams() {
+  const draftRounds = (S.league.settings || {}).draft_rounds || 3;
+  const currentSeason = parseInt(S.league.season, 10);
+  const nextSeasons = [String(currentSeason + 1), String(currentSeason + 2)];
+  const ridToOwner = {}; S.rosters.forEach(r => ridToOwner[r.roster_id] = r.owner_id);
+
+  const tradedKeys = new Set();
+  const ledger = {}; S.rosters.forEach(r => ledger[r.roster_id] = []);
+  (S.tradedPicks || []).forEach(tp => {
+    if (nextSeasons.includes(String(tp.season))) {
+      (ledger[tp.owner_id] = ledger[tp.owner_id] || []).push({ season: tp.season, round: tp.round, original: teamName(ridToOwner[tp.roster_id]) });
+      tradedKeys.add(`${tp.season}-${tp.round}-${tp.roster_id}`);
+    }
+  });
+  nextSeasons.forEach(season => {
+    for (let rnd = 1; rnd <= draftRounds; rnd++) {
+      S.rosters.forEach(r => {
+        if (!tradedKeys.has(`${season}-${rnd}-${r.roster_id}`)) {
+          ledger[r.roster_id].push({ season, round: rnd, original: teamName(r.owner_id) });
+        }
+      });
+    }
+  });
+
+  return S.rosters.map(r => {
+    const st = r.settings || {};
+    const wins = st.wins || 0, losses = st.losses || 0;
+    const winPct = wins / Math.max(wins + losses, 1);
+    const fpts = (st.fpts || 0) + (st.fpts_decimal || 0) / 100;
+    const ppts = (st.ppts || 0) + (st.ppts_decimal || 0) / 100;
+    const players = (r.players || []).map(pInfo);
+    const ages = players.map(p => p.age).filter(Boolean);
+    const avgAge = ages.length ? Math.round(ages.reduce((a,b)=>a+b,0)/ages.length*10)/10 : null;
+    const depth = { QB:0, RB:0, WR:0, TE:0, K:0, DEF:0, DL_eligible:0 };
+    players.forEach(p => {
+      if (p.pos && depth.hasOwnProperty(p.pos)) depth[p.pos]++;
+      if ((p.fps||[]).includes('DL')) depth.DL_eligible++;
+    });
+    const holes = Object.entries(STARTER_NEEDS)
+      .filter(([pos, need]) => (depth[pos]||0) <= need)
+      .map(([pos]) => `${pos.replace('_eligible',' (IDP)')}: only ${depth[pos]||0} rostered`);
+    const surplus = ['RB','WR','TE'].filter(p => (depth[p]||0) >= 8).map(p => `${p}: ${depth[p]} rostered`);
+    const injured = players.filter(p => p.inj && p.inj !== 'Questionable').map(p => `${p.name} (${p.inj})`);
+    return {
+      rosterId: r.roster_id, ownerId: r.owner_id,
+      name: teamName(r.owner_id),
+      ownerName: (OWNER_HISTORY[r.owner_id]||{}).display_name || '',
+      wins, losses, winPct, avgAge,
+      benchLeakage: ppts ? Math.round((ppts - fpts)*10)/10 : null,
+      depth, holes, surplus, injured,
+      players,
+      picks: ledger[r.roster_id].sort((a,b)=>a.season.localeCompare(b.season)||a.round-b.round),
+      stance: stance(winPct, avgAge || 27),
+      history: OWNER_HISTORY[r.owner_id] || {},
+      isMe: r.owner_id === MY_USER_ID,
+    };
+  });
+}
+
+/* ---------- AI layer ---------- */
+async function callClaude(userPrompt, { useSearch = true, maxTokens = 3000 } = {}) {
+  const body = {
+    model: 'claude-sonnet-4-6',
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content: userPrompt }],
+  };
+  if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
+
+  // Try direct (works inside Claude artifacts, no key needed).
+  // Fall back to a Netlify function proxy (deployed site with your own API key).
+  const endpoints = [
+    { url: 'https://api.anthropic.com/v1/messages', headers: { 'Content-Type': 'application/json' } },
+    { url: '/.netlify/functions/claude', headers: { 'Content-Type': 'application/json' } },
+  ];
+  let lastErr = null;
+  for (const ep of endpoints) {
+    try {
+      const res = await fetch(ep.url, { method: 'POST', headers: ep.headers, body: JSON.stringify(body) });
+      if (!res.ok) { lastErr = new Error(`${ep.url} returned ${res.status}`); continue; }
+      const data = await res.json();
+      if (data.error) { lastErr = new Error(data.error.message || 'API error'); continue; }
+      const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+      if (text) return text;
+      lastErr = new Error('Empty response');
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('All AI endpoints failed');
+}
+
+/* ---------- context builders ---------- */
+function leagueContextBlock() {
+  const lines = S.teams.map(t => {
+    const h = t.history || {};
+    return [
+      `TEAM: ${t.name} (owner: ${h.display_name || t.ownerId})${t.isMe ? ' <-- THIS IS ME' : ''}`,
+      `  Record ${t.wins}-${t.losses}, avg age ${t.avgAge}, stance: ${t.stance.label}`,
+      `  Depth: QB ${t.depth.QB}, RB ${t.depth.RB}, WR ${t.depth.WR}, TE ${t.depth.TE}, K ${t.depth.K}, DEF ${t.depth.DEF}, DL-eligible ${t.depth.DL_eligible}`,
+      `  Holes: ${t.holes.join('; ') || 'none flagged'}`,
+      `  Surplus: ${t.surplus.join('; ') || 'none flagged'}`,
+      `  Future picks owned: ${t.picks.map(p=>`${p.season} R${p.round}${p.original!==t.name?` (from ${p.original})`:''}`).join(', ')}`,
+      `  Owner history: ${h.trades_count ?? '?'} career trades (${engagement(h.trades_count)}), career win% ${h.win_pct ?? '?'}, titles: ${(h.championships||[]).join(', ') || 'none'}, positions historically acquired in trades: ${Object.entries(h.trade_positions_acquired||{}).map(([k,v])=>`${k} ${v}x`).join(', ') || 'unknown'}`,
+      `  Notable injuries on roster: ${t.injured.slice(0,6).join(', ') || 'none flagged in Sleeper data'}`,
+    ].join('\n');
+  }).join('\n\n');
+  return `LEAGUE: ${S.league.name}, ${S.league.season} season, ${S.league.settings.num_teams}-team dynasty, ${(S.league.settings||{}).draft_rounds || 3}-round rookie drafts, pick trading ${S.league.settings.pick_trading ? 'allowed' : 'off'}, no FAAB (rolling waiver priority). Roster: ${JSON.stringify(S.league.roster_positions)}.\n\n${lines}`;
+}
+function myRosterBlock() {
+  const me = S.teams.find(t => t.isMe);
+  if (!me) return 'My roster not found.';
+  const byPos = {};
+  me.players.forEach(p => {
+    const k = p.pos || 'UNK';
+    (byPos[k] = byPos[k] || []).push(`${p.name} (${p.team||'FA'}, age ${p.age||'?'}${p.inj ? ', INJ: '+p.inj : ''})`);
+  });
+  return Object.entries(byPos).map(([pos, list]) => `${pos}: ${list.join('; ')}`).join('\n');
+}
+function trendingBlock() {
+  const rostered = new Set();
+  S.rosters.forEach(r => (r.players||[]).forEach(pid => rostered.add(pid)));
+  const avail = (S.trending||[]).filter(t => !rostered.has(t.player_id));
+  return avail.slice(0, 25).map(t => {
+    const p = pInfo(t.player_id);
+    return `${p.name} (${p.pos||'?'}, ${p.team||'FA'}) - ${t.count} adds league-wide in last 48h${p.inj ? ', INJ: '+p.inj : ''}`;
+  }).join('\n');
+}
+
+/* ---------- AI tab runners ---------- */
+const AI_TASKS = {
+  trades: {
+    button: 'Run Trade Analysis',
+    note: 'Cross-references every roster, future pick ledger, owner trade tendencies, and current NFL news/values.',
+    prompt: () => `You are a dynasty fantasy football trade analyst for my league. Use web search to check CURRENT dynasty trade values, recent NFL news, injuries, and any coaching or depth chart changes relevant to players named below. Today's date matters: use current information.
+
+${leagueContextBlock()}
+
+MY FULL ROSTER (The Nightmen):
+${myRosterBlock()}
+
+TASK: Recommend my 3 to 5 best realistic trade targets or trade constructions right now. For each:
+1. Name the exact trade partner and why their situation (stance, holes, tendencies, engagement level) makes them likely to deal
+2. Propose a specific package including future picks where sensible (this is dynasty, picks matter)
+3. Ground your player valuations in CURRENT news and consensus dynasty values from your web search, and say what you found
+4. Flag the risk in each deal honestly
+Prioritize fixing my flagged holes and monetizing my flagged surplus. Consider owner behavior: a great value trade with an owner who never trades is worth less than a fair trade with an active one. Keep it concrete, no filler.`,
+  },
+  pickups: {
+    button: 'Run Pickup Analysis',
+    note: 'Combines live league-wide trending adds (filtered to players actually available in your league) with current news research.',
+    prompt: () => `You are a dynasty fantasy football waiver analyst. Use web search for CURRENT news on the players below: role changes, injuries ahead of them on depth charts, coaching scheme fits, camp reports.
+
+${leagueContextBlock()}
+
+MY FULL ROSTER (The Nightmen):
+${myRosterBlock()}
+
+PLAYERS TRENDING LEAGUE-WIDE ON SLEEPER (last 48h) WHO ARE UNROSTERED IN MY LEAGUE:
+${trendingBlock()}
+
+TASK: Recommend my 3 to 6 best pickups right now, and who I should drop for each. Consider:
+1. My flagged holes first (thin positions get priority)
+2. Dynasty value over redraft value: age, contract situation, opportunity trajectory
+3. What your web search found about each player's CURRENT situation, cite what you learned
+4. This league has rolling waiver priority, no FAAB, so note if a player is worth burning priority position on
+Be honest if the available pool is weak. No filler.`,
+  },
+  sitstart: {
+    button: 'Run Sit/Start Analysis',
+    note: 'In season: lineup calls for the coming week with matchup, injury, and scheme research. Offseason: roster stress test instead.',
+    prompt: () => {
+      const wk = S.nflState || {};
+      const inSeason = wk.season_type === 'regular' && wk.week >= 1;
+      const seasonNote = inSeason
+        ? `It is currently ${wk.season} NFL regular season, week ${wk.week}. Analyze my lineup for the upcoming week.`
+        : `It is currently the NFL offseason (state: ${wk.season_type || 'unknown'}, season ${wk.season || '?'}). There is no game week to set. INSTEAD: run a full roster stress test. For each position group, identify who projects as my locked-in starters when the season opens, where the closest lineup battles will be, and which of my players' situations to monitor in camp based on CURRENT news.`;
+      return `You are a fantasy football lineup analyst. Use web search extensively: current injuries and practice reports, offensive coordinator and scheme tendencies for each player's NFL team (run/pass lean, pace, new OC risk), depth chart changes, and any breaking news.
+
+${seasonNote}
+
+LEAGUE SCORING CONTEXT: ${JSON.stringify(S.league.scoring_settings ? Object.fromEntries(Object.entries(S.league.scoring_settings).filter(([k])=>['rec','pass_td','rush_td','rec_td','pass_yd','rush_yd','rec_yd','pass_int','sack','idp_sack'].includes(k))) : {})}
+LINEUP SLOTS: ${JSON.stringify(S.league.roster_positions)}
+
+MY FULL ROSTER (The Nightmen):
+${myRosterBlock()}
+
+For every recommendation, say specifically what current information from your search drove it (an injury report, a scheme note, a coordinator tendency). Confidence level on each call. No filler.`;
+    },
+  },
+};
+
+async function runAI(tabKey) {
+  if (!S.teams) { alert('Pull live data first.'); return; }
+  S.aiRunning[tabKey] = true;
+  renderTab();
+  try {
+    const text = await callClaude(AI_TASKS[tabKey].prompt(), { useSearch: true, maxTokens: 3500 });
+    S.aiResults[tabKey] = { text, at: new Date() };
+  } catch (err) {
+    S.aiResults[tabKey] = { error: err.message, at: new Date() };
+  } finally {
+    S.aiRunning[tabKey] = false;
+    renderTab();
+  }
+}
+
+/* ---------- renderers ---------- */
+function renderHoles() {
+  if (!S.teams) return '<div class="empty-msg">Pull live data to survey rosters.</div>';
+  const cards = [...S.teams].sort((a,b) => (b.isMe?1:0)-(a.isMe?1:0) || b.winPct - a.winPct).map(t => {
+    const chips = Object.entries(t.depth).map(([pos, count]) => {
+      const thin = count <= (STARTER_NEEDS[pos] || 0);
+      return `<div class="depth-chip ${thin?'thin':''}">${pos.replace('_eligible',' IDP')}: <b>${count}</b></div>`;
+    }).join('');
+    const punch = t.holes.map(h => `<div class="punch-item"><span class="punch-flag">!</span><span><b>Hole</b>: ${esc(h)}</span></div>`).join('')
+      + t.surplus.map(s => `<div class="punch-item"><span class="punch-flag surplus">+</span><span><b>Surplus</b>: ${esc(s)}</span></div>`).join('');
+    const h = t.history || {};
+    return `<div class="card" ${t.isMe ? 'style="border-color: var(--amber)"' : ''}>
+      <div class="card-head">
+        <div><h3>${esc(t.name)}${t.isMe ? ' ★' : ''}</h3><div class="owner-tag">${esc(h.display_name||'')}</div></div>
+        <div class="stance-badge ${t.stance.cls}">${t.stance.label}</div>
+      </div>
+      <div class="stat-line"><span>Record</span><b>${t.wins}-${t.losses}</b></div>
+      <div class="stat-line"><span>Avg age</span><b>${t.avgAge ?? '?'}</b></div>
+      ${t.benchLeakage !== null ? `<div class="stat-line"><span>Pts left on bench</span><b>${t.benchLeakage}</b></div>` : ''}
+      <div class="stat-line"><span>Future picks</span><b>${t.picks.length}</b></div>
+      <div class="depth-row">${chips}</div>
+      ${punch}
+      <div class="behavior-note"><span class="eng">${engagement(h.trades_count)}</span> · career ${h.trades_count ?? '?'} trades · hunts: ${Object.entries(h.trade_positions_acquired||{}).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([p,c])=>p).join(', ')||'?'}</div>
+    </div>`;
+  }).join('');
+  return `<div class="grid">${cards}</div>`;
+}
+
+function renderAITab(tabKey) {
+  const task = AI_TASKS[tabKey];
+  const running = S.aiRunning[tabKey];
+  const result = S.aiResults[tabKey];
+  let resultHtml = '';
+  if (running) {
+    resultHtml = `<div class="ai-result"><span class="spinner"></span>Researching live: pulling current news, injuries, and values. This takes 30 to 90 seconds because it is doing real web searches.</div>`;
+  } else if (result && result.error) {
+    resultHtml = `<div class="error-msg">Analysis failed: ${esc(result.error)}. If this is the deployed site, check the Netlify function and API key. Inside Claude, just retry.</div>`;
+  } else if (result) {
+    resultHtml = `<div class="ai-result">${renderMd(result.text)}</div>
+      <div class="ai-note" style="margin-top:8px">Generated ${result.at.toLocaleTimeString()} using live web research. Rerun any time; every run pulls fresh.</div>`;
+  } else {
+    resultHtml = `<div class="empty-msg">No analysis run yet this session. Everything is computed fresh when you run it.</div>`;
+  }
+  let extra = '';
+  if (tabKey === 'pickups' && S.teams) {
+    const rows = trendingBlock().split('\n').slice(0, 12).map(line => `<tr><td>${esc(line)}</td></tr>`).join('');
+    extra = `<table class="trend-table"><tr><th>Trending league-wide, unrostered in The Ocho (last 48h)</th></tr>${rows || '<tr><td>none</td></tr>'}</table>`;
+  }
+  return `<div class="ai-panel">
+    <div class="ai-controls">
+      <button onclick="runAI('${tabKey}')" ${running || !S.teams ? 'disabled' : ''}>${task.button}</button>
+      <span class="ai-note">${task.note}</span>
+    </div>
+    ${resultHtml}
+    ${extra}
+  </div>`;
+}
+
+function renderTab() {
+  const body = document.getElementById('tab-body');
+  if (S.activeTab === 'holes') body.innerHTML = renderHoles();
+  else body.innerHTML = renderAITab(S.activeTab);
+}
+
+document.getElementById('tab-bar').addEventListener('click', e => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  S.activeTab = tab.dataset.tab;
+  renderTab();
+});
+document.getElementById('refresh-btn').addEventListener('click', pullLive);
+window.runAI = runAI;
+pullLive();
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+# The Ocho War Room - Netlify config
+[build]
+  publish = "."
+  functions = "netlify/functions"
