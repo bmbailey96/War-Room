@@ -65,6 +65,32 @@ export default async (req) => {
   await store.setJSON("trending_raw", core.trending || []);
   await store.setJSON("rosters_raw", core.rosters.map(r => ({ roster_id: r.roster_id, players: r.players || [] })));
 
+  // TREND ENGINE: keep one lightweight datapoint per team per DAY so we can
+  // compute what's changing over time (roster moves, depth shifts, injury
+  // counts, standing). Snapshot runs every 2h; we only append a new day's
+  // point once per calendar day to keep the history compact.
+  const trends = (await store.get("trends", { type: "json" })) || { days: [] };
+  const today = new Date().toISOString().slice(0, 10);
+  const lastDay = trends.days.length ? trends.days[trends.days.length - 1].date : null;
+  if (lastDay !== today) {
+    const point = {
+      date: today,
+      teams: snapshot.teams.map(t => ({
+        name: t.name,
+        wins: t.wins, losses: t.losses,
+        depth: t.depth,
+        injuredCount: (t.injured || []).length,
+        avgAge: t.avgAge,
+        picks: t.picks.length,
+        rosterSize: (t.players || []).length,
+        seed: t.projectedSeed,
+      })),
+    };
+    trends.days.push(point);
+    while (trends.days.length > 60) trends.days.shift();
+    await store.setJSON("trends", trends);
+  }
+
   // React to the league changing, don't just record it
   if (dirty) {
     const tradeHappened = newTxns.some(t => t.type === "trade");

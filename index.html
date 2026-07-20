@@ -235,6 +235,39 @@
   .player-chip .meta { color: var(--muted); }
   .player-chip.old { border-color: var(--rust); }
   .player-chip.young { border-color: var(--green); }
+  .trade-cards { display: grid; gap: 14px; margin-bottom: 14px; }
+  .trade-card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px; }
+  .trade-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .trade-partner { font-family: var(--display); font-size: 17px; letter-spacing: 0.02em; color: var(--paper); text-transform: uppercase; }
+  .conf-pill { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 8px; border: 1px solid; border-radius: 3px; font-weight: 600; }
+  .trade-sides { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
+  .trade-side { display: flex; flex-direction: column; gap: 6px; }
+  .side-label { font-family: var(--display); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
+  .side-label span { font-size: 15px; }
+  .side-give { color: var(--rust); }
+  .side-get { color: var(--green); }
+  .trade-arrow { font-size: 22px; color: var(--line-bright); align-self: center; }
+  .asset { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; }
+  .asset-pick { border-style: dashed; }
+  .asset-name { display: block; font-size: 12px; color: var(--paper); }
+  .asset-meta { font-size: 9.5px; color: var(--muted); }
+  .asset-bar { height: 4px; background: var(--bg-deep); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+  .asset-bar-fill { height: 100%; background: var(--line-bright); border-radius: 2px; }
+  .lean-meter { margin: 14px 0 10px; }
+  .lean-track { position: relative; height: 8px; background: var(--bg-deep); border-radius: 4px; }
+  .lean-center { position: absolute; left: 50%; top: -3px; width: 1px; height: 14px; background: var(--muted); }
+  .lean-fill { position: absolute; top: 0; height: 8px; border-radius: 4px; }
+  .lean-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .trade-verdict { font-size: 12.5px; color: var(--paper); padding: 8px 0 4px; border-top: 1px solid rgba(127,196,224,0.12); margin-top: 6px; }
+  .trade-details summary, .prose-toggle summary { cursor: pointer; font-size: 11px; color: var(--line-bright); padding: 4px 0; user-select: none; }
+  .trade-details summary:hover, .prose-toggle summary:hover { color: var(--paper); }
+  .trade-against { font-size: 11px; color: var(--muted); padding: 6px 0; }
+  .trade-against b { color: var(--rust); }
+  .prose-toggle { margin-top: 6px; border-top: 1px dashed var(--line); padding-top: 8px; }
+  @media (max-width: 560px) {
+    .trade-sides { grid-template-columns: 1fr; }
+    .trade-arrow { transform: rotate(90deg); justify-self: center; }
+  }
   .empty-msg { color: var(--muted); padding: 30px 10px; text-align: center; }
   .footer-bar {
     position: fixed; bottom: 0; left: 0; right: 0;
@@ -286,7 +319,12 @@
     <div class="tab" data-tab="trades">Trades</div>
     <div class="tab" data-tab="pickups">Pickups</div>
     <div class="tab" data-tab="sitstart">Sit / Start</div>
+    <div class="tab" data-tab="draft" id="draft-tab" style="display:none">Draft Room</div>
+    <div class="tab" data-tab="standings">Standings</div>
     <div class="tab" data-tab="data">Data</div>
+    <div class="tab" data-tab="trends">Trends</div>
+    <div class="tab" data-tab="ask">Ask</div>
+    <div class="tab" data-tab="briefing">Briefing</div>
     <div class="tab" data-tab="wire">The Wire</div>
   </div>
   <div class="tab-body" id="tab-body">
@@ -365,7 +403,10 @@ async function loadServerData() {
     if (!res.ok) return;
     S.server = await res.json();
     renderChangeFeed();
-    renderTab();
+    // Don't clobber the Ask tab mid-interaction (typing, chat in progress)
+    const onAsk = S.activeTab === 'ask';
+    const focused = document.activeElement && ['eval-input','chat-input'].includes(document.activeElement.id);
+    if (!(onAsk && (focused || S.chatRunning || S.evalRunning))) renderTab();
   } catch (e) { /* artifact mode or backend not deployed yet */ }
 }
 
@@ -664,7 +705,9 @@ TASK: Recommend my 3 to 5 best realistic trade targets or trade constructions ri
 2. Propose a specific package including future picks where sensible (this is dynasty, picks matter)
 3. Ground your player valuations in CURRENT news and consensus dynasty values from your web search, and say what you found
 4. Flag the risk in each deal honestly
-Prioritize fixing my flagged holes and monetizing my flagged surplus. Consider owner behavior: a great value trade with an owner who never trades is worth less than a fair trade with an active one. Keep it concrete, no filler.` + MOVE_REQ,
+Prioritize fixing my flagged holes and monetizing my flagged surplus. Consider owner behavior: a great value trade with an owner who never trades is worth less than a fair trade with an active one. Keep it concrete, no filler.
+
+CRITICAL OUTPUT FORMAT: Before any prose, emit a block wrapped in <TRADES_JSON> and </TRADES_JSON> containing a JSON array, one object per trade: {"partner":"team","iSend":[{"name":"...","type":"player"|"pick","pos":"RB"|null,"value":0-100}],"iGet":[...],"verdict":"one line worth-it call","confidence":"High"|"Medium"|"Low","leanScore":-100 to 100 (positive favors me),"caseAgainst":"one line"}. value = dynasty trade value 0-100 (young stud 90+, starter 40-60, dart 10-20, future 1st 35-55, future 3rd ~10). leanScore weights total value plus fit for my roster. Valid JSON only, no comments. Then write normal prose after the closing tag.` + MOVE_REQ,
   },
   pickups: {
     button: 'Run Pickup Analysis',
@@ -797,12 +840,45 @@ function renderTheCall() {
     if (m && (!best || +r.at > best.at)) best = { at: +r.at, key, move: m[1].trim() };
   }
   if (!best) { el.innerHTML = ''; return; }
+  const showMsg = /trade|deal|send|offer|package|acquire/i.test(best.move);
   el.innerHTML = `<div class="call-box">
     <div class="call-label">The Call</div>
     <div class="call-text">${renderMd(best.move)}</div>
     <div class="call-src">From the ${esc(best.key)} run, ${timeAgo(best.at)}. One move. Win now and later.</div>
+    ${showMsg ? `<button style="margin-top:10px" onclick="draftMessage()" ${S.draftingMsg ? 'disabled' : ''}>${S.draftingMsg ? 'Writing...' : 'Draft the message'}</button>` : ''}
+    ${S.draftedMsg ? `<div class="ai-result" style="margin-top:10px"><div class="ai-note" style="margin-bottom:6px">Paste this into the league chat:</div>${esc(S.draftedMsg)}<br/><button style="margin-top:8px" onclick="copyMsg()">Copy</button></div>` : ''}
   </div>`;
 }
+
+async function draftMessage() {
+  S.draftingMsg = true; renderTheCall();
+  try {
+    if (S.isDeployed) {
+      const res = await fetch('/.netlify/functions/draft-message', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recommendation: ((S.server.analyses || {}).trades || {}).text || '' }),
+      });
+      const data = await res.json();
+      S.draftedMsg = data.message || 'This one is not a trade with another manager, so there is no message to send.';
+    } else {
+      const rec = ((S.aiResults.trades || {}).text || (((S.server || {}).analyses || {}).trades || {}).text || '').replace(/<TRADES_JSON>[\s\S]*?<\/TRADES_JSON>/i, '').trim();
+      const text = await callClaude(`Write the actual casual message I'd paste into my fantasy league group chat to propose the top trade in this analysis. Sound like a real person texting, no em dashes, no corporate tone, 2-4 sentences, lead with the offer and a quick honest reason it helps them. If it's not a trade with another manager, return only: NOMESSAGE.\n\n${rec.slice(0,2500)}\n\nReturn only the message.`, { useSearch: false, maxTokens: 500 });
+      S.draftedMsg = text.trim() === 'NOMESSAGE' ? 'This one is not a trade, so there is no message to send.' : text.trim();
+    }
+  } catch (e) {
+    S.draftedMsg = 'Could not draft the message: ' + e.message;
+  } finally {
+    S.draftingMsg = false; renderTheCall();
+  }
+}
+function copyMsg() {
+  navigator.clipboard.writeText(S.draftedMsg).then(() => {
+    const btns = document.querySelectorAll('#the-call button');
+    if (btns.length) btns[btns.length - 1].textContent = 'Copied';
+  });
+}
+window.draftMessage = draftMessage;
+window.copyMsg = copyMsg;
 
 /* ---------- Teams tab: position-by-position book on every roster ---------- */
 function renderTeams() {
@@ -841,6 +917,12 @@ function renderTeams() {
   else intelHtml = `<div class="empty-msg">No intel book yet. Run the scout below: untouchables, gettable players, the ask, and their angle, for every roster.</div>`;
 
   return `${cards}
+    <div style="display:flex;flex-wrap:wrap;gap:14px;margin:4px 0 10px;font-size:10.5px;color:var(--muted)">
+      <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--green);display:inline-block;border-radius:2px"></span>Age 24 or under (ascending asset)</span>
+      <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--line);display:inline-block;border-radius:2px"></span>Prime (25 to 28)</span>
+      <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--rust);display:inline-block;border-radius:2px"></span>Age 29+ (declining window)</span>
+      <span style="display:inline-flex;gap:5px;align-items:center"><span style="color:var(--rust)">red text</span> = injury flag</span>
+    </div>
     <div class="ai-controls" style="margin-top:6px">
       <button onclick="runAI('teams')" ${S.aiRunning.teams ? 'disabled' : ''}>Run Team Intel Scout</button>
       <span class="ai-note">Writes the book on all 7 opponents: direction, untouchables, gettable pieces, what to ask for, what they want back.</span>
@@ -849,9 +931,16 @@ function renderTeams() {
 }
 
 /* ---------- Data tab: charts, dependency-free SVG ---------- */
+function legend(items) {
+  // items: [{color, label}]
+  return `<div style="display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 10px;font-size:10.5px;color:var(--muted)">${
+    items.map(i => `<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;background:${i.color};display:inline-block;border-radius:2px"></span>${esc(i.label)}</span>`).join('')
+  }</div>`;
+}
+
 function barChart(rows, { unit = '', highlight = null, goodHigh = true } = {}) {
   const max = Math.max(...rows.map(r => r.v), 0.001);
-  const W = 640, barH = 22, gap = 7, labelW = 150;
+  const W = 640, barH = 24, gap = 8, labelW = 155;
   const H = rows.length * (barH + gap);
   const bars = rows.map((r, i) => {
     const y = i * (barH + gap);
@@ -859,18 +948,116 @@ function barChart(rows, { unit = '', highlight = null, goodHigh = true } = {}) {
     const isHl = r.k === highlight;
     const rank = i / Math.max(rows.length - 1, 1);
     const strong = goodHigh ? rank < 0.34 : rank > 0.66;
-    const color = isHl ? 'var(--amber)' : (strong ? 'var(--green)' : 'var(--line-bright)');
-    return `<text x="0" y="${y + 15}" fill="${isHl ? 'var(--amber)' : 'var(--muted)'}" font-size="11" font-family="IBM Plex Mono">${esc(r.k).slice(0, 20)}</text>
-      <rect x="${labelW}" y="${y + 3}" width="${w}" height="${barH - 8}" fill="${color}" opacity="${isHl ? 1 : 0.75}"/>
-      <text x="${labelW + w + 6}" y="${y + 15}" fill="var(--paper)" font-size="11" font-family="IBM Plex Mono">${r.v}${unit}</text>`;
+    const weak = goodHigh ? rank > 0.66 : rank < 0.34;
+    const color = isHl ? 'var(--amber)' : (strong ? 'var(--green)' : (weak ? 'var(--rust)' : 'var(--line-bright)'));
+    return `<g>
+      <text x="0" y="${y + 16}" fill="${isHl ? 'var(--amber)' : 'var(--muted)'}" font-size="11" font-family="IBM Plex Mono">${esc(r.k).slice(0, 20)}</text>
+      <rect x="${labelW}" y="${y + 3}" width="${w}" height="${barH - 8}" rx="2" fill="${color}" opacity="${isHl ? 1 : 0.82}">
+        <animate attributeName="width" from="0" to="${w}" dur="0.6s" fill="freeze"/>
+      </rect>
+      <text x="${labelW + w + 6}" y="${y + 16}" fill="var(--paper)" font-size="11" font-family="IBM Plex Mono">${r.v}${unit}</text>
+    </g>`;
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;overflow:visible">${bars}</svg>`;
+}
+
+// Scatter: the contender-window map. x = avg age, y = win%. Quadrants labeled.
+function scatterChart(points, highlight) {
+  const W = 640, H = 380, pad = 44;
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const xMin = Math.min(...xs) - 0.6, xMax = Math.max(...xs) + 0.6;
+  const yMin = Math.max(0, Math.min(...ys) - 0.05), yMax = Math.min(1, Math.max(...ys) + 0.05);
+  const px = x => pad + (x - xMin) / (xMax - xMin) * (W - pad * 2);
+  const py = y => H - pad - (y - yMin) / (yMax - yMin) * (H - pad * 2);
+  const midX = px((xMin + xMax) / 2), midY = py((yMin + yMax) / 2);
+  const dots = points.map(p => {
+    const hl = p.k === highlight;
+    return `<g>
+      <circle cx="${px(p.x)}" cy="${py(p.y)}" r="${hl ? 8 : 6}" fill="${hl ? 'var(--amber)' : 'var(--line-bright)'}" opacity="${hl ? 1 : 0.8}"/>
+      <text x="${px(p.x) + 10}" y="${py(p.y) + 4}" font-size="10" font-family="IBM Plex Mono" fill="${hl ? 'var(--amber)' : 'var(--muted)'}">${esc(p.k).slice(0, 16)}</text>
+    </g>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px">
+    <line x1="${midX}" y1="${pad}" x2="${midX}" y2="${H - pad}" stroke="var(--line)" stroke-dasharray="3 4"/>
+    <line x1="${pad}" y1="${midY}" x2="${W - pad}" y2="${midY}" stroke="var(--line)" stroke-dasharray="3 4"/>
+    <text x="${pad + 4}" y="${pad + 2}" font-size="9.5" fill="var(--green)" font-family="Oswald">YOUNG + WINNING (best window)</text>
+    <text x="${W - pad - 4}" y="${pad + 2}" font-size="9.5" fill="var(--line-bright)" font-family="Oswald" text-anchor="end">OLD + WINNING (win now)</text>
+    <text x="${pad + 4}" y="${H - pad - 4}" font-size="9.5" fill="var(--amber)" font-family="Oswald">YOUNG + LOSING (rebuild)</text>
+    <text x="${W - pad - 4}" y="${H - pad - 4}" font-size="9.5" fill="var(--rust)" font-family="Oswald" text-anchor="end">OLD + LOSING (retool)</text>
+    <text x="${W / 2}" y="${H - 10}" font-size="10" fill="var(--muted)" font-family="IBM Plex Mono" text-anchor="middle">Average roster age &rarr;</text>
+    <text x="14" y="${H / 2}" font-size="10" fill="var(--muted)" font-family="IBM Plex Mono" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">Win % &rarr;</text>
+    ${dots}
+  </svg>`;
+}
+
+// Positional strength heatmap: teams x positions, cell shaded by depth
+function heatmap(teams) {
+  const POS = ['QB','RB','WR','TE','K','DEF','DL_eligible'];
+  const POSLBL = { QB:'QB', RB:'RB', WR:'WR', TE:'TE', K:'K', DEF:'DEF', DL_eligible:'DL' };
+  const need = { QB:1, RB:2, WR:2, TE:1, K:1, DEF:1, DL_eligible:1 };
+  const cellW = 60, cellH = 30, labelW = 150, headH = 24;
+  const W = labelW + POS.length * cellW;
+  const H = headH + teams.length * cellH;
+  const shade = (pos, v) => {
+    // relative to positional need: red thin, blue ok, green deep
+    if (v <= need[pos]) return 'var(--rust)';
+    if (v <= need[pos] + 1) return 'var(--amber)';
+    if (v >= need[pos] + 4) return 'var(--green)';
+    return 'var(--line-bright)';
+  };
+  const heads = POS.map((p, i) =>
+    `<text x="${labelW + i * cellW + cellW/2}" y="16" font-size="10.5" font-family="Oswald" fill="var(--line-bright)" text-anchor="middle">${POSLBL[p]}</text>`).join('');
+  const rows = teams.map((t, r) => {
+    const y = headH + r * cellH;
+    const label = `<text x="0" y="${y + 19}" font-size="10.5" font-family="IBM Plex Mono" fill="${t.isMe?'var(--amber)':'var(--muted)'}">${esc(t.name).slice(0,18)}${t.isMe?' ★':''}</text>`;
+    const cells = POS.map((p, i) => {
+      const v = t.depth[p] || 0;
+      const x = labelW + i * cellW;
+      return `<rect x="${x+2}" y="${y+2}" width="${cellW-4}" height="${cellH-4}" rx="2" fill="${shade(p,v)}" opacity="0.72"/>
+        <text x="${x+cellW/2}" y="${y+19}" font-size="11" font-family="IBM Plex Mono" fill="var(--bg-deep)" text-anchor="middle" font-weight="600">${v}</text>`;
+    }).join('');
+    return label + cells;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px">${heads}${rows}</svg>`;
+}
+
+// Radar: one team's profile across 5 normalized axes
+function radarChart(t, allTeams) {
+  const axes = [
+    { label: 'Win%', v: t.winPct, all: allTeams.map(x => x.winPct) },
+    { label: 'Avg Score', v: (t.history.scoring||{}).avg || 0, all: allTeams.map(x => (x.history.scoring||{}).avg || 0) },
+    { label: 'Youth', v: -(t.avgAge||27), all: allTeams.map(x => -(x.avgAge||27)) },
+    { label: 'Pick Capital', v: t.picks.length, all: allTeams.map(x => x.picks.length) },
+    { label: 'Lineup Eff', v: t.history.lineup_efficiency_pct || 0, all: allTeams.map(x => x.history.lineup_efficiency_pct || 0) },
+  ];
+  const W = 360, cx = W/2, cy = W/2, R = 120;
+  const norm = (v, all) => { const mn = Math.min(...all), mx = Math.max(...all); return mx===mn?0.5:(v-mn)/(mx-mn); };
+  const pts = axes.map((a, i) => {
+    const ang = (Math.PI * 2 * i / axes.length) - Math.PI/2;
+    const rr = 0.15*R + norm(a.v, a.all) * 0.85 * R;
+    return { x: cx + Math.cos(ang)*rr, y: cy + Math.sin(ang)*rr, ang, a };
+  });
+  const rings = [0.25,0.5,0.75,1].map(f =>
+    `<circle cx="${cx}" cy="${cy}" r="${R*f}" fill="none" stroke="var(--line)" stroke-opacity="0.3"/>`).join('');
+  const spokes = axes.map((a,i) => {
+    const ang = (Math.PI*2*i/axes.length) - Math.PI/2;
+    const ex = cx + Math.cos(ang)*R, ey = cy + Math.sin(ang)*R;
+    const lx = cx + Math.cos(ang)*(R+22), ly = cy + Math.sin(ang)*(R+22);
+    return `<line x1="${cx}" y1="${cy}" x2="${ex}" y2="${ey}" stroke="var(--line)" stroke-opacity="0.3"/>
+      <text x="${lx}" y="${ly}" font-size="9.5" font-family="Oswald" fill="var(--line-bright)" text-anchor="middle">${a.label}</text>`;
+  }).join('');
+  const poly = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${W} ${W}" style="width:100%;max-width:${W}px">${rings}${spokes}
+    <polygon points="${poly}" fill="var(--amber)" fill-opacity="0.25" stroke="var(--amber)" stroke-width="2"/>
+    ${pts.map(p=>`<circle cx="${p.x}" cy="${p.y}" r="3" fill="var(--amber)"/>`).join('')}
+  </svg>`;
 }
 
 function renderData() {
   if (!S.teams) return '<div class="empty-msg">Pull live data first.</div>';
   const teams = S.teams;
-  const meName = (teams.find(t => t.isMe) || {}).name;
+  const me = teams.find(t => t.isMe) || teams[0];
+  const meName = me.name;
   const sortDesc = (arr) => [...arr].sort((a,b) => b.v - a.v);
 
   const eff = sortDesc(teams.filter(t => t.history.lineup_efficiency_pct).map(t => ({ k: t.name, v: t.history.lineup_efficiency_pct })));
@@ -879,26 +1066,72 @@ function renderData() {
   const picks = sortDesc(teams.map(t => ({ k: t.name, v: t.picks.length })));
   const leak = sortDesc(teams.filter(t => t.benchLeakage != null).map(t => ({ k: t.name, v: t.benchLeakage })));
   const age = sortDesc(teams.map(t => ({ k: t.name, v: t.avgAge || 0 })));
+  const scatter = teams.map(t => ({ k: t.name, x: t.avgAge || 27, y: t.winPct }));
+
+  const barLegendGood = legend([
+    { color: 'var(--amber)', label: 'You (The Nightmen)' },
+    { color: 'var(--green)', label: 'Top tier' },
+    { color: 'var(--line-bright)', label: 'Middle' },
+    { color: 'var(--rust)', label: 'Bottom tier' },
+  ]);
+  const barLegendBad = legend([
+    { color: 'var(--amber)', label: 'You (The Nightmen)' },
+    { color: 'var(--green)', label: 'Best (lowest)' },
+    { color: 'var(--line-bright)', label: 'Middle' },
+    { color: 'var(--rust)', label: 'Worst (highest)' },
+  ]);
+  const heatLegend = legend([
+    { color: 'var(--rust)', label: 'At/below starter need' },
+    { color: 'var(--amber)', label: 'Thin (1 deep)' },
+    { color: 'var(--line-bright)', label: 'Adequate' },
+    { color: 'var(--green)', label: 'Deep (surplus)' },
+  ]);
 
   return `
+    <div class="chart-block"><div class="chart-title">Contender Window Map</div>
+      ${legend([{color:'var(--amber)',label:'You'},{color:'var(--line-bright)',label:'Other teams'}])}
+      ${scatterChart(scatter, meName)}
+      <div class="chart-note">Every team plotted by roster age and win rate. Top-left is the dream (young and winning); bottom-right is the danger zone (old and losing). Where you sit tells you whether to push or patiently build.</div></div>
+
+    <div class="chart-block"><div class="chart-title">Positional Strength Grid</div>
+      ${heatLegend}
+      ${heatmap(teams)}
+      <div class="chart-note">Every roster, every position, shaded by depth against starter need. Scan a column to find who's thin where; that's your trade market. Scan your row to see your own shape at a glance.</div></div>
+
+    <div class="chart-block"><div class="chart-title">Your Team Profile</div>
+      ${legend([{color:'var(--amber)',label:'The Nightmen, normalized vs the league (further out = stronger)'}])}
+      ${radarChart(me, teams)}
+      <div class="chart-note">Your five-axis fingerprint against the league. A dent on any axis is a place to shore up; a spike is a strength to lean on or trade from.</div></div>
+
     <div class="chart-block"><div class="chart-title">Lineup Efficiency, 4 Years (actual pts as % of optimal)</div>
+      ${barLegendGood}
       ${barChart(eff, { unit: '%', highlight: meName })}
       <div class="chart-note">The management skill chart. Gaps here are free points nobody is claiming.</div></div>
+
     <div class="chart-block"><div class="chart-title">Career Avg Weekly Score</div>
+      ${barLegendGood}
       ${barChart(avgScore, { highlight: meName })}
       <div class="chart-note">Raw firepower across all seasons played.</div></div>
+
     <div class="chart-block"><div class="chart-title">Dead Starts, 4 Years (started a 0-pt player over a 5+ pt bench option)</div>
+      ${barLegendBad}
       ${barChart(dead, { highlight: meName, goodHigh: false })}
-      <div class="chart-note">The inattention chart. High numbers mean an owner who does not know what their bench is worth.</div></div>
-    <div class="chart-block"><div class="chart-title">Future Pick Capital (next two rookie drafts, picks currently owned)</div>
+      <div class="chart-note">The inattention chart. High numbers mean an owner who does not know what their bench is worth. Those owners are buy-low targets.</div></div>
+
+    <div class="chart-block"><div class="chart-title">Future Pick Capital (next two rookie drafts)</div>
+      ${barLegendGood}
       ${barChart(picks, { highlight: meName })}
       <div class="chart-note">Live from Sleeper. Draft position depends on final standings.</div></div>
+
     <div class="chart-block"><div class="chart-title">Points Left On Bench, Latest Season</div>
+      ${barLegendBad}
       ${barChart(leak, { highlight: meName, goodHigh: false })}
       <div class="chart-note">Live. What the sit/start engine exists to reclaim.</div></div>
+
     <div class="chart-block"><div class="chart-title">Average Roster Age</div>
+      ${barLegendBad}
       ${barChart(age, { highlight: meName, goodHigh: false })}
-      <div class="chart-note">Live. Youth is future capital; age is a win-now clock ticking.</div></div>`;
+      <div class="chart-note">Live. Youth is future capital; age is a win-now clock ticking. Lower is younger.</div></div>`;
 }
 
 /* ---------- renderers ---------- */
@@ -926,7 +1159,91 @@ function renderHoles() {
       <div class="behavior-note"><span class="eng">${engagement(h.trades_count)}</span> · career ${h.trades_count ?? '?'} trades · hunts: ${Object.entries(h.trade_positions_acquired||{}).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([p,c])=>p).join(', ')||'?'}${h.lineup_efficiency_pct ? `<br/>Lineup eff ${h.lineup_efficiency_pct}% · ${h.dead_starts_4yr} dead starts in 4yrs${h.dead_starts_4yr >= 30 ? ' <span style="color:var(--amber)">(inattentive: buy low)</span>' : ''}` : ''}</div>
     </div>`;
   }).join('');
-  return `<div class="grid">${cards}</div>`;
+  const lg = `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px;font-size:10.5px;color:var(--muted)">
+    <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--green);display:inline-block;border-radius:2px"></span>Win-Now</span>
+    <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--line-bright);display:inline-block;border-radius:2px"></span>Ascending</span>
+    <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--amber);display:inline-block;border-radius:2px"></span>Rebuilding</span>
+    <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--rust);display:inline-block;border-radius:2px"></span>Retool Needed</span>
+    <span style="display:inline-flex;gap:5px;align-items:center"><span class="punch-flag" style="width:13px;height:13px;font-size:9px">!</span>Hole</span>
+    <span style="display:inline-flex;gap:5px;align-items:center"><span class="punch-flag surplus" style="width:13px;height:13px;font-size:9px">+</span>Surplus</span>
+    <span style="display:inline-flex;gap:5px;align-items:center"><span style="color:var(--amber)">amber chip</span> = thin at position</span>
+  </div>`;
+  return `${lg}<div class="grid">${cards}</div>`;
+}
+
+function splitTradesText(text) {
+  // returns { cards: [...] or null, prose: string }
+  const m = text.match(/<TRADES_JSON>([\s\S]*?)<\/TRADES_JSON>/i);
+  if (!m) return { cards: null, prose: text };
+  let cards = null;
+  try {
+    cards = JSON.parse(m[1].trim());
+    if (!Array.isArray(cards)) cards = null;
+  } catch (e) { cards = null; }
+  const prose = text.replace(/<TRADES_JSON>[\s\S]*?<\/TRADES_JSON>/i, '').trim();
+  return { cards, prose };
+}
+
+function assetChip(a) {
+  const posColor = { QB:'#c78bde', RB:'#6fbf8b', WR:'#7fc4e0', TE:'#e8a33d', K:'#8fa8bc', DEF:'#8fa8bc' }[a.pos] || 'var(--muted)';
+  const isPick = a.type === 'pick';
+  return `<div class="asset ${isPick ? 'asset-pick' : ''}">
+    <span class="asset-name">${isPick ? '◆ ' : ''}${esc(a.name)}</span>
+    <span class="asset-meta">${a.pos ? `<span style="color:${posColor}">${a.pos}</span> · ` : ''}val ${a.value ?? '?'}</span>
+    <div class="asset-bar"><div class="asset-bar-fill" style="width:${Math.min(a.value||0,100)}%"></div></div>
+  </div>`;
+}
+
+function tradeCard(t, i) {
+  const lean = Math.max(-100, Math.min(100, t.leanScore || 0));
+  const sendTotal = (t.iSend||[]).reduce((s,a)=>s+(a.value||0),0);
+  const getTotal = (t.iGet||[]).reduce((s,a)=>s+(a.value||0),0);
+  // lean meter: center is even, fill toward me (right, green) or partner (left, rust)
+  const leanPct = 50 + lean/2; // -100..100 -> 0..100
+  const leanColor = lean > 12 ? 'var(--green)' : (lean < -12 ? 'var(--rust)' : 'var(--amber)');
+  const leanWord = lean > 25 ? 'Strongly favors you' : lean > 12 ? 'Favors you' : lean > -12 ? 'Roughly even' : lean > -25 ? 'Favors them' : 'Favors them heavily';
+  const conf = { High:'var(--green)', Medium:'var(--amber)', Low:'var(--rust)' }[t.confidence] || 'var(--muted)';
+  return `<div class="trade-card">
+    <div class="trade-card-head">
+      <div class="trade-partner">vs ${esc(t.partner)}</div>
+      <div class="conf-pill" style="border-color:${conf};color:${conf}">${esc(t.confidence||'?')} confidence</div>
+    </div>
+    <div class="trade-sides">
+      <div class="trade-side">
+        <div class="side-label side-give">You give <span>${sendTotal}</span></div>
+        ${(t.iSend||[]).map(assetChip).join('')}
+      </div>
+      <div class="trade-arrow">⇄</div>
+      <div class="trade-side">
+        <div class="side-label side-get">You get <span>${getTotal}</span></div>
+        ${(t.iGet||[]).map(assetChip).join('')}
+      </div>
+    </div>
+    <div class="lean-meter">
+      <div class="lean-track">
+        <div class="lean-center"></div>
+        <div class="lean-fill" style="left:${Math.min(50,leanPct)}%;width:${Math.abs(leanPct-50)}%;background:${leanColor}"></div>
+      </div>
+      <div class="lean-labels"><span>Them</span><span style="color:${leanColor};font-weight:600">${leanWord}</span><span>You</span></div>
+    </div>
+    <div class="trade-verdict">${esc(t.verdict||'')}</div>
+    <details class="trade-details"><summary>Why, and the case against</summary>
+      <div class="trade-against"><b>Case against:</b> ${esc(t.caseAgainst||'none noted')}</div>
+    </details>
+  </div>`;
+}
+
+function renderTradesVisual(text, meta) {
+  const { cards, prose } = splitTradesText(text);
+  let html = '';
+  if (cards && cards.length) {
+    html += `<div class="trade-cards">${cards.map(tradeCard).join('')}</div>`;
+    html += `<details class="prose-toggle"><summary>Full written analysis</summary><div class="ai-result" style="margin-top:10px">${renderMd(prose)}</div></details>`;
+  } else {
+    html += `<div class="ai-result">${renderMd(prose)}</div>`;
+  }
+  if (meta) html += `<div class="ai-note" style="margin-top:8px">${meta}</div>`;
+  return html;
 }
 
 function renderAITab(tabKey) {
@@ -934,6 +1251,7 @@ function renderAITab(tabKey) {
   const running = S.aiRunning[tabKey];
   const session = S.aiResults[tabKey];
   const stored = (((S.server || {}).analyses || {})[tabKey]) || null;
+  const isTrades = tabKey === 'trades';
   let resultHtml = '';
 
   if (running) {
@@ -941,17 +1259,17 @@ function renderAITab(tabKey) {
   } else if (session && session.error) {
     resultHtml = `<div class="error-msg">Analysis failed: ${esc(session.error)}. ${S.isDeployed ? 'Check the Netlify function logs and API key.' : 'Inside Claude, just retry.'}</div>`;
   } else if (session) {
-    resultHtml = `<div class="ai-result">${renderMd(session.text)}</div>
-      <div class="ai-note" style="margin-top:8px">Fresh run, generated ${session.at.toLocaleTimeString()} with live web research.</div>`;
+    const meta = `Fresh run, generated ${session.at.toLocaleTimeString()} with live web research.`;
+    resultHtml = isTrades ? renderTradesVisual(session.text, meta) : `<div class="ai-result">${renderMd(session.text)}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
   } else if (stored && stored.status === 'done') {
-    resultHtml = `<div class="ai-result">${renderMd(stored.text)}</div>
-      <div class="ai-note" style="margin-top:8px">Auto-generated ${timeAgo(stored.at)} by the scheduled morning run (daily 7am MT, plus after league activity). Hit the button for an on-demand refresh.</div>`;
+    const meta = `Auto-generated ${timeAgo(stored.at)} by the scheduled run. Hit the button for an on-demand refresh.`;
+    resultHtml = isTrades ? renderTradesVisual(stored.text, meta) : `<div class="ai-result">${renderMd(stored.text)}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
   } else if (stored && stored.status === 'running') {
     resultHtml = `<div class="ai-result"><span class="spinner"></span>The scheduled run is working on this right now. Refresh in a minute.</div>`;
   } else if (stored && stored.status === 'error') {
     resultHtml = `<div class="error-msg">Last scheduled run failed: ${esc(stored.error || 'unknown')}. Trigger a fresh run or check the function logs.</div>`;
   } else {
-    resultHtml = `<div class="empty-msg">${S.isDeployed ? 'No stored analysis yet. The daily 7am run will populate this, or trigger one now.' : 'No analysis run yet this session.'}</div>`;
+    resultHtml = `<div class="empty-msg">${S.isDeployed ? 'No stored analysis yet. The daily run will populate this, or trigger one now.' : 'No analysis run yet this session.'}</div>`;
   }
 
   let extra = '';
@@ -992,15 +1310,213 @@ function renderWire() {
   return `<div class="ai-note" style="margin-bottom:10px">Harvested ${timeAgo(news.at)}. Scored by relevance: your players 100pts, league rosters 40, trending 25, plus breaking-news term bumps. The analysis runs read this same feed.</div>${rows}`;
 }
 
+function renderStandings() {
+  if (!S.teams) return '<div class="empty-msg">Pull live data first.</div>';
+  const playoffN = (S.server && S.server.snapshot && S.server.snapshot.playoffTeams) || 6;
+  const ranked = [...S.teams].sort((a,b) => (a.projectedSeed || 99) - (b.projectedSeed || 99));
+  const rows = ranked.map(t => {
+    const inP = (t.projectedSeed || 99) <= playoffN;
+    return `<tr style="${t.isMe ? 'background:rgba(232,163,61,0.1)' : ''}">
+      <td><b>${t.projectedSeed}</b>${inP ? ' <span style="color:var(--green)">•</span>' : ''}</td>
+      <td><b>${esc(t.name)}${t.isMe ? ' ★' : ''}</b><br/><span style="font-size:10px;color:var(--muted)">${esc((t.history||{}).display_name||'')}</span></td>
+      <td>${t.wins}-${t.losses}</td>
+      <td>${t.pointsFor ?? '?'}</td>
+      <td>${t.pointsAgainst ?? '?'}</td>
+      <td><span class="stance-badge ${t.stance.cls}">${t.stance.label}</span></td>
+    </tr>`;
+  }).join('');
+  return `<div class="chart-note" style="margin-bottom:10px">Green dot = in the projected playoff cut (top ${playoffN}). Ranked by wins, then points for. Preseason this reflects points-for order until games are played.</div>
+    <table class="trend-table"><tr><th>Seed</th><th>Team</th><th>Rec</th><th>PF</th><th>PA</th><th>Stance</th></tr>${rows}</table>`;
+}
+
+function renderDraftRoom() {
+  const db = (S.server || {}).draftBoard;
+  if (!db) return '<div class="empty-msg">Draft mode activates when the league goes pre-draft. Once Matt opens the new Ocho, this fills with a rookie big board tuned to your roster.</div>';
+  if (db.error) return `<div class="error-msg">Draft board build failed: ${esc(db.error)}</div>`;
+  const live = db.draftStarted ? `<div class="call-box" style="margin-bottom:12px"><div class="call-label">Draft is LIVE</div><div class="call-text">${db.picksMade} picks made. Board below excludes players already gone and updates each cycle.</div></div>` : '';
+  return `${live}<div class="ai-result">${renderMd(db.text)}</div><div class="ai-note" style="margin-top:8px">Board refreshed ${timeAgo(db.at)} with live rookie-class research.</div>`;
+}
+
+function renderBriefing() {
+  const b = (S.server || {}).briefing;
+  const grading = (S.server || {}).grading;
+  let track = '';
+  if (grading && grading.total >= 3) {
+    const rate = Math.round(grading.hits / grading.total * 100);
+    const recent = (grading.calls || []).slice(0, 8).map(c =>
+      `<span class="player-chip ${c.hit ? 'young' : 'old'}">${esc(c.player)} ${c.hit ? 'HIT' : 'miss'} <span class="meta">${c.ppgSince}ppg</span></span>`).join(' ');
+    track = `<div class="chart-block"><div class="chart-title">System Track Record</div>
+      <div style="font-size:22px;font-family:var(--display);color:${rate>=55?'var(--green)':rate>=40?'var(--amber)':'var(--rust)'}">${rate}% <span style="font-size:12px;color:var(--muted)">(${grading.hits}/${grading.total} graded calls hit)</span></div>
+      <div class="depth-row" style="margin-top:8px">${recent}</div>
+      <div class="chart-note">Every pickup/start the engine recommended, graded against what the player actually scored the next 2+ weeks. This is the honesty check.</div></div>`;
+  }
+  let brief = '';
+  if (b && b.text) brief = `<div class="chart-title">State of the Nightmen</div><div class="ai-result">${renderMd(b.text)}</div><div class="ai-note" style="margin-top:8px">Composed ${timeAgo(b.at)}. Auto-runs Sunday nights and pushes THE MOVE to your phone.</div>`;
+  else brief = `<div class="empty-msg">The weekly briefing composes Sunday nights and pushes to your phone. In season it summarizes where you stand, what moved, and the one move for the week.</div>`;
+  return `${track}${brief}`;
+}
+
 function renderTab() {
   const body = document.getElementById('tab-body');
+  // Toggle draft tab visibility based on league status
+  const status = (S.server && S.server.snapshot && S.server.snapshot.leagueStatus) || (S.league && S.league.status);
+  const draftTab = document.getElementById('draft-tab');
+  if (draftTab) draftTab.style.display = (status === 'pre_draft' || status === 'drafting') ? '' : 'none';
+
   if (S.activeTab === 'holes') body.innerHTML = renderHoles();
   else if (S.activeTab === 'teams') body.innerHTML = renderTeams();
+  else if (S.activeTab === 'standings') body.innerHTML = renderStandings();
+  else if (S.activeTab === 'draft') body.innerHTML = renderDraftRoom();
+  else if (S.activeTab === 'briefing') body.innerHTML = renderBriefing();
   else if (S.activeTab === 'data') body.innerHTML = renderData();
+  else if (S.activeTab === 'trends') body.innerHTML = renderTrends();
+  else if (S.activeTab === 'ask') body.innerHTML = renderAsk();
   else if (S.activeTab === 'wire') body.innerHTML = renderWire();
   else body.innerHTML = renderAITab(S.activeTab);
   renderTheCall();
 }
+
+/* ---------- Trends tab: what's moving over time ---------- */
+function renderTrends() {
+  const trends = (S.server || {}).trends;
+  if (!trends || !trends.days || trends.days.length < 2) {
+    return `<div class="empty-msg">The trend engine needs a few days of history to show movement. It records one datapoint per team per day on the deployed site; check back after it has been live 2+ days.</div>`;
+  }
+  const days = trends.days;
+  const latest = days[days.length - 1];
+  const prior = days.find(d => (new Date(latest.date) - new Date(d.date)) / 86400000 >= 6) || days[0];
+  const prevByName = Object.fromEntries((prior.teams || []).map(t => [t.name, t]));
+  const rows = latest.teams.map(t => {
+    const p = prevByName[t.name] || {};
+    const deltas = [];
+    if (p.rosterSize != null && t.rosterSize !== p.rosterSize) deltas.push(`roster ${p.rosterSize}&rarr;${t.rosterSize}`);
+    if (p.injuredCount != null && t.injuredCount !== p.injuredCount) {
+      const up = t.injuredCount > p.injuredCount;
+      deltas.push(`<span style="color:${up?'var(--rust)':'var(--green)'}">injuries ${p.injuredCount}&rarr;${t.injuredCount}</span>`);
+    }
+    if (p.picks != null && t.picks !== p.picks) deltas.push(`picks ${p.picks}&rarr;${t.picks}`);
+    ['QB','RB','WR','TE'].forEach(pos => {
+      const a = (p.depth||{})[pos], b = (t.depth||{})[pos];
+      if (a != null && b != null && a !== b) deltas.push(`${pos} ${a}&rarr;${b}`);
+    });
+    return `<tr style="${t.name===(S.teams.find(x=>x.isMe)||{}).name?'background:rgba(232,163,61,0.1)':''}">
+      <td><b>${esc(t.name)}</b></td>
+      <td>${deltas.length ? deltas.join(', ') : '<span style="color:var(--muted)">no change</span>'}</td>
+    </tr>`;
+  }).join('');
+  const spanDays = Math.round((new Date(latest.date) - new Date(prior.date)) / 86400000);
+  return `<div class="chart-note" style="margin-bottom:10px">Movement over the last ${spanDays} day(s), ${prior.date} to ${latest.date}. This is what the analysis engine now weighs as momentum: direction, not just the static picture. Green = improving, red = worsening.</div>
+    <table class="trend-table"><tr><th>Team</th><th>What changed</th></tr>${rows}</table>`;
+}
+
+/* ---------- Ask tab: chat + trade evaluator ---------- */
+function renderAsk() {
+  const chatHtml = (S.chatLog || []).map(m =>
+    `<div style="margin:8px 0"><span style="font-family:var(--display);font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${m.role==='user'?'var(--amber)':'var(--line-bright)'}">${m.role==='user'?'You':'War Room'}</span>
+      <div class="${m.role==='user'?'':'ai-result'}" style="${m.role==='user'?'color:var(--paper);font-size:12.5px':'margin-top:4px'}">${m.role==='user'?esc(m.text):renderMd(m.text)}</div></div>`
+  ).join('');
+  const evalOut = S.evalResult ? (() => {
+    const { cards, prose } = splitTradesText(S.evalResult);
+    let h = '';
+    if (cards && cards.length) h += `<div class="trade-cards">${cards.map(tradeCard).join('')}</div>`;
+    h += `<div class="ai-result">${renderMd(prose)}</div>`;
+    return h;
+  })() : '';
+
+  return `<div class="chart-title">Evaluate a Trade</div>
+    <div class="chart-note" style="margin-bottom:8px">Paste a trade someone offered you, or one you're weighing. Plain language is fine: "Birkey offers me Jeanty for Aiyuk and my 2026 1st." It grades accept/decline/counter and gives you the exact counter to send.</div>
+    <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+      <input id="eval-input" placeholder="Describe the trade..." style="flex:1;min-width:220px;background:var(--panel-2);border:1px solid var(--line);color:var(--paper);font-family:var(--mono);font-size:12px;padding:9px 11px"/>
+      <button onclick="evaluateTrade()" ${S.evalRunning?'disabled':''}>${S.evalRunning?'Judging...':'Evaluate'}</button>
+    </div>
+    ${S.evalRunning ? '<div class="ai-result"><span class="spinner"></span>Grading the offer against your roster and live values...</div>' : evalOut}
+
+    <div class="chart-title" style="margin-top:26px">Ask Anything</div>
+    <div class="chart-note" style="margin-bottom:8px">Full context: your roster, the league, owner tendencies, the news wire, trends, the grading record. "Should I worry about McCaffrey's age?" "Who on Birkey's team is actually gettable?" "Is my RB depth real or just names?"</div>
+    <div id="chat-log">${chatHtml || '<div class="empty-msg" style="padding:16px">No questions yet.</div>'}</div>
+    ${S.chatRunning ? '<div class="ai-result"><span class="spinner"></span>Thinking...</div>' : ''}
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <input id="chat-input" placeholder="Ask the War Room..." style="flex:1;min-width:220px;background:var(--panel-2);border:1px solid var(--line);color:var(--paper);font-family:var(--mono);font-size:12px;padding:9px 11px" onkeydown="if(event.key==='Enter')askChat()"/>
+      <button onclick="askChat()" ${S.chatRunning?'disabled':''}>Ask</button>
+    </div>`;
+}
+
+async function evaluateTrade() {
+  const input = document.getElementById('eval-input');
+  const offer = input ? input.value.trim() : '';
+  if (!offer) return;
+  S.evalRunning = true; S.evalResult = null; renderTab();
+  try {
+    if (S.isDeployed) {
+      const res = await fetch('/.netlify/functions/evaluate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer }),
+      });
+      const data = await res.json();
+      S.evalResult = data.text || ('Error: ' + (data.error || 'unknown'));
+    } else {
+      S.evalResult = await callClaude(buildEvalPrompt(offer), { useSearch: true, maxTokens: 2800 });
+    }
+  } catch (e) {
+    S.evalResult = 'Could not evaluate: ' + e.message;
+  } finally {
+    S.evalRunning = false; renderTab();
+  }
+}
+
+async function askChat() {
+  const input = document.getElementById('chat-input');
+  const q = input ? input.value.trim() : '';
+  if (!q) return;
+  S.chatLog = S.chatLog || [];
+  S.chatLog.push({ role: 'user', text: q });
+  S.chatRunning = true; renderTab();
+  try {
+    let answer;
+    if (S.isDeployed) {
+      const res = await fetch('/.netlify/functions/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: q, history: S.chatLog.slice(0, -1).slice(-6) }),
+      });
+      const data = await res.json();
+      answer = data.text || ('Error: ' + (data.error || 'unknown'));
+    } else {
+      answer = await callClaude(buildChatPrompt(q, S.chatLog.slice(0, -1)), { useSearch: true, maxTokens: 1600 });
+    }
+    S.chatLog.push({ role: 'assistant', text: answer });
+  } catch (e) {
+    S.chatLog.push({ role: 'assistant', text: 'Error: ' + e.message });
+  } finally {
+    S.chatRunning = false; renderTab();
+  }
+}
+
+// Artifact-mode prompt builders (deployed mode uses the server functions)
+function buildEvalPrompt(offer) {
+  return `You are my dynasty trade evaluator. Judge this trade: accept, decline, or counter, with a specific counter if warranted. Use web search for current values.
+
+${leagueContextBlock()}
+
+MY ROSTER (The Nightmen):
+${myRosterBlock()}
+
+THE TRADE: "${offer}"
+
+Emit a <TRADES_JSON>[{"partner":"...","iSend":[{"name":"...","type":"player"|"pick","pos":"RB"|null,"value":0-100}],"iGet":[...],"verdict":"ACCEPT/DECLINE/COUNTER + why","confidence":"High"|"Medium"|"Low","leanScore":-100..100,"caseAgainst":"..."}]</TRADES_JSON> block, then prose: verdict and real reason, the exact counter to send if countering, and whether it fixes or opens a hole for me. End with "## THE MOVE" and one directive.`;
+}
+function buildChatPrompt(q, history) {
+  const convo = (history || []).map(h => `${h.role==='user'?'Me':'You'}: ${h.text}`).join('\n');
+  return `You are my dynasty co-manager. Answer directly and honestly, grounded in this context. Use web search for current news/values. Concise, specific, tell me if I'm about to do something dumb.
+
+${leagueContextBlock()}
+
+MY ROSTER (The Nightmen):
+${myRosterBlock()}
+${convo ? '\nSO FAR:\n'+convo+'\n' : ''}
+MY QUESTION: ${q}`;
+}
+window.evaluateTrade = evaluateTrade;
+window.askChat = askChat;
 
 document.getElementById('tab-bar').addEventListener('click', e => {
   const tab = e.target.closest('.tab');

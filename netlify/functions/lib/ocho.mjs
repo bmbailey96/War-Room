@@ -144,6 +144,8 @@ export function computeSnapshot(core, playersDB) {
       name: teamName(r.owner_id),
       ownerName: (OWNER_HISTORY[r.owner_id] || {}).display_name || "",
       wins, losses, winPct: Math.round(winPct * 1000) / 1000, avgAge,
+      pointsFor: Math.round(fpts * 10) / 10,
+      pointsAgainst: Math.round(((st.fpts_against || 0) + (st.fpts_against_decimal || 0) / 100) * 10) / 10,
       benchLeakage: ppts ? Math.round((ppts - fpts) * 10) / 10 : null,
       waiverPosition: st.waiver_position || null,
       depth, holes, surplus, injured,
@@ -152,6 +154,19 @@ export function computeSnapshot(core, playersDB) {
       stance,
       isMe: r.owner_id === MY_USER_ID,
     };
+  });
+
+  // Standings projection: rank by wins, then points-for. Seed + in/out of
+  // the playoff cut. In-season this is a live picture; preseason it's 0-0
+  // so seeds are just points-for order until games happen.
+  const ranked = [...teams].sort((a, b) =>
+    (b.wins - a.wins) || (b.pointsFor - a.pointsFor) || (b.winPct - a.winPct)
+  );
+  const playoffTeams = (league.settings || {}).playoff_teams || 6;
+  ranked.forEach((t, i) => {
+    const orig = teams.find(x => x.rosterId === t.rosterId);
+    orig.projectedSeed = i + 1;
+    orig.inPlayoffs = i < playoffTeams;
   });
 
   return {
@@ -166,6 +181,7 @@ export function computeSnapshot(core, playersDB) {
       pick_trading: (league.settings || {}).pick_trading,
     },
     leagueStatus: league.status,
+    playoffTeams,
     nflState: {
       week: core.nflState.week, season_type: core.nflState.season_type, season: core.nflState.season,
     },
@@ -255,4 +271,37 @@ export async function callClaude(prompt, { maxTokens = 3500, useSearch = true, m
   const data = await res.json();
   if (data.error) throw new Error(data.error.message || "Anthropic API error");
   return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+}
+
+// Build a "what's changing" block from the trend history for prompts.
+// Compares the most recent trend point to ~7 days prior and surfaces deltas.
+export function trendBlock(trends) {
+  if (!trends || !trends.days || trends.days.length < 2) return "";
+  const days = trends.days;
+  const latest = days[days.length - 1];
+  // find a point ~7 days back, else the oldest we have
+  const weekAgo = days.find(d => {
+    const gap = (new Date(latest.date) - new Date(d.date)) / 86400000;
+    return gap >= 6 && gap <= 9;
+  }) || days[0];
+  if (weekAgo.date === latest.date) return "";
+
+  const prevByName = Object.fromEntries((weekAgo.teams || []).map(t => [t.name, t]));
+  const lines = [];
+  for (const t of latest.teams) {
+    const p = prevByName[t.name];
+    if (!p) continue;
+    const changes = [];
+    if (t.rosterSize !== p.rosterSize) changes.push(`roster ${p.rosterSize}->${t.rosterSize}`);
+    if (t.injuredCount !== p.injuredCount) changes.push(`injuries ${p.injuredCount}->${t.injuredCount}`);
+    if (t.picks !== p.picks) changes.push(`picks ${p.picks}->${t.picks}`);
+    for (const pos of ["QB", "RB", "WR", "TE"]) {
+      const a = (p.depth || {})[pos], b = (t.depth || {})[pos];
+      if (a != null && b != null && a !== b) changes.push(`${pos} depth ${a}->${b}`);
+    }
+    if (t.seed && p.seed && t.seed !== p.seed) changes.push(`seed ${p.seed}->${t.seed}`);
+    if (changes.length) lines.push(`${t.name}: ${changes.join(", ")}`);
+  }
+  if (!lines.length) return "";
+  return `\n\nWHAT'S CHANGED IN THE LAST ~7 DAYS (trajectory matters more than the static picture; weigh momentum):\n${lines.join("\n")}`;
 }

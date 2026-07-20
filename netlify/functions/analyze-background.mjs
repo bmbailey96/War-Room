@@ -4,7 +4,7 @@
 
 import {
   blobs, OWNER_HISTORY, leagueContextBlock, myRosterBlock,
-  callClaude, pInfo, getPlayersTrim,
+  callClaude, pInfo, getPlayersTrim, trendBlock,
 } from "./lib/ocho.mjs";
 
 function buildTrendingBlock(trendingRaw, rostersRaw, playersDB) {
@@ -18,6 +18,18 @@ function buildTrendingBlock(trendingRaw, rostersRaw, playersDB) {
       return `${p.name} (${p.pos || "?"}, ${p.team || "FA"}) - ${t.count} adds league-wide 48h${p.inj ? ", INJ: " + p.inj : ""}`;
     })
     .join("\n");
+}
+
+// Extract player names the analysis actually recommended, by matching every
+// known player name against the text. Used to log calls for grading.
+function playersFromText(text, playersDB) {
+  const t = text.toLowerCase();
+  const ids = new Set();
+  for (const [pid, p] of Object.entries(playersDB)) {
+    const name = (p.n || "").toLowerCase();
+    if (name.length >= 6 && t.includes(name)) ids.add(pid);
+  }
+  return [...ids].slice(0, 12);
 }
 
 function digestBlocks(newsDigest, statsDigest, snapshot) {
@@ -59,17 +71,18 @@ function digestBlocks(newsDigest, statsDigest, snapshot) {
   return { newsBlock, statsBlock };
 }
 
-function prompts(snapshot, trendingText, newsDigest, statsDigest) {
+function prompts(snapshot, trendingText, newsDigest, statsDigest, trends) {
   const ctx = leagueContextBlock(snapshot);
   const mine = myRosterBlock(snapshot);
   const { newsBlock, statsBlock } = digestBlocks(newsDigest, statsDigest, snapshot);
   const groundData = [newsBlock, statsBlock].filter(Boolean).join("\n\n");
-  const groundNote = groundData
+  const trendData = trendBlock(trends);
+  const groundNote = (groundData
     ? `\n\nGROUND DATA COLLECTED BY MY SYSTEM (verify anything surprising with your own web search; recency beats this data):\n${groundData}`
-    : "";
+    : "") + trendData;
   const wk = snapshot.nflState || {};
   const inSeason = wk.season_type === "regular" && wk.week >= 1;
-  const MOVE = `\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
+  const MOVE = `\n\nTWO REQUIREMENTS FOR EVERY RECOMMENDATION ABOVE: (a) tag each with a confidence level (High/Medium/Low); (b) add a one-line "Case against:" naming the strongest reason it could be wrong. Never present a call as risk-free.\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
   return {
     trades: `You are a dynasty fantasy football trade analyst for my league. Use web search to check CURRENT dynasty trade values, recent NFL news, injuries, and coaching or depth chart changes for players named below.
 
@@ -78,7 +91,19 @@ ${ctx}
 MY FULL ROSTER (The Nightmen):
 ${mine}
 
-TASK: Recommend my 3 to 5 best realistic trades right now. For each: (1) exact partner and why their stance, holes, tendencies, and engagement level make them likely to deal; (2) a specific package including future picks where sensible; (3) valuations grounded in your current web research, say what you found; (4) honest risk. Prioritize my flagged holes and monetize my flagged surplus. Weight owner behavior: fair deals with active traders beat perfect deals with owners who never trade. No filler.${groundNote}${MOVE}`,
+TASK: Recommend my 3 to 5 best realistic trades right now. For each: (1) exact partner and why their stance, holes, tendencies, and engagement level make them likely to deal; (2) a specific package including future picks where sensible; (3) valuations grounded in your current web research, say what you found; (4) honest risk. Prioritize my flagged holes and monetize my flagged surplus. Weight owner behavior: fair deals with active traders beat perfect deals with owners who never trade. No filler.${groundNote}
+
+CRITICAL OUTPUT FORMAT: Before any prose, emit a machine-readable block wrapped in <TRADES_JSON> and </TRADES_JSON> tags containing a JSON array, one object per recommended trade, in this exact shape:
+[{
+  "partner": "team name",
+  "iSend": [{"name":"Player or Pick","type":"player"|"pick","pos":"RB"|"WR"|...|null,"value":0-100}],
+  "iGet": [{"name":"Player or Pick","type":"player"|"pick","pos":"RB"|...|null,"value":0-100}],
+  "verdict": "one line: is this worth it for me and why",
+  "confidence": "High"|"Medium"|"Low",
+  "leanScore": -100 to 100 (negative = favors partner, 0 = even, positive = favors me),
+  "caseAgainst": "one line"
+}]
+Each "value" is that asset's dynasty trade value on a 0-100 scale from your research (a league-winning young stud ~90+, a useful starter ~40-60, a dart-throw ~10-20, a future 1st ~35-55 depending on class, a future 3rd ~10). leanScore should reflect total value plus fit for MY roster (fixing my holes is worth extra to me). After the closing tag, write your normal prose analysis. The JSON must be valid; do not put comments in it.${MOVE}`,
     pickups: `You are a dynasty fantasy football waiver analyst. Use web search for CURRENT news on the players below: role changes, injuries ahead of them, scheme fits, camp reports.
 
 ${ctx}
@@ -151,8 +176,21 @@ export default async (req) => {
   const rostersRaw = await store.get("rosters_raw", { type: "json" });
   const newsDigest = await store.get("news_digest", { type: "json" });
   const statsDigest = await store.get("stats_digest", { type: "json" });
+  const trends = await store.get("trends", { type: "json" });
+  const gradingRecord = await store.get("grading_record", { type: "json" });
   const trendingText = buildTrendingBlock(trendingRaw, rostersRaw, playersDB);
-  const P = prompts(snapshot, trendingText, newsDigest, statsDigest);
+  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends);
+
+  // Track-record block: shows the model its own calibrated hit rate
+  let trackBlock = "";
+  if (gradingRecord && gradingRecord.total >= 5) {
+    const rate = Math.round(gradingRecord.hits / gradingRecord.total * 100);
+    const recent = (gradingRecord.calls || []).slice(-8).map(c =>
+      `${c.player} (${c.action}, ${c.hit ? "HIT" : "miss"}, ${c.ppgSince} ppg)`).join("; ");
+    trackBlock = `\n\nYOUR OWN TRACK RECORD SO FAR: ${gradingRecord.hits}/${gradingRecord.total} graded calls hit (${rate}%). Recent: ${recent}. Let this calibrate your confidence; if your hit rate is low, tighten up and be more selective.`;
+  }
+
+  const nflWeek = (snapshot.nflState || {}).week || 0;
 
   const results = {};
   for (const task of tasks) {
@@ -169,11 +207,23 @@ export default async (req) => {
     }
     await store.setJSON(`analysis_${task}`, { status: "running", startedAt: Date.now() });
     try {
-      const text = await callClaude(P[task] + memoryBlock);
+      const text = await callClaude(P[task] + memoryBlock + trackBlock);
       await store.setJSON(`analysis_${task}`, { status: "done", at: Date.now(), text });
       history.push({ at: Date.now(), text });
       while (history.length > 5) history.shift();
       await store.setJSON(`analysis_history_${task}`, history);
+
+      // Log recommended players for later grading (pickups + sit/start only;
+      // trades are graded differently and teams intel isn't a per-player call)
+      if ((task === "pickups" || task === "sitstart") && nflWeek >= 1) {
+        const rec = playersFromText(text, playersDB);
+        if (rec.length) {
+          const pending = (await store.get("grading_pending", { type: "json" })) || [];
+          pending.push({ at: Date.now(), week: nflWeek, task, action: task === "pickups" ? "GRAB" : "START", playerIds: rec });
+          while (pending.length > 40) pending.shift();
+          await store.setJSON("grading_pending", pending);
+        }
+      }
       results[task] = "done";
     } catch (err) {
       await store.setJSON(`analysis_${task}`, { status: "error", at: Date.now(), error: err.message });

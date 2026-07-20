@@ -1,47 +1,42 @@
-# The Ocho War Room (v6: the directive edition)
+# The Ocho War Room (v10: reasoning edition)
 
-Theme of the whole machine: ONE MOVE. Every analysis ends with
-"## THE MOVE", a single directive chosen to win now and in the
-future, and the freshest one sits in an amber banner at the top of
-the app: The Call. No menus of options. One thing to do.
+Theme: ONE MOVE. Every analysis ends in "## THE MOVE"; the freshest sits
+in The Call banner. v10 makes it reason across time and talk back.
 
-## Tabs
+## New in v10
 
-ROSTER HOLES  live survey, holes/surplus/stance per team
-TEAMS         the book: every roster position by position, age-coded
-              chips, pick capital, owner behavior flags, plus the AI
-              intel report (untouchables, gettable players, the ask,
-              their angle) auto-refreshed weekly on Mondays
-TRADES        directive-first trade analysis (daily + trade-triggered)
-PICKUPS       directive-first waiver analysis (daily)
-SIT / START   weekly lineup calls in season; roster stress test off
-DATA          charts: lineup efficiency, career avg score, dead
-              starts, future pick capital, bench leakage, roster age.
-              Your team highlighted in amber on every chart.
-THE WIRE      hourly harvested + relevance-scored NFL headlines
+TREND ENGINE (Trends tab)
+  The snapshot function now archives one datapoint per team per day
+  (roster shape, depth by position, injury count, picks, seed). A
+  "what's changed in the last ~7 days" block is computed and fed into
+  EVERY analysis, so the engine weighs momentum, not just the static
+  picture. A rising snap share or a team quietly stockpiling RBs now
+  changes the advice. The Trends tab shows the deltas, color-coded.
 
-## Always-on pipeline
+TRADE EVALUATOR (Ask tab, top)
+  The missing half of your trade game. Paste a trade someone offered
+  you, in plain language ("Birkey offers Jeanty for Aiyuk and my 2026
+  1st"), and it grades accept / decline / counter, renders it as the
+  same visual trade card, and gives you the EXACT counter to send back.
 
-snapshot.mjs   every 2h: league watch, transaction diff, trade ->
-               instant analysis + phone push
-news.mjs       hourly :15: 7-source wire harvest, roster-scored
-scout.mjs      hourly :25: action scout, pushes GRAB/CUT/DEAL/INJ
-               only when new signal demands action, 48h cooldown
-stats.mjs      daily: nflverse team tendencies, injuries, snaps
-analyze.mjs    daily 13:00 UTC -> analyze-background.mjs: trades +
-               pickups daily, sit/start Thu/Sat/Sun in season +
-               Mondays offseason, team intel book Mondays, all with
-               memory of their own last 3 calls, all ending in
-               THE MOVE
+ASK ANYTHING (Ask tab, bottom)
+  A chat box with full context: your roster, the whole league, owner
+  tendencies, the news wire, trends, and the grading record. Ask
+  "should I worry about McCaffrey's age" or "who on Birkey's team is
+  actually gettable" and get a grounded answer on demand, no waiting
+  for a scheduled run. Keeps short conversation memory for follow-ups.
 
-## New league rollover (the 2026 Ocho)
+## All tabs
 
-Nothing to do. The league resolves BY NAME on every single pull, so
-the moment the new league exists under your account, the whole
-system follows it: watcher, wire scoring, analyses, everything. The
-context block carries league status, so when the new league is
-pre_draft the analyses automatically factor rookie draft prep into
-THE MOVE.
+Roster Holes, Teams, Trades, Pickups, Sit/Start, Draft Room
+(conditional), Standings, Data, Trends, Ask, Briefing, The Wire.
+
+## Pipeline (16 functions)
+
+snapshot 2h (now also archives trends) | news hourly :15 | scout
+hourly :25 | stats daily | analyze daily 13:00 UTC | draft daily
+(self-gates) | grade weekly Tue | briefing Sunday night. On-demand:
+trigger, evaluate, chat, draft-message, get-data, notify-test.
 
 ## Deploy
 
@@ -54,17 +49,18 @@ THE MOVE.
      /.netlify/functions/news
      /.netlify/functions/stats
      /.netlify/functions/notify-test
-6. Open the site. Run Team Intel Scout for your first book.
+6. Open the site. Trends fills in after 2+ days of history; the Ask
+   tab works immediately.
 
 ## Cost
 
-Free: Sleeper, RSS, Reddit, nflverse, ntfy, charts, silent scout
-hours. AI: a few cents to ~$0.25 per Sonnet run (teams intel is the
-longest); Haiku scout decisions are fractions of a cent. Realistic:
-$12-35/month in season with the weekly intel book.
+Free: Sleeper, RSS, Reddit, nflverse, ntfy, charts, trends storage,
+standings, grading. AI runs a few cents to ~$0.25 each; chat and
+evaluator are per-question, only when you use them. Realistic:
+$12-40/month in season depending on how much you chat.
 
 ## Season maintenance
 
 Each offseason: rerun the behavior mine + history pull, refresh
-OWNER_HISTORY in lib/ocho.mjs and index.html. Everything else
-self-updates.
+OWNER_HISTORY in lib/ocho.mjs and index.html. Trend history builds
+itself. Everything else self-updates.
