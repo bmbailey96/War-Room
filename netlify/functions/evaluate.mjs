@@ -62,7 +62,7 @@ Values are dynasty trade value 0-100 from your research. Then in prose:
 MANDATORY FINAL SECTION: end with "## THE MOVE" and one directive (accept as-is, send this counter, or walk away).`;
 
   try {
-    const text = await callClaude(prompt, { maxTokens: 2800 });
+    const text = await callClaude(prompt, { maxTokens: 2000, useSearch: false });
     await store.setJSON("last_evaluation", { at: Date.now(), offer, text });
     return new Response(JSON.stringify({ ok: true, text }), {
       headers: { "content-type": "application/json" },

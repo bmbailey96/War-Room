@@ -1,23 +1,27 @@
-# The Ocho War Room (v17: paste a trade)
+# The Ocho War Room (v18: reliability fix)
 
-## New in v17
+## What this fixes
 
-PASTE A TRADE SCREENSHOT
-  In the Trades tab under "Evaluate an Offer," the evaluate box now
-  takes a pasted image directly. Screenshot the Sleeper trade block,
-  click the box, and paste (Ctrl or Cmd V). It reads the terms
-  (players, picks with year and round, the other manager from the
-  From/To labels), shows you what it read, and immediately grades the
-  deal as a visual trade card with accept / decline / counter and the
-  exact counter to send. No typing, no file picker.
+THE "Unexpected token '<'" ERROR on the trade evaluator (and chat)
+  Root cause: the evaluate and chat functions ran the AI WITH web
+  search on the deployed site. Web-search calls take 30-90s, but
+  Netlify sync functions time out around 10-26s, so the function
+  returned an HTML timeout page and the app crashed trying to read it
+  as JSON.
 
-  The "upload a file" button is still there as a fallback, but paste
-  is the main path now. If you paste plain text instead of an image,
-  it just fills the box normally.
+  Fixes:
+  - Server evaluate and chat now run WITHOUT web search, so they
+    finish well inside the function window. They still have full
+    context (your roster, market values, league state, trends), so
+    the grade is strong without a live search.
+  - The frontend now checks the response is real JSON before parsing,
+    and if the function fails for any reason it falls back to a direct
+    AI call instead of crashing. Same guard added to chat, the trade
+    message drafter, and the screenshot path.
 
-Everything else unchanged from v16/v15 (rebuilt valuation engine with
-real pick values, per-type grading, shared league state, elite
-reasoning prompts, screenshot reader).
+Net effect: pasting or uploading a trade screenshot and grading it now
+works reliably on the deployed site. If the dedicated function ever
+hiccups, you get an answer anyway instead of an error.
 
 ## The 8 tabs
 
@@ -28,4 +32,13 @@ The Call (pinned) / Roster / Rivals / Trades / Pickups / Draft
 
 Same as before. Env: ANTHROPIC_API_KEY (required), NTFY_TOPIC
 (optional). Seed once: snapshot, news, stats, values, memory,
-notify-test. Paste needs no extra setup.
+notify-test.
+
+## Note on live values
+
+The evaluator no longer web-searches on the deployed path, so it
+grades from the daily-refreshed market values (values.mjs) plus your
+league context rather than a live lookup at grade time. Those values
+refresh daily, so they are current within a day. If you want a
+live-searched second opinion on a specific player, ask in the Intel
+tab.

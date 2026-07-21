@@ -1073,13 +1073,22 @@ async function draftMessage() {
   try {
     // Prefer the ONE trade The Call is about; fall back to the directive text itself
     const target = S.callTrade ? tradeToLine(S.callTrade) : null;
-    if (S.isDeployed) {
-      const res = await fetch('/.netlify/functions/draft-message', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recommendation: target || '' }),
-      });
-      const data = await res.json();
-      S.draftedMsg = data.message || 'This one is not a trade with another manager, so there is no message to send.';
+    let drafted = null;
+    if (S.isDeployed && target) {
+      try {
+        const res = await fetch('/.netlify/functions/draft-message', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recommendation: target || '' }),
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
+          const data = await res.json();
+          if (data.message) drafted = data.message;
+        }
+      } catch (inner) { /* fall through */ }
+    }
+    if (drafted) {
+      S.draftedMsg = drafted;
     } else {
       const rec = target || '';
       if (!rec) { S.draftedMsg = 'This one is not a specific trade, so there is no single message to draft.'; }
@@ -2057,16 +2066,30 @@ async function evaluateTrade(passedOffer) {
   if (!offer) return;
   S.evalRunning = true; S.evalResult = null; renderTab();
   try {
+    let result = null;
     if (S.isDeployed) {
-      const res = await fetch('/.netlify/functions/evaluate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ offer }),
-      });
-      const data = await res.json();
-      S.evalResult = data.text || ('Error: ' + (data.error || 'unknown'));
-    } else {
-      S.evalResult = await callClaude(buildEvalPrompt(offer), { useSearch: true, maxTokens: 2800 });
+      // Try the dedicated evaluate function first, but guard against it
+      // returning an HTML error page (which would make res.json() throw).
+      try {
+        const res = await fetch('/.netlify/functions/evaluate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ offer }),
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
+          const data = await res.json();
+          if (data.text) result = data.text;
+        }
+      } catch (inner) { /* fall through to the direct AI call */ }
     }
+    // Fallback (and the artifact path): build the prompt locally and call the
+    // AI directly. No web search here: the proxy is a sync function and a
+    // search call would blow its timeout. The prompt already carries roster,
+    // values, and league-state context, so a fast grade is reliable.
+    if (!result) {
+      result = await callClaude(buildEvalPrompt(offer), { useSearch: false, maxTokens: 2200 });
+    }
+    S.evalResult = result;
   } catch (e) {
     S.evalResult = 'Could not evaluate: ' + e.message;
   } finally {
@@ -2082,16 +2105,22 @@ async function askChat() {
   S.chatLog.push({ role: 'user', text: q });
   S.chatRunning = true; renderTab();
   try {
-    let answer;
+    let answer = null;
     if (S.isDeployed) {
-      const res = await fetch('/.netlify/functions/chat', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q, history: S.chatLog.slice(0, -1).slice(-6) }),
-      });
-      const data = await res.json();
-      answer = data.text || ('Error: ' + (data.error || 'unknown'));
-    } else {
-      answer = await callClaude(buildChatPrompt(q, S.chatLog.slice(0, -1)), { useSearch: true, maxTokens: 1600 });
+      try {
+        const res = await fetch('/.netlify/functions/chat', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q, history: S.chatLog.slice(0, -1).slice(-6) }),
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
+          const data = await res.json();
+          if (data.text) answer = data.text;
+        }
+      } catch (inner) { /* fall through */ }
+    }
+    if (!answer) {
+      answer = await callClaude(buildChatPrompt(q, S.chatLog.slice(0, -1)), { useSearch: false, maxTokens: 1600 });
     }
     S.chatLog.push({ role: 'assistant', text: answer });
   } catch (e) {

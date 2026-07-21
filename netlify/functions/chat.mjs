@@ -50,7 +50,7 @@ ${convo ? `\nCONVERSATION SO FAR:\n${convo}\n` : ""}
 MY QUESTION: ${question}`;
 
   try {
-    const text = await callClaude(prompt, { maxTokens: 1600 });
+    const text = await callClaude(prompt, { maxTokens: 1600, useSearch: false });
     return new Response(JSON.stringify({ ok: true, text }), {
       headers: { "content-type": "application/json" },
     });
