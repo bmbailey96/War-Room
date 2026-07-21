@@ -85,7 +85,7 @@ export default async () => {
     });
   }
   board.sort((a, b) => b.fitScore - a.fitScore);
-  const top = board.slice(0, 40);
+  const top = board.slice(0, 90);
 
   // A short strategic read from the model. NO web search (keeps it fast and
   // inside the function timeout). It reasons from the board + my roster.
@@ -111,6 +111,8 @@ Tell me: (1) the 2-3 names to queue right now and why, weighing value against wh
     myDraftedByPos,
     board: top,
     read,
+    draftId: draftInfo ? draftInfo.draft_id : null,
+    mySlot: draftInfo ? (draftInfo.draft_order || {})[MY_USER_ID] || null : null,
   });
 
   return new Response(JSON.stringify({ ok: true, status, picksMade, boardSize: top.length }), {
