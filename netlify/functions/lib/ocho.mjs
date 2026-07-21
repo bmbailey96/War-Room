@@ -10,7 +10,6 @@ export const LEAGUE_NAME_PATTERN = /ocho|teenypetes/i;
 
 export const STARTER_NEEDS = { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1, DL_eligible: 1 };
 
-// Career history from 4 seasons (2022-2025). Refresh after each season.
 export const OWNER_HISTORY = {"460522508903247872":{"display_name":"AverageRedneck","championships":["2023"],"win_pct":0.589,"trades_count":12,"trade_positions_acquired":{"RB":5,"WR":3,"QB":4,"TE":2},"lineup_efficiency_pct":82.2,"avg_bench_leak_per_week":37.0,"dead_starts_4yr":11,"trade_ros_net_pts":167.8},"862447704859635712":{"display_name":"lackeymatt","championships":[],"win_pct":0.536,"trades_count":23,"trade_positions_acquired":{"QB":4,"WR":19,"TE":1,"RB":7,"DL":2},"lineup_efficiency_pct":80.3,"avg_bench_leak_per_week":40.2,"dead_starts_4yr":13,"trade_ros_net_pts":735.1},"862526263095586816":{"display_name":"owmyballs","championships":[],"win_pct":0.268,"trades_count":4,"trade_positions_acquired":{"QB":2,"WR":1},"lineup_efficiency_pct":81.4,"avg_bench_leak_per_week":29.5,"dead_starts_4yr":64,"trade_ros_net_pts":444.3},"863128676391383040":{"display_name":"SigourneyBeaver","championships":[],"win_pct":0.607,"trades_count":26,"trade_positions_acquired":{"TE":3,"RB":5,"WR":9},"lineup_efficiency_pct":84.7,"avg_bench_leak_per_week":32.3,"dead_starts_4yr":10,"trade_ros_net_pts":-1647.1},"863157773284864000":{"display_name":"Birkey","championships":["2024"],"win_pct":0.679,"trades_count":23,"trade_positions_acquired":{"RB":9,"WR":9,"QB":6,"DL":1},"lineup_efficiency_pct":84.9,"avg_bench_leak_per_week":32.6,"dead_starts_4yr":11,"trade_ros_net_pts":-2601.1},"863467130702671872":{"display_name":"MikahH","championships":["2022"],"win_pct":0.464,"trades_count":33,"trade_positions_acquired":{"QB":7,"WR":20,"RB":12,"TE":3},"lineup_efficiency_pct":84.6,"avg_bench_leak_per_week":30.7,"dead_starts_4yr":14,"trade_ros_net_pts":255.6},"994817581137604608":{"display_name":"SexyJexy19","championships":["2025"],"win_pct":0.429,"trades_count":11,"trade_positions_acquired":{"QB":2,"RB":3,"TE":1,"WR":4},"lineup_efficiency_pct":81.7,"avg_bench_leak_per_week":36.8,"dead_starts_4yr":10,"trade_ros_net_pts":699.3},"1027938591684538368":{"display_name":"aaronjy1999","championships":[],"win_pct":0.393,"trades_count":7,"trade_positions_acquired":{"RB":2,"WR":3,"QB":2},"lineup_efficiency_pct":76.9,"avg_bench_leak_per_week":45.4,"dead_starts_4yr":36,"trade_ros_net_pts":516.3},"501533314885087232":{"display_name":"vic2252","championships":[],"win_pct":0.357,"trades_count":3,"trade_positions_acquired":{"RB":1,"QB":2,"WR":1},"lineup_efficiency_pct":85.9,"avg_bench_leak_per_week":28.8,"dead_starts_4yr":3,"trade_ros_net_pts":206.8}};
 
 export function blobs() {
@@ -36,7 +35,6 @@ export async function resolveLeague() {
   return FALLBACK_LEAGUE_ID;
 }
 
-// Trimmed player DB, cached in blobs with a 20h TTL.
 export async function getPlayersTrim() {
   const store = blobs();
   const cached = await store.get("players_trim", { type: "json" });
@@ -73,7 +71,6 @@ export async function fetchLeagueCore(leagueId) {
     j("https://api.sleeper.app/v1/state/nfl"),
     j("https://api.sleeper.app/v1/players/nfl/trending/add?lookback_hours=48&limit=40"),
   ]);
-  // All 18 transaction weeks in parallel; offseason moves land in week 1.
   const txnWeeks = await Promise.all(
     Array.from({ length: 18 }, (_, i) =>
       j(`https://api.sleeper.app/v1/league/${leagueId}/transactions/${i + 1}`).catch(() => [])
@@ -156,9 +153,6 @@ export function computeSnapshot(core, playersDB) {
     };
   });
 
-  // Standings projection: rank by wins, then points-for. Seed + in/out of
-  // the playoff cut. In-season this is a live picture; preseason it's 0-0
-  // so seeds are just points-for order until games happen.
   const ranked = [...teams].sort((a, b) =>
     (b.wins - a.wins) || (b.pointsFor - a.pointsFor) || (b.winPct - a.winPct)
   );
@@ -209,6 +203,55 @@ export function describeTransaction(t, snapshot, playersDB) {
   return [...adds, ...drops].join("; ") || "(empty transaction)";
 }
 
+// ONE-LINE ACTIVITY VERDICT. Grades a single detected transaction from the
+// transacting owner's perspective: was this a smart move given their roster,
+// or a lopsided trade, and who won it. Haiku, no search, cheap enough to run
+// on every new item the watcher detects. Returns null on any failure so a
+// verdict miss never blocks the changelog entry itself from being written.
+export async function gradeTransaction(t, snapshot, playersDB, playerValues) {
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+  const valueOf = name => {
+    const m = playerValues?.players?.[norm(name)];
+    return m ? m.v : null;
+  };
+  const teamOf = rid => snapshot.teams.find(x => x.rosterId === rid);
+  const pName = pid => pInfo(playersDB, pid).name;
+
+  if (t.type === "trade") {
+    const sides = (t.roster_ids || []).map(rid => {
+      const team = teamOf(rid);
+      const gotNames = Object.entries(t.adds || {}).filter(([, r]) => r === rid).map(([pid]) => pName(pid));
+      const picks = (t.draft_picks || []).filter(dp => dp.owner_id === rid).map(dp => `${dp.season} R${dp.round}`);
+      const val = gotNames.map(n => valueOf(n)).filter(v => v != null).reduce((a, b) => a + b, 0);
+      const h = OWNER_HISTORY[team?.ownerId] || {};
+      return `${team?.name || rid} (${h.display_name || "?"}): received ${[...gotNames, ...picks].join(", ") || "nothing listed"} (named-player value ${val}/100). Stance: ${team?.stance || "?"}. Holes: ${(team?.holes || []).join("; ") || "none"}. Surplus: ${(team?.surplus || []).join("; ") || "none"}.`;
+    }).join("\n");
+    const prompt = `Grade this fantasy football trade in 2 sentences max, plain language, no hedging. Say who won it and why, weighing value and roster fit. If it is close to even, say that plainly.
+
+${sides}
+
+Return ONLY the verdict, 2 sentences max.`;
+    try {
+      return (await callClaude(prompt, { model: "claude-haiku-4-5", useSearch: false, maxTokens: 200 })).trim();
+    } catch (e) { return null; }
+  }
+
+  const rid = Object.values(t.adds || {})[0] ?? Object.values(t.drops || {})[0];
+  const team = teamOf(rid);
+  if (!team) return null;
+  const added = Object.keys(t.adds || {}).map(pName);
+  const dropped = Object.keys(t.drops || {}).map(pName);
+  const h = OWNER_HISTORY[team.ownerId] || {};
+  const prompt = `Grade this single fantasy football roster move in 1-2 sentences, plain language, from ${team.name}'s (${h.display_name || "?"}) perspective: was it smart given their roster? Stance: ${team.stance}. Holes: ${(team.holes || []).join("; ") || "none"}. Surplus: ${(team.surplus || []).join("; ") || "none"}.
+${added.length ? `Added: ${added.join(", ")}` : ""}${dropped.length ? `
+Dropped: ${dropped.join(", ")}` : ""}
+
+Return ONLY the verdict, 1-2 sentences.`;
+  try {
+    return (await callClaude(prompt, { model: "claude-haiku-4-5", useSearch: false, maxTokens: 150 })).trim();
+  } catch (e) { return null; }
+}
+
 export function leagueContextBlock(snapshot) {
   const lines = snapshot.teams.map(t => {
     const h = OWNER_HISTORY[t.ownerId] || {};
@@ -240,7 +283,6 @@ export function myRosterBlock(snapshot) {
 
 export function trendingBlock(core, snapshot, playersDB) {
   const rostered = new Set();
-  for (const t of snapshot.teams) { /* names only, need pids: use core rosters */ }
   for (const r of core.rosters) for (const pid of r.players || []) rostered.add(pid);
   return (core.trending || [])
     .filter(t => !rostered.has(t.player_id))
@@ -273,13 +315,10 @@ export async function callClaude(prompt, { maxTokens = 3500, useSearch = true, m
   return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
 }
 
-// Build a "what's changing" block from the trend history for prompts.
-// Compares the most recent trend point to ~7 days prior and surfaces deltas.
 export function trendBlock(trends) {
   if (!trends || !trends.days || trends.days.length < 2) return "";
   const days = trends.days;
   const latest = days[days.length - 1];
-  // find a point ~7 days back, else the oldest we have
   const weekAgo = days.find(d => {
     const gap = (new Date(latest.date) - new Date(d.date)) / 86400000;
     return gap >= 6 && gap <= 9;
@@ -306,10 +345,6 @@ export function trendBlock(trends) {
   return `\n\nWHAT'S CHANGED IN THE LAST ~7 DAYS (trajectory matters more than the static picture; weigh momentum):\n${lines.join("\n")}`;
 }
 
-// Build a market-value anchor block for the trade prompts. Maps every
-// player on my roster + every player league-wide to DynastyProcess's
-// normalized 0-100 value so the analyzer anchors to consensus instead of
-// guessing. News in the prompt can still override.
 export function valuesBlock(snapshot, playerValues) {
   if (!playerValues || !playerValues.players) return "";
   const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
@@ -323,7 +358,6 @@ export function valuesBlock(snapshot, playerValues) {
     }).filter(Boolean);
     if (vals.length) lines.push(`${label}: ${vals.join(", ")}`);
   };
-  // Look up a pick's value by exact slot ("2026 1.03") then round ("2026 1").
   const pickVal = (season, round, slot) => {
     if (!playerValues.picks) return null;
     if (slot != null) {
@@ -353,8 +387,6 @@ export function valuesBlock(snapshot, playerValues) {
   return `\n\nMARKET VALUE ANCHOR (DynastyProcess consensus, ${playerValues.scrapeDate || "recent"}, players AND picks on one 0-100 scale so they trade directly against each other; use these as your baseline "value" numbers in the JSON, then adjust for MY roster fit and live news):\n${lines.join("\n")}`;
 }
 
-// Fold the mined league-tendency memory into trade prompts so the AI knows
-// how each owner actually behaves, not just what a static file says.
 export function leagueMemoryBlock(leagueMemory) {
   if (!leagueMemory || !leagueMemory.tendencies) return "";
   const lines = [];
@@ -366,10 +398,6 @@ export function leagueMemoryBlock(leagueMemory) {
   return `\n\nLEAGUE MEMORY (how each owner has actually behaved over ${(leagueMemory.seasons||[]).length} seasons; use this to judge who will really complete a deal and who just talks):\n${lines.join("\n")}`;
 }
 
-// LEAGUE STATE: one computed synthesis every analysis shares, so trades,
-// pickups, game plan, and the evaluator all reason from the same picture
-// instead of re-deriving (and contradicting) it. Computes league-wide
-// positional scarcity and where I rank at each position by real market value.
 export function leagueStateBlock(snapshot, playerValues) {
   const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
   const pv = (playerValues && playerValues.players) || {};
@@ -377,7 +405,6 @@ export function leagueStateBlock(snapshot, playerValues) {
   const me = snapshot.teams.find(t => t.isMe);
   if (!me) return "";
 
-  // For each position, total market value each team holds, then rank teams.
   const POS = ["QB", "RB", "WR", "TE"];
   const lines = [];
   for (const pos of POS) {
@@ -386,15 +413,12 @@ export function leagueStateBlock(snapshot, playerValues) {
       total: t.players.filter(p => p.pos === pos).reduce((s, p) => s + val(p.name), 0),
     })).sort((a, b) => b.total - a.total);
     const myRank = totals.findIndex(x => x.isMe) + 1;
-    const leagueAvg = Math.round(totals.reduce((s, x) => s + x.total, 0) / totals.length);
-    // scarcity: how top-heavy is this position across the league
     const top3 = totals.slice(0, 3).reduce((s, x) => s + x.total, 0);
     const all = totals.reduce((s, x) => s + x.total, 0) || 1;
     const concentration = Math.round(top3 / all * 100);
     lines.push(`${pos}: I rank ${myRank}/${snapshot.teams.length} in market value (${concentration}% of leaguewide ${pos} value sits with the top 3 teams${concentration >= 55 ? ", so this position is SCARCE and worth hoarding" : ""}).`);
   }
 
-  // Contention read: my win% + roster age vs league
   const ages = snapshot.teams.map(t => t.avgAge).filter(Boolean);
   const avgLeagueAge = ages.length ? (ages.reduce((a, b) => a + b, 0) / ages.length) : 27;
   const window = me.winPct >= 0.55

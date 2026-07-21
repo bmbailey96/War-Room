@@ -1,11 +1,12 @@
 // Runs every 2 hours. Pulls the full league state, computes the survey,
 // diffs transactions against what we've already seen, and appends
-// human-readable changelog entries. Sets a "dirty" flag when the league
-// actually changed so the next analysis run knows to dig in.
+// human-readable changelog entries with a per-transaction verdict. Sets a
+// "dirty" flag when the league actually changed so the next analysis run
+// knows to dig in.
 
 import {
   blobs, resolveLeague, fetchLeagueCore, getPlayersTrim,
-  computeSnapshot, describeTransaction,
+  computeSnapshot, describeTransaction, gradeTransaction,
 } from "./lib/ocho.mjs";
 
 async function notify(title, message) {
@@ -26,8 +27,8 @@ export default async (req) => {
   const core = await fetchLeagueCore(leagueId);
   const playersDB = await getPlayersTrim();
   const snapshot = computeSnapshot(core, playersDB);
+  const playerValues = await store.get("player_values", { type: "json" });
 
-  // Transaction diff
   const seen = (await store.get("seen_txn_ids", { type: "json" })) || [];
   const seenSet = new Set(seen);
   const newTxns = [];
@@ -44,15 +45,18 @@ export default async (req) => {
   const changelog = (await store.get("changelog", { type: "json" })) || [];
   const firstRun = seen.length === 0;
   if (!firstRun) {
+    let graded = 0;
     for (const t of newTxns) {
+      const verdict = graded < 8 ? await gradeTransaction(t, snapshot, playersDB, playerValues) : null;
+      if (verdict) graded++;
       changelog.push({
         at: t.created || Date.now(),
         type: t.type,
         desc: describeTransaction(t, snapshot, playersDB),
+        verdict,
       });
     }
   }
-  // Keep the most recent 60 entries
   while (changelog.length > 60) changelog.shift();
 
   const dirty = !firstRun && newTxns.length > 0;
@@ -61,14 +65,9 @@ export default async (req) => {
   await store.setJSON("changelog", changelog);
   if (dirty) await store.setJSON("dirty", { at: Date.now(), count: newTxns.length });
 
-  // Stash the trending block inputs so analysis doesn't refetch
   await store.setJSON("trending_raw", core.trending || []);
   await store.setJSON("rosters_raw", core.rosters.map(r => ({ roster_id: r.roster_id, players: r.players || [] })));
 
-  // TREND ENGINE: keep one lightweight datapoint per team per DAY so we can
-  // compute what's changing over time (roster moves, depth shifts, injury
-  // counts, standing). Snapshot runs every 2h; we only append a new day's
-  // point once per calendar day to keep the history compact.
   const trends = (await store.get("trends", { type: "json" })) || { days: [] };
   const today = new Date().toISOString().slice(0, 10);
   const lastDay = trends.days.length ? trends.days[trends.days.length - 1].date : null;
@@ -91,7 +90,6 @@ export default async (req) => {
     await store.setJSON("trends", trends);
   }
 
-  // React to the league changing, don't just record it
   if (dirty) {
     const tradeHappened = newTxns.some(t => t.type === "trade");
     const summary = newTxns.slice(-3).map(t => describeTransaction(t, snapshot, playersDB)).join("\n");
@@ -100,8 +98,6 @@ export default async (req) => {
       summary
     );
     if (tradeHappened) {
-      // A trade reshapes the whole trade market: fire a fresh analysis now
-      // instead of waiting for the morning run.
       try {
         const base = new URL(req.url).origin;
         await fetch(`${base}/.netlify/functions/analyze-background`, {

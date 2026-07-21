@@ -5,7 +5,7 @@ import { blobs } from "./lib/ocho.mjs";
 
 export default async () => {
   const store = blobs();
-  const [snapshot, changelog, trades, pickups, sitstart, teams, news, stats, alerts, draftBoard, briefing, gamePlan, grading, trends, pregame, leagueMemory] = await Promise.all([
+  const [snapshot, changelog, trades, pickups, sitstart, teams, news, stats, alerts, draftBoard, briefing, gamePlan, grading, trends, pregame, leagueMemory, playerValues] = await Promise.all([
     store.get("snapshot", { type: "json" }),
     store.get("changelog", { type: "json" }),
     store.get("analysis_trades", { type: "json" }),
@@ -22,6 +22,7 @@ export default async () => {
     store.get("trends", { type: "json" }),
     store.get("pregame_flagged", { type: "json" }),
     store.get("league_memory", { type: "json" }),
+    store.get("player_values", { type: "json" }),
   ]);
   return new Response(JSON.stringify({
     snapshot: snapshot || null,
@@ -37,5 +38,6 @@ export default async () => {
     leagueMemory: leagueMemory || null,
     grading: grading ? { hits: grading.hits, total: grading.total, calls: (grading.calls || []).slice(-20).reverse() } : null,
     trends: trends || null,
+    playerValues: playerValues || null,
   }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
 };
