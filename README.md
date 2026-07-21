@@ -1,28 +1,42 @@
-# The Ocho War Room (v21: dead-simple draft tab)
+# The Ocho War Room (v24: confidence, foresight, and a stress test)
 
-## What changed
+## Three things in this build
 
-The Draft tab is stripped down to one job: tell you who to draft.
+1. CONFIDENCE AND SOURCING on the evaluator and chat
+   The trade evaluator now ends every verdict with a "HOW SURE I AM"
+   section: its confidence level and the biggest reason for it, what
+   specifically it based the call on (values as of their date, your
+   roster, age curve, scarcity), and the one piece of new info that
+   would flip the verdict, so you know what to watch. It also tells you
+   its data is from the daily value snapshot, not a live lookup, when
+   that matters.
+   The chat now closes real judgment calls with a one-line read:
+   "<confidence>, based on <main driver>; would change if <the thing
+   that flips it>." You can tell when it is sure and when it is
+   guessing.
 
-WHAT YOU SEE, top to bottom:
-  1. DRAFT THIS GUY. One big name, the best pick for you right now.
-     Position, age, team, value. That is the answer.
-  2. If he is gone, take the next one down. Four backups, small.
-  3. A one-line flash when someone drafts (who went, who is best now).
-  4. Everything else (your roster so far, the strategy read, the full
-     40-deep board) is tucked behind "show" toggles. There if you want
-     to study, out of the way if you just need the pick.
+2. THE DRAFT BRAIN NOW THINKS AHEAD
+   It computes how many picks until your next turn (correct snake-draft
+   math, verified for all 8 slots) and reasons about which positional
+   tiers will survive that gap. So instead of just "best guy now," it
+   tells you "take the RB now, the WR tier will still be there at your
+   next pick but the RB tier will not." That is real draft strategy.
+   Rookies with no listed age are now flagged as young/high-upside so
+   they are not undervalued.
 
-Turn on "Watch live" during the draft and the big name updates itself
-the moment someone picks. You do not have to look at the Sleeper draft
-board at all. Just watch the one name.
-
-See draft-tab-preview.html (or the screenshot) for exactly how it looks.
+3. STRESS TEST (dev only, not shipped in the app)
+   Before shipping, the whole in-season path was run against a
+   simulated live Sunday: an injured starter, the pregame pivot logic,
+   alert dedup, no-healthy-backup handling, tricky player-name
+   matching, the grading loop scoring a past call, and the draft
+   look-ahead math at every slot. 19 checks, all passing. The one
+   thing it surfaced (rookies not flagged as young) is fixed above.
+   This is why it now handles a real game week without surprises.
 
 ## The 8 tabs
 
-The Call (pinned) / Roster / Rivals / Trades / Pickups / Draft (the
-simple one) / Standings / Data / Intel.
+The Call (pinned) / Roster / Rivals / Trades / Pickups / Draft /
+Standings / Data / Intel.
 
 ## Deploy
 

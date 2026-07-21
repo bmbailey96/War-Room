@@ -1601,37 +1601,48 @@ function renderDraftRoom() {
   const posColor = { QB: 'var(--amber)', RB: 'var(--green)', WR: 'var(--line-bright)', TE: 'var(--rust)' };
   const posName = { QB: 'quarterback', RB: 'running back', WR: 'receiver', TE: 'tight end' };
 
-  // THE PICK: the single best guy for you right now, big and unmissable.
-  const pick = liveBoard[0];
-  const pickBox = pick ? `<div style="border:2px solid var(--green);background:rgba(93,196,124,0.10);padding:16px;margin-bottom:14px;text-align:center">
-      <div style="font-family:var(--display);font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--green);margin-bottom:6px">Draft this guy</div>
-      <div style="font-family:var(--display);font-size:30px;color:var(--paper);line-height:1.1">${esc(pick.name)}</div>
-      <div style="font-size:13px;color:var(--muted);margin-top:5px">${posName[pick.pos] || pick.pos}${pick.age ? `, age ${pick.age}` : ''}${pick.team ? `, ${esc(pick.team)}` : ''} &middot; value ${pick.value}/100</div>
+  // THE PICK: the dynasty brain's choice, not just the top value. If the brain's
+  // pick got drafted since the last build, fall back to the top of the live board.
+  let pick = db.pick && !drafted.has(normName(db.pick.name)) ? db.pick : null;
+  if (!pick) pick = liveBoard[0];
+  const brainPicked = db.pick && pick && normName(pick.name) === normName(db.pick.name);
+
+  const pickBox = pick ? `<div style="border:2px solid var(--green);background:rgba(93,196,124,0.10);padding:16px;margin-bottom:14px">
+      <div style="font-family:var(--display);font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--green);margin-bottom:6px;text-align:center">Draft this guy</div>
+      <div style="font-family:var(--display);font-size:30px;color:var(--paper);line-height:1.1;text-align:center">${esc(pick.name)}</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:5px;text-align:center">${posName[pick.pos] || pick.pos}${pick.age ? `, age ${pick.age}` : ''}${pick.team ? `, ${esc(pick.team)}` : ''} &middot; value ${pick.value}/100</div>
+      ${brainPicked && db.why ? `<div style="font-size:12.5px;color:var(--paper);line-height:1.5;margin-top:10px;padding-top:10px;border-top:1px solid rgba(93,196,124,0.25)">${esc(db.why)}</div>` : ''}
     </div>` : `<div class="empty-msg">Board is empty. Hit refresh.</div>`;
 
-  // Backups: the next few, small, in case your guy gets sniped a beat before you.
-  const backups = liveBoard.slice(1, 5).map(p => {
-    const c = posColor[p.pos] || 'var(--muted)';
-    return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(127,196,224,0.08)">
-      <span style="font-family:var(--display);font-size:10px;color:${c};border:1px solid ${c};border-radius:3px;padding:1px 6px;min-width:34px;text-align:center">${p.pos}</span>
-      <span style="flex:1;color:var(--paper);font-size:14px">${esc(p.name)}</span>
-      <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">${p.value}</span>
-    </div>`;
-  }).join('');
-  const backupBox = backups ? `<div style="margin-bottom:14px">
-      <div class="call-slot-label" style="margin-bottom:6px">If he is gone, take the next one down</div>
-      ${backups}
-    </div>` : '';
+  // Backup: the brain's named backup if we have one, else next best on the board.
+  let backupHtml = '';
+  if (brainPicked && db.backup) {
+    backupHtml = `<div style="margin-bottom:14px"><div class="call-slot-label" style="margin-bottom:5px">If he is gone</div><div style="font-size:13px;color:var(--paper);line-height:1.5">${esc(db.backup)}</div></div>`;
+  } else {
+    const backups = liveBoard.filter(p => !pick || normName(p.name) !== normName(pick.name)).slice(0, 4).map(p => {
+      const c = posColor[p.pos] || 'var(--muted)';
+      return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(127,196,224,0.08)">
+        <span style="font-family:var(--display);font-size:10px;color:${c};border:1px solid ${c};border-radius:3px;padding:1px 6px;min-width:34px;text-align:center">${p.pos}</span>
+        <span style="flex:1;color:var(--paper);font-size:14px">${esc(p.name)}</span>
+        <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">${p.value}</span>
+      </div>`;
+    }).join('');
+    backupHtml = backups ? `<div style="margin-bottom:14px"><div class="call-slot-label" style="margin-bottom:6px">If he is gone, take the next one down</div>${backups}</div>` : '';
+  }
+
+  // What to prioritize over the next few picks (the brain's positional read).
+  const prioritizeHtml = (brainPicked && db.prioritize)
+    ? `<div style="border-left:3px solid var(--line-bright);padding:6px 12px;margin-bottom:14px;font-size:12.5px;color:var(--paper);line-height:1.5"><span style="color:var(--line-bright)">Target soon:</span> ${esc(db.prioritize)}</div>`
+    : '';
 
   // The just-drafted flash, kept short.
   const alert = S.draftAlert
     ? `<div style="border-left:3px solid var(--amber);background:rgba(224,168,72,0.10);padding:8px 12px;margin-bottom:14px;font-size:12.5px;color:var(--paper);line-height:1.5">${esc(S.draftAlert)}</div>`
     : '';
 
-  // Everything else tucked away: your picks, the read, the full board.
+  // Everything else tucked away.
   const filled = Object.entries(db.myDraftedByPos || {}).filter(([, n]) => n > 0);
   const mine = filled.length ? `<div class="ai-note" style="margin-bottom:10px">Your roster so far: ${filled.map(([p, n]) => `${p} x${n}`).join(", ")}</div>` : '';
-  const readHtml = db.read ? `<details style="margin-bottom:12px"><summary style="cursor:pointer;color:var(--line-bright);font-size:12px">Why, and the strategy read</summary><div class="ai-result" style="margin-top:8px">${renderMd(db.read)}</div></details>` : '';
 
   const fullRows = liveBoard.slice(0, 40).map((p, i) => {
     const c = posColor[p.pos] || 'var(--muted)';
@@ -1642,9 +1653,9 @@ function renderDraftRoom() {
       <span style="font-family:var(--mono);font-size:12px;color:var(--muted);width:26px;text-align:right">${p.value}</span>
     </div>`;
   }).join('');
-  const fullBoard = `<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--line-bright);font-size:12px">Show the full board</summary><div style="margin-top:8px">${fullRows}</div></details>`;
+  const fullBoard = `<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--line-bright);font-size:12px">Show the full board (raw value)</summary><div style="margin-top:8px">${fullRows}</div></details>`;
 
-  return `${watchBtn}${alert}${pickBox}${backupBox}${mine}${readHtml}${fullBoard}
+  return `${watchBtn}${alert}${pickBox}${backupHtml}${prioritizeHtml}${mine}${fullBoard}
     <div class="ai-note" style="margin-top:10px">Updated ${timeAgo(db.at)}${watching ? ', watching live' : ''}.</div>`;
 }
 

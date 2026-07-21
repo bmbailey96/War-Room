@@ -4,7 +4,8 @@
 // conversation so follow-ups make sense.
 
 import {
-  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock, OWNER_HISTORY,
+  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock,
+  valuesBlock, leagueStateBlock, leagueMemoryBlock, OWNER_HISTORY,
 } from "./lib/ocho.mjs";
 
 export default async (req) => {
@@ -24,27 +25,34 @@ export default async (req) => {
   const store = blobs();
   const snapshot = await store.get("snapshot", { type: "json" });
   if (!snapshot) return new Response(JSON.stringify({ error: "no snapshot yet" }), { status: 409 });
-  const [newsDigest, statsDigest, trends, grading] = await Promise.all([
+  const [newsDigest, statsDigest, trends, grading, playerValues, leagueMemory] = await Promise.all([
     store.get("news_digest", { type: "json" }),
     store.get("stats_digest", { type: "json" }),
     store.get("trends", { type: "json" }),
     store.get("grading_record", { type: "json" }),
+    store.get("player_values", { type: "json" }),
+    store.get("league_memory", { type: "json" }),
   ]);
 
   const newsLine = (newsDigest?.items || []).filter(i => i.score >= 35).slice(0, 15)
     .map(i => `- ${i.title}`).join("\n");
   const trendLine = trendBlock(trends);
+  const stateLine = leagueStateBlock(snapshot, playerValues);
+  const valueLine = valuesBlock(snapshot, playerValues);
+  const memoryLine = leagueMemoryBlock(leagueMemory);
   const trackLine = grading && grading.total >= 3
     ? `\nMy recommendation track record so far: ${grading.hits}/${grading.total} graded calls hit.` : "";
 
   const convo = history.map(h => `${h.role === "user" ? "Me" : "You"}: ${h.text}`).join("\n");
 
-  const prompt = `You are my dynasty fantasy football co-manager for the league below. Answer my question directly and honestly, grounded in this context. Use web search when the question needs current news, injuries, or values. Be concise and specific. If I'm about to do something dumb, say so. Never pad.
+  const prompt = `You are my dynasty fantasy football co-manager for the league below. Answer my question directly and honestly, grounded in this context. Use the market values and league state as your baseline, and factor my roster, my contention window, and positional scarcity into every answer. Be concise and specific. If I'm about to do something dumb, say so. Never pad.
+
+When your answer involves a real judgment call (should I add/drop/start/trade someone, is X worth it), end with one short line in this exact form: "Read: <High/Medium/Low confidence>, based on <the main thing driving it>; would change if <the one thing that would flip it>." Skip that line for simple factual answers. Do not overuse it. Be honest when your read is thin or the data is stale.
 
 ${leagueContextBlock(snapshot)}
 
 MY FULL ROSTER (The Nightmen):
-${myRosterBlock(snapshot)}
+${myRosterBlock(snapshot)}${stateLine}${valueLine}${memoryLine}
 ${newsLine ? `\nRECENT HEADLINES:\n${newsLine}` : ""}${trendLine}${trackLine}
 ${convo ? `\nCONVERSATION SO FAR:\n${convo}\n` : ""}
 MY QUESTION: ${question}`;
