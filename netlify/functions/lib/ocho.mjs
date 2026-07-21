@@ -333,3 +333,16 @@ export function valuesBlock(snapshot, playerValues) {
   if (!lines.length) return "";
   return `\n\nMARKET VALUE ANCHOR (DynastyProcess consensus, ${playerValues.scrapeDate || "recent"}, normalized 0-100; use these as your baseline "value" numbers in the JSON, then adjust for MY roster fit and any live news that moves a player):\n${lines.join("\n")}`;
 }
+
+// Fold the mined league-tendency memory into trade prompts so the AI knows
+// how each owner actually behaves, not just what a static file says.
+export function leagueMemoryBlock(leagueMemory) {
+  if (!leagueMemory || !leagueMemory.tendencies) return "";
+  const lines = [];
+  for (const t of Object.values(leagueMemory.tendencies)) {
+    const partners = (t.favoritePartners || []).map(p => `${p.name} (${p.n}x)`).join(", ");
+    lines.push(`${t.name}: ${t.completedTrades} completed trades over ${(leagueMemory.seasons||[]).length} seasons, ${t.churnLevel} waiver churn, ${t.timing}${partners ? `; trades most with ${partners}` : ""}`);
+  }
+  if (!lines.length) return "";
+  return `\n\nLEAGUE MEMORY (how each owner has actually behaved over ${(leagueMemory.seasons||[]).length} seasons; use this to judge who will really complete a deal and who just talks):\n${lines.join("\n")}`;
+}

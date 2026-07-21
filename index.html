@@ -109,6 +109,14 @@
     top: 2px;
   }
   .tab-body { background: var(--panel); border: 1px solid var(--line-bright); border-top: none; padding: 18px; min-height: 300px; }
+  .subtab-bar { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+  .subtab {
+    font-family: var(--display); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 5px 12px; color: var(--muted); cursor: pointer; border: 1px solid var(--line);
+    border-radius: 3px; user-select: none; white-space: nowrap;
+  }
+  .subtab:hover { color: var(--paper); }
+  .subtab.active { color: var(--bg-deep); background: var(--amber); border-color: var(--amber); font-weight: 600; }
 
   .status-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -318,20 +326,14 @@
   <div id="the-call"></div>
 
   <div class="tab-bar" id="tab-bar">
-    <div class="tab active" data-tab="holes">Roster Holes</div>
-    <div class="tab" data-tab="teams">Teams</div>
+    <div class="tab active" data-tab="roster">Roster</div>
+    <div class="tab" data-tab="rivals">Rivals</div>
     <div class="tab" data-tab="trades">Trades</div>
     <div class="tab" data-tab="pickups">Pickups</div>
-    <div class="tab" data-tab="sitstart">Sit / Start</div>
-    <div class="tab" data-tab="draft" id="draft-tab" style="display:none">Draft Room</div>
+    <div class="tab" data-tab="draft" id="draft-tab" style="display:none">Draft</div>
     <div class="tab" data-tab="standings">Standings</div>
-    <div class="tab" data-tab="odds">Odds</div>
-    <div class="tab" data-tab="plan">Game Plan</div>
     <div class="tab" data-tab="data">Data</div>
-    <div class="tab" data-tab="trends">Trends</div>
-    <div class="tab" data-tab="ask">Ask</div>
-    <div class="tab" data-tab="briefing">Briefing</div>
-    <div class="tab" data-tab="wire">The Wire</div>
+    <div class="tab" data-tab="intel">Intel</div>
   </div>
   <div class="tab-body" id="tab-body">
     <div class="empty-msg">Pull live data to begin the survey.</div>
@@ -387,7 +389,8 @@ const store = {
 const S = {
   league: null, rosters: null, users: null, tradedPicks: null,
   playersDB: null, teams: null, nflState: null, trending: null,
-  activeTab: 'holes',
+  activeTab: 'roster',
+  subTab: {},      // per-tab active sub-section for merged tabs
   aiResults: {},   // per-tab session AI output (artifact mode direct runs)
   aiRunning: {},
   server: null,    // stored snapshot/changelog/analyses from the always-on backend
@@ -410,9 +413,8 @@ async function loadServerData() {
     S.server = await res.json();
     renderChangeFeed();
     // Don't clobber the Ask tab mid-interaction (typing, chat in progress)
-    const onAsk = S.activeTab === 'ask';
     const focused = document.activeElement && ['eval-input','chat-input'].includes(document.activeElement.id);
-    if (!(onAsk && (focused || S.chatRunning || S.evalRunning))) renderTab();
+    if (!(focused || S.chatRunning || S.evalRunning)) renderTab();
   } catch (e) { /* artifact mode or backend not deployed yet */ }
 }
 
@@ -639,6 +641,83 @@ function computeTeams() {
       isMe: r.owner_id === MY_USER_ID,
     };
   });
+}
+
+/* ---------- EXPLOIT BOARD: turn behavioral data into a per-rival playbook ---------- */
+function exploitBoard() {
+  const me = S.teams.find(t => t.isMe);
+  if (!me) return [];
+  const myHoles = new Set(me.holes.map(h => h.split(':')[0].trim()));
+
+  return S.teams.filter(t => !t.isMe).map(t => {
+    const h = t.history || {};
+    const trades = h.trades_count ?? 0;
+    const dead = h.dead_starts_4yr ?? 0;
+    const eff = h.lineup_efficiency_pct ?? 0;
+    const posAcq = h.trade_positions_acquired || {};
+    const totalAcq = Object.values(posAcq).reduce((a, b) => a + b, 0) || 1;
+
+    let hunts = null, huntShare = 0;
+    for (const [pos, n] of Object.entries(posAcq)) {
+      if (n / totalAcq > huntShare) { huntShare = n / totalAcq; hunts = pos; }
+    }
+
+    const inattention = Math.min(dead / 64, 1) * 45;
+    const lowEff = Math.max(0, (84 - eff) / 12) * 20;
+    const dealsEasily = Math.min(trades / 33, 1) * 20;
+    const scoreWeak = Math.max(0, (170 - (h.scoring?.avg || 170)) / 45) * 15;
+    const exploit = Math.round(inattention + lowEff + dealsEasily + scoreWeak);
+
+    const reach = trades >= 20 ? 'High' : trades >= 8 ? 'Medium' : 'Low';
+
+    const myAtHunt = hunts ? me.players.filter(p => p.pos === hunts) : [];
+    const theirSurplusPos = ['RB','WR','TE'].filter(p => (t.depth[p]||0) >= 7);
+    const prySpot = theirSurplusPos.find(p => myHoles.has(p)) || theirSurplusPos[0] || null;
+
+    let read;
+    if (dead >= 40) read = `Barely watches their bench (${dead} dead starts in 4 years). Their depth pieces are gettable below market; they will not notice value walking out the door.`;
+    else if (reach === 'Low') read = `Rarely trades (${trades} in 4 years). Needs an overwhelming, obviously-in-their-favor offer to even respond. Do not waste a fair offer here.`;
+    else if (hunts) read = `Active trader who chases ${hunts}. Lead with a ${hunts} they will want, then take back value elsewhere.`;
+    else read = `Moderate engagement. Standard fair-value approach.`;
+
+    return {
+      name: t.name, ownerName: h.display_name || t.ownerName,
+      exploit, reach, hunts, huntShare: Math.round(huntShare*100),
+      dead, eff, trades, stance: t.stance,
+      sendAngle: myAtHunt.length ? `they hunt ${hunts} (${Math.round(huntShare*100)}% of their trades); dangle one of your ${hunts}s` : (hunts ? `they hunt ${hunts} but you have none spare to dangle` : 'no clear positional lever'),
+      pryNote: prySpot ? `they are ${t.depth[prySpot]} deep at ${prySpot}${myHoles.has(prySpot)?', which you NEED':''}` : 'no obvious surplus to raid',
+      read,
+    };
+  }).sort((a, b) => b.exploit - a.exploit);
+}
+
+function renderExploit() {
+  if (!S.teams) return '<div class="empty-msg">Pull live data first.</div>';
+  const board = exploitBoard();
+  const rows = board.map(x => {
+    const color = x.exploit >= 55 ? 'var(--green)' : x.exploit >= 35 ? 'var(--amber)' : 'var(--muted)';
+    const reachColor = x.reach === 'High' ? 'var(--green)' : x.reach === 'Low' ? 'var(--rust)' : 'var(--amber)';
+    return `<div class="team-card">
+      <div class="card-head">
+        <div><h3>${esc(x.name)}</h3><div class="owner-tag">${esc(x.ownerName)} · ${x.stance.label}</div></div>
+        <div style="text-align:right">
+          <div style="font-family:var(--display);font-size:22px;color:${color}">${x.exploit}</div>
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em">exploit index</div>
+        </div>
+      </div>
+      <div style="font-size:12.5px;color:var(--paper);margin:8px 0;line-height:1.5">${esc(x.read)}</div>
+      <div class="pos-row" style="border:none"><span class="pos-label" style="width:auto;min-width:74px">Reach</span><span style="color:${reachColor};font-size:12px">${x.reach}</span><span style="font-size:11px;color:var(--muted);margin-left:8px">${x.trades} career trades</span></div>
+      <div class="pos-row" style="border-top:1px solid rgba(127,196,224,0.1)"><span class="pos-label" style="width:auto;min-width:74px">Send them</span><span style="font-size:12px;color:var(--paper)">${esc(x.sendAngle)}</span></div>
+      <div class="pos-row" style="border-top:1px solid rgba(127,196,224,0.1)"><span class="pos-label" style="width:auto;min-width:74px">Pry loose</span><span style="font-size:12px;color:var(--paper)">${esc(x.pryNote)}</span></div>
+    </div>`;
+  }).join('');
+  return `<div class="chart-note" style="margin-bottom:12px">Every rival ranked by how exploitable they are, from four years of behavior: how little they watch their bench (dead starts), how reachable they are (trade frequency), lineup efficiency, and scoring. High index = go here first. Your league-specific playbook.</div>
+    <div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px;font-size:10.5px;color:var(--muted)">
+      <span><span style="color:var(--green)">55+</span> prime target</span>
+      <span><span style="color:var(--amber)">35-54</span> workable</span>
+      <span><span style="color:var(--muted)">under 35</span> tough, overpay or avoid</span>
+    </div>
+    ${rows}`;
 }
 
 /* ---------- AI layer ---------- */
@@ -930,7 +1009,19 @@ function renderTheCall() {
     ? `<b>${esc(drop.name)}</b>${drop.pos?` <span style="color:var(--muted)">${esc(drop.pos)}</span>`:''}${drop.why?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(drop.why)}</div>`:''}`
     : `<span style="color:var(--muted)">Hold your roster. No clear drop.</span>`;
 
+  // In-season lineup alert: a newly-out starter is the most urgent thing there is
+  const pg = (S.server || {}).pregame;
+  let alertHtml = '';
+  if (pg && pg.detail && pg.detail.length) {
+    const items = pg.detail.map(f => `<div style="font-size:12.5px;color:var(--paper)">${esc(f.starter)} (${esc(f.pos)}) is <b style="color:var(--rust)">${esc(f.status)}</b>. ${f.pivot ? `Start <b style="color:var(--green)">${esc(f.pivot)}</b> instead.` : `No healthy ${esc(f.pos)} on your bench, hit waivers.`}</div>`).join('');
+    alertHtml = `<div style="border:2px solid var(--rust);background:rgba(198,93,59,0.12);padding:10px 12px;margin-bottom:10px">
+      <div class="call-slot-label" style="color:var(--rust);margin-bottom:6px">Lineup alert &mdash; fix before kickoff</div>
+      ${items}
+    </div>`;
+  }
+
   el.innerHTML = `<div class="call-box">
+    ${alertHtml}
     <div class="call-label">The Call &mdash; today's three moves</div>
     ${slot('Propose this trade', 'var(--line-bright)', tradeBody)}
     ${slot('Grab this player', 'var(--green)', grabBody)}
@@ -1455,11 +1546,34 @@ function renderStandings() {
 
 function renderDraftRoom() {
   const db = (S.server || {}).draftBoard;
-  if (!db) return '<div class="empty-msg">Draft mode activates when the league goes pre-draft. Once Matt opens the new Ocho, this fills with a rookie big board tuned to your roster.</div>';
-  if (db.error) return `<div class="error-msg">Draft board build failed: ${esc(db.error)}</div>`;
-  const live = db.draftStarted ? `<div class="call-box" style="margin-bottom:12px"><div class="call-label">Draft is LIVE</div><div class="call-text">${db.picksMade} picks made. Board below excludes players already gone and updates each cycle.</div></div>` : '';
-  return `${live}<div class="ai-result">${renderMd(db.text)}</div><div class="ai-note" style="margin-top:8px">Board refreshed ${timeAgo(db.at)} with live rookie-class research.</div>`;
+  const refreshBtn = `<div class="ai-controls" style="margin-bottom:12px"><button onclick="refreshDraft()" ${S.draftRefreshing?'disabled':''}>${S.draftRefreshing?'Pulling live picks...':'Refresh board (live picks)'}</button>
+    <span class="ai-note">During the draft, hit this each time you are on the clock for an updated best-available.</span></div>`;
+  if (!db) return `${refreshBtn}<div class="empty-msg">Draft mode activates when the league goes pre-draft. Once Matt opens the new Ocho, this fills with a rookie big board tuned to your roster, and refreshes live during the draft.</div>`;
+  if (db.error) return `${refreshBtn}<div class="error-msg">Draft board build failed: ${esc(db.error)}</div>`;
+  const live = db.draftStarted ? `<div class="call-box" style="margin-bottom:12px"><div class="call-label">Draft is LIVE</div><div class="call-text">${db.picksMade} picks made. Board excludes players already gone.</div></div>` : '';
+  return `${refreshBtn}${live}<div class="ai-result">${renderMd(db.text)}</div><div class="ai-note" style="margin-top:8px">Board refreshed ${timeAgo(db.at)} with live rookie-class research.</div>`;
 }
+async function refreshDraft() {
+  S.draftRefreshing = true; renderTab();
+  try {
+    if (S.isDeployed) {
+      await fetch('/.netlify/functions/draft').catch(()=>{});
+      let tries = 0;
+      const poll = async () => {
+        await loadServerData();
+        const db = (S.server||{}).draftBoard;
+        if (db && db.at && (!S.draftStartedAt || db.at >= S.draftStartedAt)) { S.draftRefreshing=false; renderTab(); return; }
+        if (tries++ < 20) setTimeout(poll, 4000); else { S.draftRefreshing=false; renderTab(); }
+      };
+      S.draftStartedAt = Date.now();
+      setTimeout(poll, 4000);
+    } else {
+      // artifact mode: not wired to live draft; just inform
+      S.draftRefreshing = false; renderTab();
+    }
+  } catch(e) { S.draftRefreshing = false; renderTab(); }
+}
+window.refreshDraft = refreshDraft;
 
 function renderBriefing() {
   const b = (S.server || {}).briefing;
@@ -1487,20 +1601,60 @@ function renderTab() {
   const draftTab = document.getElementById('draft-tab');
   if (draftTab) draftTab.style.display = (status === 'pre_draft' || status === 'drafting') ? '' : 'none';
 
-  if (S.activeTab === 'holes') body.innerHTML = renderHoles();
-  else if (S.activeTab === 'teams') body.innerHTML = renderTeams();
-  else if (S.activeTab === 'standings') body.innerHTML = renderStandings();
-  else if (S.activeTab === 'odds') body.innerHTML = renderOdds();
-  else if (S.activeTab === 'plan') body.innerHTML = renderPlan();
-  else if (S.activeTab === 'draft') body.innerHTML = renderDraftRoom();
-  else if (S.activeTab === 'briefing') body.innerHTML = renderBriefing();
-  else if (S.activeTab === 'data') body.innerHTML = renderData();
-  else if (S.activeTab === 'trends') body.innerHTML = renderTrends();
-  else if (S.activeTab === 'ask') body.innerHTML = renderAsk();
-  else if (S.activeTab === 'wire') body.innerHTML = renderWire();
-  else body.innerHTML = renderAITab(S.activeTab);
+  // Sub-tab navigation for merged tabs
+  const subNav = (tabKey, subs) => {
+    const active = S.subTab[tabKey] || subs[0].key;
+    const btns = subs.map(s => `<span class="subtab ${s.key===active?'active':''}" onclick="setSub('${tabKey}','${s.key}')">${s.label}</span>`).join('');
+    return { active, html: `<div class="subtab-bar">${btns}</div>` };
+  };
+
+  if (S.activeTab === 'roster') {
+    body.innerHTML = renderHoles();
+  } else if (S.activeTab === 'rivals') {
+    const { active, html } = subNav('rivals', [
+      { key: 'exploit', label: 'Exploit Board' },
+      { key: 'teams', label: 'Rosters' },
+    ]);
+    body.innerHTML = html + (active === 'exploit' ? renderExploit() : renderTeams());
+  } else if (S.activeTab === 'trades') {
+    const { active, html } = subNav('trades', [
+      { key: 'ideas', label: 'Trade Ideas' },
+      { key: 'evaluate', label: 'Evaluate an Offer' },
+    ]);
+    body.innerHTML = html + (active === 'evaluate' ? renderEvaluator() : renderAITab('trades'));
+  } else if (S.activeTab === 'pickups') {
+    const { active, html } = subNav('pickups', [
+      { key: 'pickups', label: 'Pickups & Drops' },
+      { key: 'sitstart', label: 'Sit / Start' },
+    ]);
+    body.innerHTML = html + renderAITab(active === 'sitstart' ? 'sitstart' : 'pickups');
+  } else if (S.activeTab === 'draft') {
+    body.innerHTML = renderDraftRoom();
+  } else if (S.activeTab === 'standings') {
+    const { active, html } = subNav('standings', [
+      { key: 'table', label: 'Standings' },
+      { key: 'odds', label: 'Playoff Odds' },
+      { key: 'trends', label: 'Trends' },
+    ]);
+    body.innerHTML = html + (active === 'odds' ? renderOdds() : active === 'trends' ? renderTrends() : renderStandings());
+  } else if (S.activeTab === 'data') {
+    body.innerHTML = renderData();
+  } else if (S.activeTab === 'intel') {
+    const { active, html } = subNav('intel', [
+      { key: 'ask', label: 'Ask' },
+      { key: 'plan', label: 'Game Plan' },
+      { key: 'briefing', label: 'Briefing' },
+      { key: 'wire', label: 'The Wire' },
+    ]);
+    body.innerHTML = html + (active === 'plan' ? renderPlan() : active === 'briefing' ? renderBriefing() : active === 'wire' ? renderWire() : renderAsk());
+  }
   renderTheCall();
 }
+function setSub(tab, sub) {
+  S.subTab[tab] = sub;
+  renderTab();
+}
+window.setSub = setSub;
 
 /* ---------- Game Plan tab: the multi-move arc to a title ---------- */
 function renderPlan() {
@@ -1773,11 +1927,7 @@ function renderTrends() {
 }
 
 /* ---------- Ask tab: chat + trade evaluator ---------- */
-function renderAsk() {
-  const chatHtml = (S.chatLog || []).map(m =>
-    `<div style="margin:8px 0"><span style="font-family:var(--display);font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${m.role==='user'?'var(--amber)':'var(--line-bright)'}">${m.role==='user'?'You':'War Room'}</span>
-      <div class="${m.role==='user'?'':'ai-result'}" style="${m.role==='user'?'color:var(--paper);font-size:12.5px':'margin-top:4px'}">${m.role==='user'?esc(m.text):renderMd(m.text)}</div></div>`
-  ).join('');
+function renderEvaluator() {
   const evalOut = S.evalResult ? (() => {
     const { cards, prose } = splitTradesText(S.evalResult);
     let h = '';
@@ -1785,17 +1935,20 @@ function renderAsk() {
     h += `<div class="ai-result">${renderMd(prose)}</div>`;
     return h;
   })() : '';
-
-  return `<div class="chart-title">Evaluate a Trade</div>
-    <div class="chart-note" style="margin-bottom:8px">Paste a trade someone offered you, or one you're weighing. Plain language is fine: "Birkey offers me Jeanty for Aiyuk and my 2026 1st." It grades accept/decline/counter and gives you the exact counter to send.</div>
+  return `<div class="chart-note" style="margin-bottom:8px">Paste a trade someone offered you, or one you're weighing. Plain language is fine: "Birkey offers me Jeanty for Aiyuk and my 2026 1st." It grades accept, decline, or counter and gives you the exact counter to send.</div>
     <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">
       <input id="eval-input" placeholder="Describe the trade..." style="flex:1;min-width:220px;background:var(--panel-2);border:1px solid var(--line);color:var(--paper);font-family:var(--mono);font-size:12px;padding:9px 11px"/>
       <button onclick="evaluateTrade()" ${S.evalRunning?'disabled':''}>${S.evalRunning?'Judging...':'Evaluate'}</button>
     </div>
-    ${S.evalRunning ? '<div class="ai-result"><span class="spinner"></span>Grading the offer against your roster and live values...</div>' : evalOut}
+    ${S.evalRunning ? '<div class="ai-result"><span class="spinner"></span>Grading the offer against your roster and live values...</div>' : evalOut}`;
+}
 
-    <div class="chart-title" style="margin-top:26px">Ask Anything</div>
-    <div class="chart-note" style="margin-bottom:8px">Full context: your roster, the league, owner tendencies, the news wire, trends, the grading record. "Should I worry about McCaffrey's age?" "Who on Birkey's team is actually gettable?" "Is my RB depth real or just names?"</div>
+function renderAsk() {
+  const chatHtml = (S.chatLog || []).map(m =>
+    `<div style="margin:8px 0"><span style="font-family:var(--display);font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${m.role==='user'?'var(--amber)':'var(--line-bright)'}">${m.role==='user'?'You':'War Room'}</span>
+      <div class="${m.role==='user'?'':'ai-result'}" style="${m.role==='user'?'color:var(--paper);font-size:12.5px':'margin-top:4px'}">${m.role==='user'?esc(m.text):renderMd(m.text)}</div></div>`
+  ).join('');
+  return `<div class="chart-note" style="margin-bottom:8px">Full context: your roster, the league, owner tendencies, the news wire, trends, the grading record. "Should I worry about McCaffrey's age?" "Who on Birkey's team is actually gettable?" "Is my RB depth real or just names?"</div>
     <div id="chat-log">${chatHtml || '<div class="empty-msg" style="padding:16px">No questions yet.</div>'}</div>
     ${S.chatRunning ? '<div class="ai-result"><span class="spinner"></span>Thinking...</div>' : ''}
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">

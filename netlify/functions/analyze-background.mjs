@@ -4,7 +4,7 @@
 
 import {
   blobs, OWNER_HISTORY, leagueContextBlock, myRosterBlock,
-  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock,
+  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock,
 } from "./lib/ocho.mjs";
 
 function buildTrendingBlock(trendingRaw, rostersRaw, playersDB) {
@@ -71,16 +71,17 @@ function digestBlocks(newsDigest, statsDigest, snapshot) {
   return { newsBlock, statsBlock };
 }
 
-function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues) {
+function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory) {
   const ctx = leagueContextBlock(snapshot);
   const mine = myRosterBlock(snapshot);
   const { newsBlock, statsBlock } = digestBlocks(newsDigest, statsDigest, snapshot);
   const groundData = [newsBlock, statsBlock].filter(Boolean).join("\n\n");
   const trendData = trendBlock(trends);
   const valueData = valuesBlock(snapshot, playerValues);
+  const memoryData = leagueMemoryBlock(leagueMemory);
   const groundNote = (groundData
     ? `\n\nGROUND DATA COLLECTED BY MY SYSTEM (verify anything surprising with your own web search; recency beats this data):\n${groundData}`
-    : "") + trendData + valueData;
+    : "") + trendData + valueData + memoryData;
   const wk = snapshot.nflState || {};
   const inSeason = wk.season_type === "regular" && wk.week >= 1;
   const MOVE = `\n\nTWO REQUIREMENTS FOR EVERY RECOMMENDATION ABOVE: (a) tag each with a confidence level (High/Medium/Low); (b) add a one-line "Case against:" naming the strongest reason it could be wrong. Never present a call as risk-free.\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
@@ -182,10 +183,11 @@ export default async (req) => {
   const newsDigest = await store.get("news_digest", { type: "json" });
   const statsDigest = await store.get("stats_digest", { type: "json" });
   const trends = await store.get("trends", { type: "json" });
+  const leagueMemory = await store.get("league_memory", { type: "json" });
   const playerValues = await store.get("player_values", { type: "json" });
   const gradingRecord = await store.get("grading_record", { type: "json" });
   const trendingText = buildTrendingBlock(trendingRaw, rostersRaw, playersDB);
-  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues);
+  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory);
 
   // Track-record block: shows the model its own calibrated hit rate
   let trackBlock = "";

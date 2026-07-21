@@ -5,7 +5,7 @@ import { blobs } from "./lib/ocho.mjs";
 
 export default async () => {
   const store = blobs();
-  const [snapshot, changelog, trades, pickups, sitstart, teams, news, stats, alerts, draftBoard, briefing, gamePlan, grading, trends] = await Promise.all([
+  const [snapshot, changelog, trades, pickups, sitstart, teams, news, stats, alerts, draftBoard, briefing, gamePlan, grading, trends, pregame, leagueMemory] = await Promise.all([
     store.get("snapshot", { type: "json" }),
     store.get("changelog", { type: "json" }),
     store.get("analysis_trades", { type: "json" }),
@@ -20,6 +20,8 @@ export default async () => {
     store.get("game_plan", { type: "json" }),
     store.get("grading_record", { type: "json" }),
     store.get("trends", { type: "json" }),
+    store.get("pregame_flagged", { type: "json" }),
+    store.get("league_memory", { type: "json" }),
   ]);
   return new Response(JSON.stringify({
     snapshot: snapshot || null,
@@ -31,6 +33,8 @@ export default async () => {
     draftBoard: draftBoard || null,
     briefing: briefing || null,
     gamePlan: gamePlan || null,
+    pregame: pregame || null,
+    leagueMemory: leagueMemory || null,
     grading: grading ? { hits: grading.hits, total: grading.total, calls: (grading.calls || []).slice(-20).reverse() } : null,
     trends: trends || null,
   }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
