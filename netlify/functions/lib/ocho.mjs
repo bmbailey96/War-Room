@@ -323,15 +323,34 @@ export function valuesBlock(snapshot, playerValues) {
     }).filter(Boolean);
     if (vals.length) lines.push(`${label}: ${vals.join(", ")}`);
   };
-  if (me) add("MY roster market values (0-100)", me.players);
+  // Look up a pick's value by exact slot ("2026 1.03") then round ("2026 1").
+  const pickVal = (season, round, slot) => {
+    if (!playerValues.picks) return null;
+    if (slot != null) {
+      const exact = playerValues.picks[`${season} ${round}.${String(slot).padStart(2, "0")}`];
+      if (exact) return exact.v;
+    }
+    const rb = playerValues.picks[`${season} ${round}`];
+    return rb ? rb.v : null;
+  };
+  const addPicks = (label, picks) => {
+    const vals = (picks || []).map(pk => {
+      const v = pickVal(pk.season, pk.round, pk.slot);
+      return v != null ? `${pk.season} R${pk.round} ${v}` : null;
+    }).filter(Boolean);
+    if (vals.length) lines.push(`${label} pick values: ${vals.join(", ")}`);
+  };
+
+  if (me) { add("MY roster market values (0-100)", me.players); addPicks("MY", me.picks); }
   for (const t of snapshot.teams) {
     if (t.isMe) continue;
     add(`${t.name} values`, t.players.filter(p => {
       const k = norm(p.name); if (seen.has(k)) return false; seen.add(k); return true;
     }));
+    addPicks(t.name, t.picks);
   }
   if (!lines.length) return "";
-  return `\n\nMARKET VALUE ANCHOR (DynastyProcess consensus, ${playerValues.scrapeDate || "recent"}, normalized 0-100; use these as your baseline "value" numbers in the JSON, then adjust for MY roster fit and any live news that moves a player):\n${lines.join("\n")}`;
+  return `\n\nMARKET VALUE ANCHOR (DynastyProcess consensus, ${playerValues.scrapeDate || "recent"}, players AND picks on one 0-100 scale so they trade directly against each other; use these as your baseline "value" numbers in the JSON, then adjust for MY roster fit and live news):\n${lines.join("\n")}`;
 }
 
 // Fold the mined league-tendency memory into trade prompts so the AI knows
@@ -345,4 +364,42 @@ export function leagueMemoryBlock(leagueMemory) {
   }
   if (!lines.length) return "";
   return `\n\nLEAGUE MEMORY (how each owner has actually behaved over ${(leagueMemory.seasons||[]).length} seasons; use this to judge who will really complete a deal and who just talks):\n${lines.join("\n")}`;
+}
+
+// LEAGUE STATE: one computed synthesis every analysis shares, so trades,
+// pickups, game plan, and the evaluator all reason from the same picture
+// instead of re-deriving (and contradicting) it. Computes league-wide
+// positional scarcity and where I rank at each position by real market value.
+export function leagueStateBlock(snapshot, playerValues) {
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+  const pv = (playerValues && playerValues.players) || {};
+  const val = name => (pv[norm(name)] || {}).v || 0;
+  const me = snapshot.teams.find(t => t.isMe);
+  if (!me) return "";
+
+  // For each position, total market value each team holds, then rank teams.
+  const POS = ["QB", "RB", "WR", "TE"];
+  const lines = [];
+  for (const pos of POS) {
+    const totals = snapshot.teams.map(t => ({
+      name: t.name, isMe: t.isMe,
+      total: t.players.filter(p => p.pos === pos).reduce((s, p) => s + val(p.name), 0),
+    })).sort((a, b) => b.total - a.total);
+    const myRank = totals.findIndex(x => x.isMe) + 1;
+    const leagueAvg = Math.round(totals.reduce((s, x) => s + x.total, 0) / totals.length);
+    // scarcity: how top-heavy is this position across the league
+    const top3 = totals.slice(0, 3).reduce((s, x) => s + x.total, 0);
+    const all = totals.reduce((s, x) => s + x.total, 0) || 1;
+    const concentration = Math.round(top3 / all * 100);
+    lines.push(`${pos}: I rank ${myRank}/${snapshot.teams.length} in market value (${concentration}% of leaguewide ${pos} value sits with the top 3 teams${concentration >= 55 ? ", so this position is SCARCE and worth hoarding" : ""}).`);
+  }
+
+  // Contention read: my win% + roster age vs league
+  const ages = snapshot.teams.map(t => t.avgAge).filter(Boolean);
+  const avgLeagueAge = ages.length ? (ages.reduce((a, b) => a + b, 0) / ages.length) : 27;
+  const window = me.winPct >= 0.55
+    ? (me.avgAge >= avgLeagueAge ? "win-now: strong roster but aging, push chips in this year" : "prime: strong and young, build the dynasty")
+    : (me.avgAge < avgLeagueAge ? "ascending/rebuild: young and not yet winning, accumulate" : "retool: older and losing, sell aging pieces before they crater");
+
+  return `\n\nLEAGUE STATE (shared picture, computed from market values so every recommendation is consistent):\nMy contention window: ${window}.\nPositional scarcity and my standing:\n${lines.join("\n")}\nUse this as the strategic frame: chase scarce positions, sell from positions where I am already deep, and match every move to my contention window.`;
 }

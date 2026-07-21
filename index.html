@@ -751,6 +751,38 @@ async function callClaude(userPrompt, { useSearch = true, maxTokens = 3000 } = {
 }
 
 /* ---------- context builders ---------- */
+// Read a trade screenshot into structured terms, then hand off to the evaluator.
+async function callClaudeVision(imageB64, mediaType, userPrompt, { maxTokens = 1200 } = {}) {
+  const body = {
+    model: 'claude-sonnet-4-6',
+    max_tokens: maxTokens,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageB64 } },
+        { type: 'text', text: userPrompt },
+      ],
+    }],
+  };
+  const endpoints = [
+    { url: 'https://api.anthropic.com/v1/messages', headers: { 'Content-Type': 'application/json' } },
+    { url: '/.netlify/functions/claude', headers: { 'Content-Type': 'application/json' } },
+  ];
+  let lastErr = null;
+  for (const ep of endpoints) {
+    try {
+      const res = await fetch(ep.url, { method: 'POST', headers: ep.headers, body: JSON.stringify(body) });
+      if (!res.ok) { lastErr = new Error(`${ep.url} returned ${res.status}`); continue; }
+      const data = await res.json();
+      if (data.error) { lastErr = new Error(data.error.message || 'API error'); continue; }
+      const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+      if (text) return text;
+      lastErr = new Error('Empty response');
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('All AI endpoints failed');
+}
+
 function leagueContextBlock() {
   const lines = S.teams.map(t => {
     const h = t.history || {};
@@ -788,7 +820,7 @@ function trendingBlock() {
 }
 
 /* ---------- AI tab runners ---------- */
-const MOVE_REQ = `\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
+const MOVE_REQ = `\n\nREASONING STANDARD for every recommendation: show the value math using the market-value anchors ("I send 58, I get 62"), steelman why the other manager says yes, tag confidence High/Medium/Low with a one-line "Case against:", and if market value and roster need disagree, pick a side with a reason.\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
 
 const AI_TASKS = {
   trades: {
@@ -1935,13 +1967,73 @@ function renderEvaluator() {
     h += `<div class="ai-result">${renderMd(prose)}</div>`;
     return h;
   })() : '';
-  return `<div class="chart-note" style="margin-bottom:8px">Paste a trade someone offered you, or one you're weighing. Plain language is fine: "Birkey offers me Jeanty for Aiyuk and my 2026 1st." It grades accept, decline, or counter and gives you the exact counter to send.</div>
+  return `<div class="chart-note" style="margin-bottom:8px">Screenshot the Sleeper trade block and paste it right here (Ctrl or Cmd V into the box), or just type the trade in plain language: "Birkey offers me Jeanty for Aiyuk and my 2026 1st." It grades accept, decline, or counter and gives you the exact counter to send.</div>
     <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">
-      <input id="eval-input" placeholder="Describe the trade..." style="flex:1;min-width:220px;background:var(--panel-2);border:1px solid var(--line);color:var(--paper);font-family:var(--mono);font-size:12px;padding:9px 11px"/>
+      <input id="eval-input" placeholder="Paste a screenshot here, or type the trade..." onpaste="handleEvalPaste(event)" style="flex:1;min-width:220px;background:var(--panel-2);border:1px solid var(--line);color:var(--paper);font-family:var(--mono);font-size:12px;padding:9px 11px"/>
       <button onclick="evaluateTrade()" ${S.evalRunning?'disabled':''}>${S.evalRunning?'Judging...':'Evaluate'}</button>
     </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+      <label for="eval-image" style="font-family:var(--display);font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);border:1px dashed var(--line);padding:6px 11px;cursor:pointer;border-radius:3px">${S.evalReading ? 'Reading screenshot...' : 'or upload a file'}</label>
+      <input id="eval-image" type="file" accept="image/*" style="display:none" onchange="readTradeShot(event)"/>
+      <span class="ai-note">Paste is easiest: screenshot, click the box, paste.</span>
+    </div>
+    ${S.evalShotText ? `<div class="ai-note" style="border:1px solid var(--line-bright);padding:8px 10px;margin-bottom:8px"><b style="color:var(--line-bright)">Read from screenshot:</b> ${esc(S.evalShotText)}</div>` : ''}
     ${S.evalRunning ? '<div class="ai-result"><span class="spinner"></span>Grading the offer against your roster and live values...</div>' : evalOut}`;
 }
+
+// Paste an image straight into the evaluate box: pull it off the clipboard and read it.
+function handleEvalPaste(ev) {
+  const items = (ev.clipboardData && ev.clipboardData.items) || [];
+  for (const it of items) {
+    if (it.type && it.type.indexOf('image') === 0) {
+      const file = it.getAsFile();
+      if (file) {
+        ev.preventDefault();
+        readTradeShot({ target: { files: [file], value: '' } });
+        return;
+      }
+    }
+  }
+  // No image on the clipboard: let the normal text paste happen.
+}
+window.handleEvalPaste = handleEvalPaste;
+
+async function readTradeShot(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  S.evalReading = true; S.evalResult = null; S.evalShotText = null; renderTab();
+  try {
+    const b64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(',')[1]);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+    const mediaType = file.type || 'image/png';
+    // Step 1: read the screenshot into a plain-language trade line.
+    const readPrompt = `This is a screenshot of a fantasy football trade proposal (likely from Sleeper). Read it and state the trade in one plain sentence from MY perspective, where "I" am the manager on the RECEIVES side. Format exactly: "I get: <players and picks, comma separated>. I give: <players and picks>. Other manager: <name if shown, else unknown>." Include draft pick years and rounds exactly as shown (for example "2026 3rd (3.06)"). If a side lists a source like "From MikahH" or "To MikahH", that names the other manager. Do not evaluate it, just transcribe the terms. If the image is not a trade, reply exactly: NOT_A_TRADE.`;
+    const line = (await callClaudeVision(b64, mediaType, readPrompt)).trim();
+    if (line === 'NOT_A_TRADE' || !line) {
+      S.evalShotText = 'That did not look like a trade screenshot. Try the Sleeper trade block, or type the trade instead.';
+      S.evalReading = false; renderTab();
+      return;
+    }
+    S.evalShotText = line;
+    S.evalReading = false;
+    // Prefill the text box so the user can tweak before grading
+    renderTab();
+    const box = document.getElementById('eval-input');
+    if (box) box.value = line;
+    // Step 2: grade it immediately
+    await evaluateTrade(line);
+  } catch (e) {
+    S.evalShotText = 'Could not read that image: ' + e.message;
+    S.evalReading = false; renderTab();
+  } finally {
+    ev.target.value = '';
+  }
+}
+window.readTradeShot = readTradeShot;
 
 function renderAsk() {
   const chatHtml = (S.chatLog || []).map(m =>
@@ -1957,9 +2049,11 @@ function renderAsk() {
     </div>`;
 }
 
-async function evaluateTrade() {
+async function evaluateTrade(passedOffer) {
   const input = document.getElementById('eval-input');
-  const offer = input ? input.value.trim() : '';
+  const offer = (typeof passedOffer === 'string' && passedOffer.trim())
+    ? passedOffer.trim()
+    : (input ? input.value.trim() : '');
   if (!offer) return;
   S.evalRunning = true; S.evalResult = null; renderTab();
   try {

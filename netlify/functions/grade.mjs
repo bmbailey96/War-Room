@@ -70,21 +70,25 @@ export default async () => {
       const s = scores[pid];
       if (!s || !s.weeks) continue;
       const ppg = s.pts / s.weeks;
-      // A GRAB/TARGET/START call "hits" if the player averaged a startable
-      // score for their position since the call. Rough position thresholds.
       const pos = (playersDB[pid] || {}).p;
       const threshold = { QB: 16, RB: 10, WR: 10, TE: 7, K: 7, DEF: 6 }[pos] || 8;
       const hit = ppg >= threshold;
+      const cat = call.action || call.task || "other";
       record.calls.push({
         at: call.at, week: call.week, task: call.task,
-        player: (playersDB[pid] || {}).n || pid, action: call.action,
+        player: (playersDB[pid] || {}).n || pid, action: call.action, cat,
         ppgSince: Math.round(ppg * 10) / 10, threshold, hit,
       });
       record.total++;
       if (hit) record.hits++;
+      // per-category tallies
+      record.byCat = record.byCat || {};
+      record.byCat[cat] = record.byCat[cat] || { hits: 0, total: 0 };
+      record.byCat[cat].total++;
+      if (hit) record.byCat[cat].hits++;
     }
   }
-  while (record.calls.length > 100) record.calls.shift();
+  while (record.calls.length > 120) record.calls.shift();
 
   await store.setJSON("grading_pending", stillPending);
   await store.setJSON("grading_record", record);

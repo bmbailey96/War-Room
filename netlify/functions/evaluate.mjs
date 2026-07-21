@@ -7,7 +7,7 @@
 // uses, so the app renders it as the same visual card.
 
 import {
-  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock, valuesBlock,
+  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock, valuesBlock, leagueStateBlock,
 } from "./lib/ocho.mjs";
 
 export default async (req) => {
@@ -37,6 +37,7 @@ export default async (req) => {
     .map(i => `- ${i.title}`).join("\n");
   const trendLine = trendBlock(trends);
   const valueLine = valuesBlock(snapshot, playerValues);
+  const stateLine = leagueStateBlock(snapshot, playerValues);
 
   const prompt = `You are my dynasty trade evaluator. Someone in my league has offered me a trade (or I'm considering one). Judge it honestly and tell me accept, decline, or counter. Use web search for current dynasty values, injuries, and news on the players involved.
 
@@ -44,7 +45,7 @@ ${leagueContextBlock(snapshot)}
 
 MY FULL ROSTER (The Nightmen):
 ${myRosterBlock(snapshot)}
-${newsLine ? `\nRELEVANT RECENT HEADLINES:\n${newsLine}` : ""}${trendLine}${valueLine}
+${newsLine ? `\nRELEVANT RECENT HEADLINES:\n${newsLine}` : ""}${stateLine}${trendLine}${valueLine}
 
 THE TRADE ON THE TABLE (as I described it):
 "${offer}"

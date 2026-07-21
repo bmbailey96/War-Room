@@ -5,7 +5,7 @@
 // what to sell while its value is high, what to target, and when.
 
 import {
-  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock, valuesBlock,
+  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock, valuesBlock, leagueStateBlock,
 } from "./lib/ocho.mjs";
 
 export default async () => {
@@ -22,6 +22,7 @@ export default async () => {
 
   const me = snapshot.teams.find(t => t.isMe) || {};
   const valueLine = valuesBlock(snapshot, playerValues);
+  const stateLine = leagueStateBlock(snapshot, playerValues);
   const trendLine = trendBlock(trends);
   const status = snapshot.leagueStatus;
 
@@ -33,7 +34,7 @@ MY ROSTER (The Nightmen):
 ${myRosterBlock(snapshot)}
 
 MY STANCE: ${me.stance ? me.stance.label || me.stance : "unknown"}. MY HOLES: ${(me.holes||[]).join(", ")||"none flagged"}. MY SURPLUS: ${(me.surplus||[]).join(", ")||"none flagged"}. MY PICKS: ${(me.picks||[]).map(p=>`${p.season} R${p.round}`).join(", ")}.
-${valueLine}${trendLine}
+${stateLine}${valueLine}${trendLine}
 
 First, in one line: am I a contender (push now), a fringe team (one or two moves from contention), or a rebuild (sell and stockpile)? Be honest based on my roster and the league.
 

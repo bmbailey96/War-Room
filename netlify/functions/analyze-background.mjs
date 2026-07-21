@@ -4,7 +4,7 @@
 
 import {
   blobs, OWNER_HISTORY, leagueContextBlock, myRosterBlock,
-  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock,
+  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock, leagueStateBlock,
 } from "./lib/ocho.mjs";
 
 function buildTrendingBlock(trendingRaw, rostersRaw, playersDB) {
@@ -79,12 +79,13 @@ function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, player
   const trendData = trendBlock(trends);
   const valueData = valuesBlock(snapshot, playerValues);
   const memoryData = leagueMemoryBlock(leagueMemory);
+  const stateData = leagueStateBlock(snapshot, playerValues);
   const groundNote = (groundData
     ? `\n\nGROUND DATA COLLECTED BY MY SYSTEM (verify anything surprising with your own web search; recency beats this data):\n${groundData}`
-    : "") + trendData + valueData + memoryData;
+    : "") + stateData + trendData + valueData + memoryData;
   const wk = snapshot.nflState || {};
   const inSeason = wk.season_type === "regular" && wk.week >= 1;
-  const MOVE = `\n\nTWO REQUIREMENTS FOR EVERY RECOMMENDATION ABOVE: (a) tag each with a confidence level (High/Medium/Low); (b) add a one-line "Case against:" naming the strongest reason it could be wrong. Never present a call as risk-free.\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
+  const MOVE = `\n\nREASONING STANDARD, apply to every recommendation: (a) Show the value math explicitly using the market-value anchors above, for example "I send 58 (Player 40 + 2026 1st 18), I get 62, and the position I gain is scarcer for me than the one I give up." Do not assert a deal is fair without the numbers. (b) Steelman the other manager: state what THEY get and why a rational owner would say yes, not just why it helps me. A trade only happens if both sides win something. (c) Tag confidence High/Medium/Low, and add a one-line "Case against:" naming the strongest reason you could be wrong. Never present a call as risk-free. (d) If the market value and my roster need point in different directions, say so and pick a side with a reason, do not split the difference vaguely.\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
   return {
     trades: `You are a dynasty fantasy football trade analyst for my league. Use web search to check CURRENT dynasty trade values, recent NFL news, injuries, and coaching or depth chart changes for players named below.
 
@@ -195,7 +196,14 @@ export default async (req) => {
     const rate = Math.round(gradingRecord.hits / gradingRecord.total * 100);
     const recent = (gradingRecord.calls || []).slice(-8).map(c =>
       `${c.player} (${c.action}, ${c.hit ? "HIT" : "miss"}, ${c.ppgSince} ppg)`).join("; ");
-    trackBlock = `\n\nYOUR OWN TRACK RECORD SO FAR: ${gradingRecord.hits}/${gradingRecord.total} graded calls hit (${rate}%). Recent: ${recent}. Let this calibrate your confidence; if your hit rate is low, tighten up and be more selective.`;
+    let catLine = "";
+    if (gradingRecord.byCat) {
+      const cats = Object.entries(gradingRecord.byCat)
+        .filter(([, v]) => v.total >= 3)
+        .map(([k, v]) => `${k}: ${Math.round(v.hits / v.total * 100)}% (${v.hits}/${v.total})`);
+      if (cats.length) catLine = ` By type: ${cats.join(", ")}. Lean into the call types where you have been right and be far more selective on the types where you have been wrong.`;
+    }
+    trackBlock = `\n\nYOUR OWN TRACK RECORD SO FAR: ${gradingRecord.hits}/${gradingRecord.total} graded calls hit (${rate}%).${catLine} Recent: ${recent}. Let this calibrate your confidence; if your hit rate is low, tighten up and be more selective.`;
   }
 
   const nflWeek = (snapshot.nflState || {}).week || 0;

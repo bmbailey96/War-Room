@@ -1,10 +1,15 @@
 // VALUES DIGESTER. Runs daily. Pulls DynastyProcess's free dynasty trade
-// values (KeepTradeCut-derived, updated ~weekly) for players and rookie
-// picks, normalizes them to the same 0-100 scale the trade cards use, and
-// stores a lookup keyed by normalized player name. This gives the trade
-// analyzer and evaluator a real MARKET anchor instead of guessing values
-// from the model's memory. The prompt still lets live news override, but
-// now it starts from consensus reality.
+// values (KeepTradeCut-derived) for players AND rookie picks, normalizes
+// everything onto one 0-100 scale so a player and a pick are directly
+// comparable in a trade. This is the market anchor every trade number in
+// the app rests on. The prompt can still let live news override, but the
+// baseline is now real consensus, not a guess.
+//
+// Player values: DynastyProcess value_1qb column (league starts 1 QB).
+// Pick values: the picks file gives ECR (expected consensus rank), not a
+// value. We map each pick's ECR into the player value curve by rank, so a
+// 1.01 that "ranks like the 20th player" gets the 20th player's value.
+// This produces a real, non-guessed pick curve.
 
 import { blobs } from "./lib/ocho.mjs";
 
@@ -15,7 +20,6 @@ function parseCsv(text) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   const header = lines.shift().split(",").map(h => h.replace(/"/g, ""));
   return lines.map(line => {
-    // simple split is fine here; these files quote every field, no embedded commas in the fields we use
     const cells = line.split(",").map(c => c.replace(/^"|"$/g, ""));
     return Object.fromEntries(header.map((h, i) => [h, cells[i]]));
   });
@@ -23,6 +27,17 @@ function parseCsv(text) {
 
 function normName(s) {
   return (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+// Normalize a "2026 Pick 1.03" / "2026 1st" style label into stable keys the
+// roster ledger can match: exact ("2026 1.03") and round-bucket ("2026 1").
+function pickKeys(label) {
+  const keys = [];
+  const m = label.match(/(20\d\d).*?(\d)\.(\d\d)/);
+  if (m) { keys.push(`${m[1]} ${m[2]}.${m[3]}`); keys.push(`${m[1]} ${m[2]}`); }
+  const r = label.match(/(20\d\d).*?(\d)(?:st|nd|rd|th)/);
+  if (r) keys.push(`${r[1]} ${r[2]}`);
+  return keys;
 }
 
 export default async () => {
@@ -35,36 +50,61 @@ export default async () => {
   if (!pText) return new Response(JSON.stringify({ error: "player values unavailable" }), { status: 502 });
 
   const players = parseCsv(pText);
-  // 1QB league scoring: this league starts 1 QB, so use value_1qb.
   const rawMax = Math.max(...players.map(p => +p.value_1qb || 0), 1);
+
   const playerValues = {};
   let scrapeDate = "";
+  // Also build an ECR-sorted ladder for pick interpolation.
+  const ladder = [];
   for (const p of players) {
     const v = +p.value_1qb || 0;
     scrapeDate = p.scrape_date || scrapeDate;
-    const norm = Math.round((v / rawMax) * 100);
-    playerValues[normName(p.player)] = { v: norm, pos: p.pos, team: p.team, age: p.age ? +p.age : null };
+    playerValues[normName(p.player)] = {
+      v: Math.round((v / rawMax) * 100),
+      pos: p.pos, team: p.team, age: p.age ? +p.age : null,
+    };
+    const ecr = +p.ecr_1qb || 0;
+    if (v > 0 && ecr > 0) ladder.push({ ecr, v });
   }
+  ladder.sort((a, b) => a.ecr - b.ecr);
 
-  // Picks: normalize on the same scale using the player rawMax so picks and
-  // players are directly comparable.
+  // Interpolate a value for any ECR by finding where it sits on the player ladder.
+  const valueAtEcr = (ecr) => {
+    if (!ladder.length) return 0;
+    if (ecr <= ladder[0].ecr) return ladder[0].v;
+    if (ecr >= ladder[ladder.length - 1].ecr) return ladder[ladder.length - 1].v;
+    for (let i = 0; i < ladder.length - 1; i++) {
+      if (ladder[i].ecr <= ecr && ladder[i + 1].ecr >= ecr) {
+        const span = ladder[i + 1].ecr - ladder[i].ecr || 1;
+        const f = (ecr - ladder[i].ecr) / span;
+        return ladder[i].v + f * (ladder[i + 1].v - ladder[i].v);
+      }
+    }
+    return 0;
+  };
+
+  // Pick values: map each pick's ECR onto the player curve, then normalize.
   const pickValues = {};
   if (kText) {
     const picks = parseCsv(kText);
+    // Group picks by round so we can also compute a round-average value for
+    // the common case where a pick is only known by round ("2026 1st").
+    const roundVals = {};
     for (const pk of picks) {
-      const v = +pk.ecr_1qb ? null : null; // ecr is a rank, value is separate; picks file uses a value column? handle both
+      const ecr = +pk.ecr_1qb || 0;
+      if (!ecr) continue;
+      const v = Math.round((valueAtEcr(ecr) / rawMax) * 100);
+      for (const key of pickKeys(pk.player)) {
+        // exact keys win; round buckets take the max (earliest pick) unless averaged below
+        if (/\.\d\d$/.test(key)) pickValues[key] = { v, label: pk.player };
+        else { (roundVals[key] = roundVals[key] || []).push(v); }
+      }
     }
-    // The picks file exposes rank-like columns; derive a rough value from the
-    // 1.01 anchor down. Map "2026 Pick 1.01" style names and generic round buckets.
-    for (const pk of picks) {
-      const name = pk.player || "";
-      // Some rows carry a numeric value under ecr_1qb that's actually small;
-      // instead map by pick number to a sensible dynasty value curve.
-      const pickNo = +pk.pick || 0;
-      if (!pickNo) continue;
-      // Rough 1QB rookie pick value curve normalized to ~0-55 band
-      const curve = Math.max(4, Math.round(58 * Math.exp(-0.14 * (pickNo - 1))));
-      pickValues[normName(name)] = { v: curve, pickNo };
+    // Round bucket = average value of that round's picks (a "2026 1st" of
+    // unknown slot is worth the round's midpoint).
+    for (const [key, arr] of Object.entries(roundVals)) {
+      const avg = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+      pickValues[key] = { v: avg, label: `${key} (round avg)` };
     }
   }
 
@@ -73,10 +113,13 @@ export default async () => {
     players: playerValues,
     picks: pickValues,
     count: Object.keys(playerValues).length,
+    pickCount: Object.keys(pickValues).length,
   });
 
   return new Response(JSON.stringify({
-    ok: true, scrapeDate, players: Object.keys(playerValues).length, picks: Object.keys(pickValues).length,
+    ok: true, scrapeDate,
+    players: Object.keys(playerValues).length,
+    picks: Object.keys(pickValues).length,
   }), { headers: { "content-type": "application/json" } });
 };
 
