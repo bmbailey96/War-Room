@@ -1,44 +1,41 @@
-# The Ocho War Room (v18: reliability fix)
+# The Ocho War Room (v19: the draft watch board)
 
-## What this fixes
+## New in v19: a real draft tab for the startup
 
-THE "Unexpected token '<'" ERROR on the trade evaluator (and chat)
-  Root cause: the evaluate and chat functions ran the AI WITH web
-  search on the deployed site. Web-search calls take 30-90s, but
-  Netlify sync functions time out around 10-26s, so the function
-  returned an HTML timeout page and the app crashed trying to read it
-  as JSON.
+The Draft tab (hidden until the league goes pre-draft, then it appears
+on its own) is rebuilt for the STARTUP draft, not a rookie draft. When
+Matt opens the new Ocho and the draft room is up, this becomes your
+watch board.
 
-  Fixes:
-  - Server evaluate and chat now run WITHOUT web search, so they
-    finish well inside the function window. They still have full
-    context (your roster, market values, league state, trends), so
-    the grade is strong without a live search.
-  - The frontend now checks the response is real JSON before parsing,
-    and if the function fails for any reason it falls back to a direct
-    AI call instead of crashing. Same guard added to chat, the trade
-    message drafter, and the screenshot path.
+WHAT IT DOES
+  - Builds a best-available board from real dynasty values (all skill
+    players ranked 0-100), so you are looking at a true big board.
+  - Weights it lightly toward what your roster still needs as you draft:
+    positions you have not touched get nudged up, positions you have
+    stocked fade slightly. Early on it is basically pure value; as you
+    fill out, it leans toward your holes.
+  - Removes anyone already drafted, live. Hit "Refresh board" after
+    picks go off the board and the drafted players drop out.
+  - Gives a short strategic read: the 2-3 names to queue right now,
+    the one position to prioritize before it dries up, and one name
+    likely to fall that is worth waiting on.
 
-Net effect: pasting or uploading a trade screenshot and grading it now
-works reliably on the deployed site. If the dedicated function ever
-hiccups, you get an answer anyway instead of an error.
+HOW YOU USE IT
+  Open the Draft tab in the draft room. Queue from the top down. After
+  a run of picks, tap Refresh to pull the updated board. The read tells
+  you who to line up next given what you already have.
+
+  No web search on this path, so it is fast and will not time out. It
+  runs from the daily-refreshed values plus the live draft state.
 
 ## The 8 tabs
 
 The Call (pinned) / Roster / Rivals / Trades / Pickups / Draft
-(conditional) / Standings / Data / Intel.
+(appears during the draft) / Standings / Data / Intel.
 
 ## Deploy
 
 Same as before. Env: ANTHROPIC_API_KEY (required), NTFY_TOPIC
 (optional). Seed once: snapshot, news, stats, values, memory,
-notify-test.
-
-## Note on live values
-
-The evaluator no longer web-searches on the deployed path, so it
-grades from the daily-refreshed market values (values.mjs) plus your
-league context rather than a live lookup at grade time. Those values
-refresh daily, so they are current within a day. If you want a
-live-searched second opinion on a specific player, ask in the Intel
-tab.
+notify-test. The draft tab activates automatically when the league
+status is pre_draft or drafting, no setup needed.

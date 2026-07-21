@@ -1587,12 +1587,48 @@ function renderStandings() {
 
 function renderDraftRoom() {
   const db = (S.server || {}).draftBoard;
-  const refreshBtn = `<div class="ai-controls" style="margin-bottom:12px"><button onclick="refreshDraft()" ${S.draftRefreshing?'disabled':''}>${S.draftRefreshing?'Pulling live picks...':'Refresh board (live picks)'}</button>
-    <span class="ai-note">During the draft, hit this each time you are on the clock for an updated best-available.</span></div>`;
-  if (!db) return `${refreshBtn}<div class="empty-msg">Draft mode activates when the league goes pre-draft. Once Matt opens the new Ocho, this fills with a rookie big board tuned to your roster, and refreshes live during the draft.</div>`;
+  const refreshBtn = `<div class="ai-controls" style="margin-bottom:12px"><button onclick="refreshDraft()" ${S.draftRefreshing?'disabled':''}>${S.draftRefreshing?'Updating board...':'Refresh board'}</button>
+    <span class="ai-note">Hit this when players get drafted to pull the latest best-available for your queue.</span></div>`;
+  if (!db) return `${refreshBtn}<div class="empty-msg">Draft mode activates when the league goes pre-draft. Once Matt opens the new Ocho and the draft room is up, this fills with a best-available watch board tuned to your roster, so you know exactly who to queue next.</div>`;
   if (db.error) return `${refreshBtn}<div class="error-msg">Draft board build failed: ${esc(db.error)}</div>`;
-  const live = db.draftStarted ? `<div class="call-box" style="margin-bottom:12px"><div class="call-label">Draft is LIVE</div><div class="call-text">${db.picksMade} picks made. Board excludes players already gone.</div></div>` : '';
-  return `${refreshBtn}${live}<div class="ai-result">${renderMd(db.text)}</div><div class="ai-note" style="margin-top:8px">Board refreshed ${timeAgo(db.at)} with live rookie-class research.</div>`;
+
+  const live = db.draftStarted
+    ? `<div class="call-box" style="margin-bottom:12px"><div class="call-label">Draft is LIVE</div><div class="call-text">${db.picksMade} picks made. Board below has them removed. Queue from the top.</div></div>`
+    : `<div class="call-box" style="margin-bottom:12px"><div class="call-label">Pre-draft</div><div class="call-text">Draft has not started. This is your watch list to build a queue from.</div></div>`;
+
+  // What I've drafted so far
+  const filled = Object.entries(db.myDraftedByPos || {}).filter(([, n]) => n > 0);
+  const mine = filled.length
+    ? `<div class="ai-note" style="margin-bottom:10px">Your picks so far: ${filled.map(([p, n]) => `${p} x${n}`).join(", ")}</div>`
+    : '';
+
+  // The strategic read
+  const readHtml = db.read
+    ? `<div class="ai-result" style="margin-bottom:14px">${renderMd(db.read)}</div>`
+    : '';
+
+  // The watch board: queue-ready rows
+  const posColor = { QB: 'var(--amber)', RB: 'var(--green)', WR: 'var(--line-bright)', TE: 'var(--rust)' };
+  const rows = (db.board || []).map((p, i) => {
+    const c = posColor[p.pos] || 'var(--muted)';
+    const barW = Math.max(4, p.value);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(127,196,224,0.08)">
+      <span style="font-family:var(--mono);font-size:11px;color:var(--muted);width:22px;text-align:right">${i + 1}</span>
+      <span style="font-family:var(--display);font-size:10px;color:${c};border:1px solid ${c};border-radius:3px;padding:1px 5px;width:34px;text-align:center">${p.pos}</span>
+      <span style="flex:1;min-width:120px;color:var(--paper);font-size:13px">${esc(p.name)}${p.age ? `<span style="color:var(--muted);font-size:11px"> ${p.age}y</span>` : ''}${p.team ? `<span style="color:var(--muted);font-size:11px"> ${esc(p.team)}</span>` : ''}</span>
+      <span style="width:110px;height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;display:inline-block"><span style="display:block;height:100%;width:${barW}%;background:${c}"></span></span>
+      <span style="font-family:var(--mono);font-size:12px;color:var(--paper);width:30px;text-align:right">${p.value}</span>
+    </div>`;
+  }).join('');
+
+  return `${refreshBtn}${live}${mine}${readHtml}
+    <div class="chart-title" style="margin-bottom:4px">Watch board, best available</div>
+    <div class="chart-note" style="margin-bottom:8px">Ranked by dynasty value, lightly weighted toward what your roster still needs. Drafted players are already removed. Queue from the top down.</div>
+    <div style="display:flex;gap:14px;margin-bottom:8px;font-size:10.5px;color:var(--muted)">
+      <span><span style="color:var(--amber)">QB</span></span><span><span style="color:var(--green)">RB</span></span><span><span style="color:var(--line-bright)">WR</span></span><span><span style="color:var(--rust)">TE</span></span>
+    </div>
+    ${rows}
+    <div class="ai-note" style="margin-top:10px">Board built ${timeAgo(db.at)}.</div>`;
 }
 async function refreshDraft() {
   S.draftRefreshing = true; renderTab();
@@ -1600,16 +1636,15 @@ async function refreshDraft() {
     if (S.isDeployed) {
       await fetch('/.netlify/functions/draft').catch(()=>{});
       let tries = 0;
+      const startedAt = Date.now();
       const poll = async () => {
         await loadServerData();
         const db = (S.server||{}).draftBoard;
-        if (db && db.at && (!S.draftStartedAt || db.at >= S.draftStartedAt)) { S.draftRefreshing=false; renderTab(); return; }
+        if (db && db.at && db.at >= startedAt - 60000) { S.draftRefreshing=false; renderTab(); return; }
         if (tries++ < 20) setTimeout(poll, 4000); else { S.draftRefreshing=false; renderTab(); }
       };
-      S.draftStartedAt = Date.now();
       setTimeout(poll, 4000);
     } else {
-      // artifact mode: not wired to live draft; just inform
       S.draftRefreshing = false; renderTab();
     }
   } catch(e) { S.draftRefreshing = false; renderTab(); }

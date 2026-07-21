@@ -1,15 +1,16 @@
-// DRAFT WAR ROOM. Runs daily, but only does real work when the league is
-// in pre_draft or drafting status. Builds a rookie/startup big board tuned
-// to MY roster needs, with live research on the class, and (during a live
-// draft) a "best available for you right now" read.
-//
-// Sleeper exposes the draft and its picks once it exists, so mid-draft this
-// can see who's already gone and recompute best-available in real time.
+// DRAFT WAR ROOM. Runs daily, and on demand during the draft. Only does real
+// work when the league is in pre_draft or drafting. Builds a startup/rookie
+// WATCH BOARD tuned to my roster needs from the market-value data (no web
+// search, so it never times out), reads who has already been drafted and
+// removes them live, and stores a structured list the app renders as a
+// queue-ready board plus a short strategic read.
 
 import {
   blobs, resolveLeague, getPlayersTrim, callClaude,
-  leagueContextBlock, myRosterBlock,
+  myRosterBlock, MY_USER_ID, STARTER_NEEDS,
 } from "./lib/ocho.mjs";
+
+const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
 
 export default async () => {
   const store = blobs();
@@ -18,67 +19,101 @@ export default async () => {
 
   const status = snapshot.leagueStatus;
   if (status !== "pre_draft" && status !== "drafting") {
-    // Clear any stale board so the UI hides the tab when not drafting
     return new Response(JSON.stringify({ ok: true, skipped: `league status is ${status}, draft mode idle` }));
   }
 
   const leagueId = await resolveLeague();
-  const playersDB = await getPlayersTrim();
+  const [playersDB, playerValues] = await Promise.all([
+    getPlayersTrim(),
+    store.get("player_values", { type: "json" }),
+  ]);
 
-  // Pull the draft + picks already made, if a draft exists
-  let alreadyDrafted = [];
-  let draftInfo = null;
+  // Who is already drafted, and what have I drafted so far (for need weighting)?
+  let draftedIds = new Set();
+  let myDraftedByPos = { QB: 0, RB: 0, WR: 0, TE: 0, K: 0, DEF: 0 };
+  let picksMade = 0, myRosterId = null, onTheClock = null, draftInfo = null;
   try {
     const drafts = await fetch(`https://api.sleeper.app/v1/league/${leagueId}/drafts`).then(r => r.json());
     if (drafts && drafts.length) {
       draftInfo = drafts[0];
+      // find my draft slot from draft_order (user_id -> slot)
+      const order = draftInfo.draft_order || {};
+      const mySlot = order[MY_USER_ID];
       const picks = await fetch(`https://api.sleeper.app/v1/draft/${draftInfo.draft_id}/picks`).then(r => r.json());
-      alreadyDrafted = (picks || []).map(p => {
-        const info = playersDB[p.player_id] || {};
-        return `${info.n || p.player_id} (${info.p || "?"}) - pick ${p.pick_no}`;
-      });
+      picksMade = (picks || []).length;
+      for (const p of picks || []) {
+        draftedIds.add(p.player_id);
+        if (p.picked_by === MY_USER_ID) {
+          const pos = (playersDB[p.player_id] || {}).p;
+          if (myDraftedByPos[pos] != null) myDraftedByPos[pos]++;
+        }
+      }
     }
   } catch (e) { /* draft not created yet */ }
 
-  const me = snapshot.teams.find(t => t.isMe) || {};
-  const draftedNote = alreadyDrafted.length
-    ? `\n\nALREADY DRAFTED (do NOT recommend these, they are gone):\n${alreadyDrafted.join("\n")}`
-    : "\n\nThe draft has not started yet; this is pre-draft prep.";
-
-  const prompt = `You are my dynasty draft war room. Use web search heavily for the current incoming rookie class: consensus rankings, landing spots, depth charts, camp buzz, and dynasty rookie ADP. ${status === "drafting" ? "A draft is LIVE right now." : "The rookie draft is coming up soon."}
-
-${leagueContextBlock(snapshot)}
-
-MY ROSTER (The Nightmen):
-${myRosterBlock(snapshot)}
-
-MY FLAGGED HOLES: ${(me.holes || []).join("; ") || "none"}
-MY SURPLUS: ${(me.surplus || []).join("; ") || "none"}
-MY FUTURE PICKS: ${(me.picks || []).map(p => `${p.season} R${p.round}`).join(", ")}
-${draftedNote}
-
-Build my draft board:
-1. TOP TARGETS FOR ME: rank the 8-12 incoming rookies/players I should most want, tuned to MY roster needs (weight my holes heavily, but take elite talent that falls regardless). For each: position, landing spot, why they fit MY team specifically, and rough dynasty ADP so I know when to expect them.
-2. AVOID FOR ME: 2-3 hyped players who don't fit my roster or whose situation is a trap.
-3. PICK STRATEGY: given my picks and needs, should I trade up, down, or stand pat? Package suggestions if a move makes sense.
-${status === "drafting" ? "4. BEST AVAILABLE RIGHT NOW: given who's already gone above, the single best pick for me if I'm on the clock." : ""}
-
-Confidence (High/Medium/Low) on each target, and a one-line "Case against" on your top target.
-
-MANDATORY FINAL SECTION: end with "## THE MOVE" and one directive for my draft approach.`;
-
-  try {
-    const text = await callClaude(prompt, { maxTokens: 3800 });
-    await store.setJSON("draft_board", {
-      at: Date.now(), status, text,
-      draftStarted: alreadyDrafted.length > 0,
-      picksMade: alreadyDrafted.length,
-    });
-  } catch (err) {
-    await store.setJSON("draft_board", { at: Date.now(), status, error: err.message });
+  // Build the available board from market values, best first, drop drafted.
+  const pv = (playerValues && playerValues.players) || {};
+  // map value keys (normalized names) back to Sleeper ids for drafted-removal
+  const idByNorm = {};
+  for (const [pid, info] of Object.entries(playersDB)) {
+    if (info.n) idByNorm[norm(info.n)] = pid;
   }
 
-  return new Response(JSON.stringify({ ok: true, status, picksMade: alreadyDrafted.length }), {
+  // Roster-need weighting: startup lineup wants QB1, ~2 RB, ~2-3 WR, 1 TE plus
+  // flex/bench. Under-filled positions get a small bump so the board leans
+  // toward what I still need without ignoring elite talent.
+  const targetByPos = { QB: 2, RB: 6, WR: 7, TE: 3 };
+  const needBump = (pos) => {
+    const have = myDraftedByPos[pos] || 0;
+    const target = targetByPos[pos] || 3;
+    if (have >= target) return 0.85;      // already stocked, slight fade
+    if (have === 0) return 1.12;          // nothing here yet, nudge up
+    return 1.0;
+  };
+
+  const board = [];
+  for (const [nm, info] of Object.entries(pv)) {
+    const pid = idByNorm[nm];
+    if (pid && draftedIds.has(pid)) continue;      // gone
+    if (!["QB","RB","WR","TE"].includes(info.pos)) continue; // skip K/DEF/IDP noise on a startup board
+    const adjusted = info.v * needBump(info.pos);
+    board.push({
+      name: (playersDB[pid] || {}).n || nm,
+      pos: info.pos, team: info.team, age: info.age,
+      value: info.v,
+      fitScore: Math.round(adjusted),
+    });
+  }
+  board.sort((a, b) => b.fitScore - a.fitScore);
+  const top = board.slice(0, 40);
+
+  // A short strategic read from the model. NO web search (keeps it fast and
+  // inside the function timeout). It reasons from the board + my roster.
+  const filled = Object.entries(myDraftedByPos).filter(([, n]) => n > 0).map(([p, n]) => `${p} x${n}`).join(", ") || "nothing yet";
+  const prompt = `You are my dynasty startup draft assistant. Below is the best-available board right now, already sorted by value and lightly weighted to my roster needs, with players already drafted removed. Give me a SHORT strategic read for who to QUEUE next, in 4-6 sentences max. No fluff.
+
+MY ROSTER SO FAR: ${filled}. Picks made in the draft overall: ${picksMade}.
+
+BEST AVAILABLE (name, pos, age, value 0-100, fit):
+${top.slice(0, 20).map((p, i) => `${i + 1}. ${p.name} ${p.pos}${p.age ? " " + p.age : ""} val ${p.value} fit ${p.fitScore}`).join("\n")}
+
+Tell me: (1) the 2-3 names to queue right now and why, weighing value against what my roster still needs; (2) one position I should prioritize soon before it dries up; (3) one name likely to fall that is worth waiting on. Be specific and brief.`;
+
+  let read = "";
+  try {
+    read = await callClaude(prompt, { maxTokens: 900, useSearch: false });
+  } catch (e) { read = ""; }
+
+  await store.setJSON("draft_board", {
+    at: Date.now(), status,
+    draftStarted: picksMade > 0,
+    picksMade,
+    myDraftedByPos,
+    board: top,
+    read,
+  });
+
+  return new Response(JSON.stringify({ ok: true, status, picksMade, boardSize: top.length }), {
     headers: { "content-type": "application/json" },
   });
 };
