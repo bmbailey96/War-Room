@@ -1247,8 +1247,12 @@ function renderPlayerPanel() {
       <div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(h.display_name || '')} &middot; ${esc(owner.stance && owner.stance.label ? owner.stance.label : owner.stance || '')}</div>
       <div style="font-size:11px;color:var(--muted);margin-top:4px">${h.trades_count ?? '?'} career trades${h.trade_positions_acquired ? `, hunts ${Object.entries(h.trade_positions_acquired).sort((a,b)=>b[1]-a[1]).slice(0,2).map(x=>x[0]).join(' and ')}` : ''}${h.dead_starts_4yr >= 30 ? `<br/><span style="color:var(--amber)">${h.dead_starts_4yr} dead starts in 4 years: inattentive, buy low</span>` : ''}</div>`;
   } else {
+    const dbrd = (S.server || {}).draftBoard;
+    const bidx = dbrd && dbrd.board ? dbrd.board.findIndex(x => normName(x.name) === normName(name)) : -1;
+    const bnote = bidx !== -1 ? (dbrd.board[bidx].note || null) : null;
     ownerBlock = `<div style="color:var(--green);font-family:var(--display);font-size:13px;letter-spacing:0.05em">NOT ROSTERED</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:3px">Free agent or incoming rookie.</div>`;
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">${bidx !== -1 ? `Available in the draft, number ${bidx + 1} on your board.` : 'Free agent or incoming rookie.'}</div>
+      ${bnote ? `<div style="font-size:11.5px;color:var(--paper);margin-top:7px;border-left:2px solid var(--line-bright);padding-left:9px;line-height:1.5">${esc(bnote)}</div>` : ''}`;
   }
 
   const trendLine = tr
@@ -2039,7 +2043,13 @@ function renderDraftRoom() {
   if (db.error) return `${watchBtn}<div class="error-msg">Draft board build failed: ${esc(db.error)}</div>`;
 
   const drafted = S.draftLiveDrafted || new Set();
-  const liveBoard = (db.board || []).filter(p => !drafted.has(normName(p.name)));
+  const valueBoard = (db.board || []).filter(p => !drafted.has(normName(p.name)));
+  // Consensus rank for comparison, so you can see how far the AI moved someone.
+  const consensusRank = {};
+  (db.board || []).forEach((p, i) => { consensusRank[normName(p.name)] = i + 1; });
+  const aiRanked = (db.aiBoard || []).filter(p => !drafted.has(normName(p.name)));
+  const usingAI = aiRanked.length > 0;
+  const liveBoard = usingAI ? aiRanked : valueBoard;
 
   const posColor = { QB: 'var(--amber)', RB: 'var(--green)', WR: 'var(--line-bright)', TE: 'var(--rust)' };
   const posName = { QB: 'quarterback', RB: 'running back', WR: 'receiver', TE: 'tight end' };
@@ -2081,19 +2091,36 @@ function renderDraftRoom() {
   const filled = Object.entries(db.myDraftedByPos || {}).filter(([, n]) => n > 0);
   const mine = filled.length ? `<div class="ai-note" style="margin-bottom:10px">Your roster so far: ${filled.map(([p, n]) => `${p} x${n}`).join(", ")}</div>` : '';
 
+  const riskColor = { Low: 'var(--green)', Medium: 'var(--amber)', High: 'var(--rust)' };
   const fullRows = liveBoard.slice(0, 40).map((p, i) => {
     const c = posColor[p.pos] || 'var(--muted)';
-    return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(127,196,224,0.06)">
+    const cr = consensusRank[normName(p.name)];
+    const move = (usingAI && cr) ? cr - (i + 1) : 0;
+    const moveTag = move > 2
+      ? `<span style="color:var(--green);font-size:10px" title="ranked higher than consensus">&#9650;${move}</span>`
+      : move < -2
+        ? `<span style="color:var(--rust);font-size:10px" title="ranked lower than consensus">&#9660;${Math.abs(move)}</span>`
+        : '';
+    const riskTag = p.risk ? `<span style="color:${riskColor[p.risk] || 'var(--muted)'};font-size:9.5px;border:1px solid ${riskColor[p.risk] || 'var(--muted)'};border-radius:3px;padding:0 4px">${esc(p.risk)}</span>` : '';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:${p.note ? 'none' : '1px solid rgba(127,196,224,0.06)'}">
       <span style="font-family:var(--mono);font-size:11px;color:var(--muted);width:20px;text-align:right">${i + 1}</span>
       <span style="font-family:var(--display);font-size:10px;color:${c};border:1px solid ${c};border-radius:3px;padding:1px 5px;width:32px;text-align:center">${p.pos}</span>
-      <span style="flex:1;color:var(--paper);font-size:13px;cursor:pointer" onclick="showPlayer('${esc(p.name).replace(/'/g, "\\'")}')">${esc(p.name)}${p.age ? `<span style="color:var(--muted);font-size:11px"> ${p.age}y</span>` : ''}</span>
-      <span style="font-family:var(--mono);font-size:12px;color:var(--muted);width:26px;text-align:right">${p.value}</span>
-    </div>`;
+      <span style="flex:1;color:var(--paper);font-size:13px;cursor:pointer" onclick="showPlayer('${esc(p.name).replace(/'/g, "\\'")}')">${esc(p.name)}${p.age ? `<span style="color:var(--muted);font-size:11px"> ${p.age}y</span>` : ''} ${moveTag} ${riskTag}</span>
+      <span style="font-family:var(--mono);font-size:12px;color:var(--muted);width:60px;text-align:right" title="consensus market value${cr ? `, consensus rank ${cr}` : ''}">${p.value}${cr && usingAI ? `<span style="font-size:9.5px"> #${cr}</span>` : ''}</span>
+    </div>${p.note ? `<div style="font-size:10.5px;color:var(--muted);padding:0 0 7px 62px;border-bottom:1px solid rgba(127,196,224,0.06);line-height:1.45">${esc(p.note)}</div>` : ''}`;
   }).join('');
-  const fullBoard = `<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--line-bright);font-size:12px">Show the full board (raw value)</summary><div style="margin-top:8px">${fullRows}</div></details>`;
+  const boardLabel = usingAI
+    ? 'Show the full board (ranked for your roster)'
+    : 'Show the full board (raw consensus value, AI ranking not built yet)';
+  const boardNote = usingAI
+    ? `<div class="chart-note" style="margin-bottom:6px">Ranked by the draft brain for your roster specifically, weighing camp reporting, landing spot and scheme, your holes and surplus, tier survival before your next pick, and how you actually manage a lineup. The number on the right is consensus value and consensus rank, so you can see where it disagreed. Green up arrow means it ranked him higher than the market, red down arrow means lower.</div>`
+    : `<div class="chart-note" style="margin-bottom:6px">Raw consensus value order. The AI ranking has not been built yet for this board.</div>`;
+  const fullBoard = `<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--line-bright);font-size:12px">${boardLabel}</summary><div style="margin-top:8px">${boardNote}${fullRows}</div></details>`;
 
   return `${watchBtn}${alert}${pickBox}${backupHtml}${prioritizeHtml}${mine}${fullBoard}
-    <div class="ai-note" style="margin-top:10px">Updated ${timeAgo(db.at)}${watching ? ', watching live' : ''}.</div>`;
+    <div class="ai-note" style="margin-top:10px">Updated ${timeAgo(db.at)}${watching ? ', watching live' : ''}.${
+      db.reasoning && db.reasoning.status === 'running' ? ' <span style="color:var(--amber)">Reasoning pass running with live news search, refresh in a minute for the per-player notes.</span>' : ''
+    }${db.reasoning && db.reasoning.status === 'error' ? ` <span style="color:var(--rust)">Reasoning pass failed: ${esc(db.reasoning.error || 'unknown')}</span>` : ''}</div>`;
 }
 
 function normName(s) {
