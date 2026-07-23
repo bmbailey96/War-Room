@@ -11,7 +11,7 @@
 // 1.01 that "ranks like the 20th player" gets the 20th player's value.
 // This produces a real, non-guessed pick curve.
 
-import { blobs } from "./lib/ocho.mjs";
+import { blobs, normName } from "./lib/ocho.mjs";
 
 const PLAYERS_URL = "https://raw.githubusercontent.com/dynastyprocess/data/master/files/values-players.csv";
 const PICKS_URL = "https://raw.githubusercontent.com/dynastyprocess/data/master/files/values-picks.csv";
