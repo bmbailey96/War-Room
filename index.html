@@ -1255,7 +1255,7 @@ function radarChart(t, allTeams) {
 // already anchor to. This is the closest thing to an objective power ranking.
 function powerRankRows(teams) {
   const pv = (S.server && S.server.playerValues && S.server.playerValues.players) || {};
-  const normPV = s => (s || '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
+  const normPV = normName;
   return teams.map(t => ({
     k: t.name,
     v: t.players.reduce((sum, p) => sum + ((pv[normPV(p.name)] || {}).v || 0), 0),
@@ -1663,7 +1663,7 @@ function renderDraftRoom() {
 }
 
 function normName(s) {
-  return (s || '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
+  return (s || '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '').replace(/\s+/g, ' ').trim();
 }
 
 function toggleDraftWatch() {
