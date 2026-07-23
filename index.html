@@ -1133,6 +1133,185 @@ function copyMsg() {
 window.draftMessage = draftMessage;
 window.copyMsg = copyMsg;
 
+// ---------- PLAYER PANEL ----------
+// Click any player name anywhere in the app to get everything the War Room
+// knows about him in one place. Pure local data, so it opens instantly.
+// The trade button routes through the existing chat function.
+
+function playerLookup(name) {
+  const key = normName(name);
+  const pv = (S.server && S.server.playerValues && S.server.playerValues.players) || {};
+  const val = (pv[key] || {}).v;
+  let owner = null, p = null;
+  for (const t of (S.teams || [])) {
+    const hit = (t.players || []).find(x => normName(x.name) === key);
+    if (hit) { owner = t; p = hit; break; }
+  }
+  if (!p) {
+    const db = (S.server || {}).draftBoard;
+    const b = db && db.board ? db.board.find(x => normName(x.name) === key) : null;
+    if (b) p = { name: b.name, pos: b.pos, age: b.age, team: b.team, inj: null };
+    else if (pv[key]) p = { name, pos: pv[key].pos, age: pv[key].age, team: pv[key].team, inj: null };
+    else p = { name, pos: null, age: null, team: null, inj: null };
+  }
+  return { p, owner, val };
+}
+
+function posRankOf(name, pos) {
+  if (!pos || !S.teams) return null;
+  const pv = (S.server && S.server.playerValues && S.server.playerValues.players) || {};
+  const all = [];
+  for (const t of S.teams) for (const x of (t.players || [])) {
+    if (x.pos !== pos) continue;
+    const v = (pv[normName(x.name)] || {}).v;
+    if (v != null) all.push({ name: x.name, v });
+  }
+  if (!all.length) return null;
+  all.sort((a, b) => b.v - a.v);
+  const i = all.findIndex(x => normName(x.name) === normName(name));
+  return i === -1 ? null : { rank: i + 1, of: all.length };
+}
+
+function showPlayer(name) {
+  S.panelPlayer = name;
+  S.panelTrade = null;
+  S.panelTradeRunning = false;
+  renderPlayerPanel();
+}
+function closePlayer() {
+  S.panelPlayer = null; S.panelTrade = null; S.panelTradeRunning = false;
+  renderPlayerPanel();
+}
+window.showPlayer = showPlayer;
+window.closePlayer = closePlayer;
+
+async function buildTradeAround(name) {
+  S.panelTradeRunning = true; S.panelTrade = null; renderPlayerPanel();
+  try {
+    const { owner } = playerLookup(name);
+    const mine = owner && owner.isMe;
+    const q = mine
+      ? `Build me 2 realistic trade packages that move ${name} off my roster for the best return. Name the partner for each, exactly what goes each way including picks, why that owner says yes, and which one to send first. If holding him is better than any deal available, say that instead.`
+      : `Build me 2 realistic trade packages to acquire ${name}${owner ? ` from ${owner.name}` : ''}. Exactly what goes each way including picks, why that owner would say yes given their tendencies and roster holes, and which package to send first. Be honest if he is not worth acquiring for me at a fair price.`;
+    let answer = null;
+    if (S.isDeployed) {
+      try {
+        const res = await fetch('/.netlify/functions/chat', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q, history: [] }),
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
+          const data = await res.json();
+          if (data.text) answer = data.text;
+        }
+      } catch (inner) { /* fall through */ }
+    }
+    if (!answer) answer = await callClaude(buildChatPrompt(q, []), { useSearch: false, maxTokens: 1600 });
+    S.panelTrade = answer;
+  } catch (e) {
+    S.panelTrade = 'Could not build a trade: ' + e.message;
+  } finally {
+    S.panelTradeRunning = false; renderPlayerPanel();
+  }
+}
+window.buildTradeAround = buildTradeAround;
+
+function renderPlayerPanel() {
+  let el = document.getElementById('player-panel');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'player-panel';
+    document.body.appendChild(el);
+  }
+  const name = S.panelPlayer;
+  if (!name) { el.innerHTML = ''; return; }
+
+  const { p, owner, val } = playerLookup(name);
+  const tr = (typeof valueTrendFE === 'function') ? valueTrendFE(name) : null;
+  const rank = posRankOf(name, p.pos);
+  const h = owner ? (owner.history || OWNER_HISTORY[owner.ownerId] || {}) : {};
+  const tier = (owner && owner.isMe && typeof playerTier === 'function') ? playerTier(p, owner) : null;
+
+  const news = (((S.server || {}).news || {}).items || [])
+    .filter(i => (i.title || '').toLowerCase().includes(name.toLowerCase()))
+    .slice(0, 3);
+
+  const row = (k, v) => `<div class="stat-line"><span>${k}</span><b>${v}</b></div>`;
+
+  let ownerBlock;
+  if (owner && owner.isMe) {
+    ownerBlock = `<div style="color:var(--amber);font-family:var(--display);font-size:13px;letter-spacing:0.05em">ON YOUR ROSTER</div>`;
+  } else if (owner) {
+    ownerBlock = `<div style="color:var(--line-bright);font-family:var(--display);font-size:13px;letter-spacing:0.05em">${esc(owner.name)}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(h.display_name || '')} &middot; ${esc(owner.stance && owner.stance.label ? owner.stance.label : owner.stance || '')}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">${h.trades_count ?? '?'} career trades${h.trade_positions_acquired ? `, hunts ${Object.entries(h.trade_positions_acquired).sort((a,b)=>b[1]-a[1]).slice(0,2).map(x=>x[0]).join(' and ')}` : ''}${h.dead_starts_4yr >= 30 ? `<br/><span style="color:var(--amber)">${h.dead_starts_4yr} dead starts in 4 years: inattentive, buy low</span>` : ''}</div>`;
+  } else {
+    ownerBlock = `<div style="color:var(--green);font-family:var(--display);font-size:13px;letter-spacing:0.05em">NOT ROSTERED</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">Free agent or incoming rookie.</div>`;
+  }
+
+  const trendLine = tr
+    ? `<div class="stat-line"><span>Value trend</span><b style="color:${tr.delta > 0 ? 'var(--green)' : tr.delta < 0 ? 'var(--rust)' : 'var(--muted)'}">${tr.then} &rarr; ${tr.now} (${tr.delta > 0 ? '+' : ''}${tr.delta})</b></div>`
+    : `<div class="stat-line"><span>Value trend</span><b style="color:var(--muted)">needs a few more days of history</b></div>`;
+
+  const tierBlock = tier
+    ? `<div style="border-left:3px solid ${tier.color};padding:6px 10px;margin:10px 0;background:rgba(255,255,255,0.02)">
+        <div style="color:${tier.color};font-family:var(--display);font-size:12px;letter-spacing:0.05em">${tier.icon} ${esc(tier.label)}</div>
+        <div style="font-size:11.5px;color:var(--paper);margin-top:3px">${esc(tier.why)}</div></div>`
+    : '';
+
+  const newsBlock = news.length
+    ? `<div style="margin-top:10px"><div class="call-slot-label" style="color:var(--line-bright);margin-bottom:4px">Recent headlines</div>
+        ${news.map(i => `<div style="font-size:11px;color:var(--muted);padding:2px 0"><a href="${esc(i.link)}" target="_blank" rel="noopener" style="color:var(--paper);text-decoration:none">${esc(i.title)}</a> <span style="color:var(--line-bright)">${timeAgo(i.at)}</span></div>`).join('')}</div>`
+    : '';
+
+  const tradeBtnLabel = owner && owner.isMe ? 'Build a trade to move him' : 'Build a trade to get him';
+  const tradeBlock = S.panelTradeRunning
+    ? `<div class="ai-result" style="margin-top:10px"><span class="spinner"></span>Working out packages, 20 to 60 seconds.</div>`
+    : (S.panelTrade ? `<div class="ai-result" style="margin-top:10px">${renderMd(S.panelTrade)}</div>` : '');
+
+  el.innerHTML = `
+    <div onclick="closePlayer()" style="position:fixed;inset:0;background:rgba(6,16,26,0.72);z-index:900"></div>
+    <div style="position:fixed;z-index:901;top:50%;left:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:88vh;overflow:auto;background:var(--panel);border:2px solid var(--line-bright);padding:18px 20px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div>
+          <div style="font-family:var(--display);font-size:24px;line-height:1.1">${esc(p.name)}</div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:3px">${esc(p.pos || '?')}${p.team ? ', ' + esc(p.team) : ''}${p.age ? ', age ' + p.age : ' (rookie)'}${p.inj ? ` &middot; <span style="color:var(--rust)">${esc(p.inj)}</span>` : ''}</div>
+        </div>
+        <button onclick="closePlayer()" style="flex:none">Close</button>
+      </div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">${ownerBlock}</div>
+      <div style="margin-top:10px">
+        ${row('Market value', val != null ? val + ' / 100' : 'not in the values file')}
+        ${rank ? row('Rank at ' + p.pos, rank.rank + ' of ' + rank.of + ' rostered') : ''}
+        ${trendLine}
+      </div>
+      ${tierBlock}
+      ${newsBlock}
+      <div style="margin-top:12px">
+        <button onclick="buildTradeAround('${esc(p.name).replace(/'/g, "\\'")}')" ${S.panelTradeRunning ? 'disabled' : ''}>${tradeBtnLabel}</button>
+      </div>
+      ${tradeBlock}
+    </div>`;
+}
+
+// Wrap known player names inside AI prose so they open the panel too.
+function linkifyPlayers(html) {
+  if (!html) return html;
+  const names = new Set();
+  for (const t of (S.teams || [])) for (const p of (t.players || [])) if (p.name && p.name.length >= 6) names.add(p.name);
+  const db = (S.server || {}).draftBoard;
+  if (db && db.board) for (const p of db.board) if (p.name && p.name.length >= 6) names.add(p.name);
+  if (!names.size) return html;
+  const sorted = [...names].sort((a, b) => b.length - a.length);
+  const rxEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let rx;
+  try { rx = new RegExp('(?![^<]*>)\\b(' + sorted.map(rxEsc).join('|') + ')\\b', 'g'); }
+  catch (e) { return html; }
+  return html.replace(rx, m => `<span onclick="showPlayer('${m.replace(/'/g, "\\'")}')" style="cursor:pointer;border-bottom:1px dotted var(--line-bright)">${m}</span>`);
+}
+
 function renderTeams() {
   if (!S.teams) return '<div class="empty-msg">Pull live data first.</div>';
   const POS_ORDER = ['QB','RB','WR','TE','K','DEF'];
@@ -1151,7 +1330,7 @@ function renderTeams() {
             ? ` <span style="color:${vtr.delta > 0 ? 'var(--green)' : 'var(--rust)'};font-size:9.5px">${vtr.delta > 0 ? '&#9650;' : '&#9660;'}${Math.abs(vtr.delta)}</span>` : '';
           const tier = playerTier(p, t);
           const tierMark = tier ? ` <span title="${esc(tier.label)}. ${esc(tier.why)}" style="color:${tier.color};font-size:10px">${tier.icon}</span>` : '';
-          return `<span class="player-chip ${cls}">${esc(p.name)} <span class="meta">${p.age || '?'}</span>${arrow}${tierMark}${p.inj ? ` <span style="color:var(--rust)">${esc(p.inj)}</span>` : ''}</span>`;
+          return `<span class="player-chip ${cls}" onclick="showPlayer('${esc(p.name).replace(/'/g, "\\'")}')" style="cursor:pointer">${esc(p.name)} <span class="meta">${p.age || '?'}</span>${arrow}${tierMark}${p.inj ? ` <span style="color:var(--rust)">${esc(p.inj)}</span>` : ''}</span>`;
         }).join('')
       }</div>`).join('');
     const picksLine = t.picks.map(p => `${p.season} R${p.round}${p.original !== t.name ? `*` : ''}`).join(', ');
@@ -1703,7 +1882,7 @@ function assetChip(a) {
   const posColor = { QB:'#c78bde', RB:'#6fbf8b', WR:'#7fc4e0', TE:'#e8a33d', K:'#8fa8bc', DEF:'#8fa8bc' }[a.pos] || 'var(--muted)';
   const isPick = a.type === 'pick';
   return `<div class="asset ${isPick ? 'asset-pick' : ''}">
-    <span class="asset-name">${isPick ? '◆ ' : ''}${esc(a.name)}</span>
+    <span class="asset-name"${isPick ? '' : ` onclick="showPlayer('${esc(a.name).replace(/'/g, "\\'")}')" style="cursor:pointer;border-bottom:1px dotted var(--line-bright)"`}>${isPick ? '◆ ' : ''}${esc(a.name)}</span>
     <span class="asset-meta">${a.pos ? `<span style="color:${posColor}">${a.pos}</span> · ` : ''}val ${a.value ?? '?'}</span>
     <div class="asset-bar"><div class="asset-bar-fill" style="width:${Math.min(a.value||0,100)}%"></div></div>
   </div>`;
@@ -1781,10 +1960,10 @@ function renderAITab(tabKey) {
     resultHtml = `<div class="error-msg">Analysis failed: ${esc(session.error)}. ${S.isDeployed ? 'Check the Netlify function logs and API key.' : 'Inside Claude, just retry.'}</div>`;
   } else if (session) {
     const meta = `Fresh run, generated ${session.at.toLocaleTimeString()} with live web research.`;
-    resultHtml = isTrades ? renderTradesVisual(session.text, meta) : `<div class="ai-result">${renderMd(clean(session.text))}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
+    resultHtml = isTrades ? renderTradesVisual(session.text, meta) : `<div class="ai-result">${linkifyPlayers(renderMd(clean(session.text)))}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
   } else if (stored && stored.status === 'done') {
     const meta = `Auto-generated ${timeAgo(stored.at)} by the scheduled run. Hit the button for an on-demand refresh.`;
-    resultHtml = isTrades ? renderTradesVisual(stored.text, meta) : `<div class="ai-result">${renderMd(clean(stored.text))}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
+    resultHtml = isTrades ? renderTradesVisual(stored.text, meta) : `<div class="ai-result">${linkifyPlayers(renderMd(clean(stored.text)))}</div><div class="ai-note" style="margin-top:8px">${meta}</div>`;
   } else if (stored && stored.status === 'running') {
     resultHtml = `<div class="ai-result"><span class="spinner"></span>The scheduled run is working on this right now. Refresh in a minute.</div>`;
   } else if (stored && stored.status === 'error') {
@@ -1884,7 +2063,7 @@ function renderDraftRoom() {
       const c = posColor[p.pos] || 'var(--muted)';
       return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(127,196,224,0.08)">
         <span style="font-family:var(--display);font-size:10px;color:${c};border:1px solid ${c};border-radius:3px;padding:1px 6px;min-width:34px;text-align:center">${p.pos}</span>
-        <span style="flex:1;color:var(--paper);font-size:14px">${esc(p.name)}</span>
+        <span style="flex:1;color:var(--paper);font-size:14px;cursor:pointer" onclick="showPlayer('${esc(p.name).replace(/'/g, "\\'")}')">${esc(p.name)}</span>
         <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">${p.value}</span>
       </div>`;
     }).join('');
@@ -1907,7 +2086,7 @@ function renderDraftRoom() {
     return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(127,196,224,0.06)">
       <span style="font-family:var(--mono);font-size:11px;color:var(--muted);width:20px;text-align:right">${i + 1}</span>
       <span style="font-family:var(--display);font-size:10px;color:${c};border:1px solid ${c};border-radius:3px;padding:1px 5px;width:32px;text-align:center">${p.pos}</span>
-      <span style="flex:1;color:var(--paper);font-size:13px">${esc(p.name)}${p.age ? `<span style="color:var(--muted);font-size:11px"> ${p.age}y</span>` : ''}</span>
+      <span style="flex:1;color:var(--paper);font-size:13px;cursor:pointer" onclick="showPlayer('${esc(p.name).replace(/'/g, "\\'")}')">${esc(p.name)}${p.age ? `<span style="color:var(--muted);font-size:11px"> ${p.age}y</span>` : ''}</span>
       <span style="font-family:var(--mono);font-size:12px;color:var(--muted);width:26px;text-align:right">${p.value}</span>
     </div>`;
   }).join('');
