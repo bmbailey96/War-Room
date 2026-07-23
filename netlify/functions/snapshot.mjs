@@ -74,6 +74,7 @@ export default async (req) => {
   if (lastDay !== today) {
     const point = {
       date: today,
+      leagueId: snapshot.leagueId,
       teams: snapshot.teams.map(t => ({
         name: t.name,
         wins: t.wins, losses: t.losses,

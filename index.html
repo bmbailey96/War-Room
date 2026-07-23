@@ -598,7 +598,7 @@ function computeTeams() {
     }
   });
 
-  return S.rosters.map(r => {
+  const teams = S.rosters.map(r => {
     const st = r.settings || {};
     const wins = st.wins || 0, losses = st.losses || 0;
     const winPct = wins / Math.max(wins + losses, 1);
@@ -622,15 +622,25 @@ function computeTeams() {
       name: teamName(r.owner_id),
       ownerName: (OWNER_HISTORY[r.owner_id]||{}).display_name || '',
       wins, losses, winPct, avgAge,
+      pointsFor: Math.round(fpts * 10) / 10,
+      pointsAgainst: Math.round(((st.fpts_against || 0) + (st.fpts_against_decimal || 0) / 100) * 10) / 10,
       benchLeakage: ppts ? Math.round((ppts - fpts)*10)/10 : null,
       depth, holes, surplus, injured,
       players,
       picks: ledger[r.roster_id].sort((a,b)=>a.season.localeCompare(b.season)||a.round-b.round),
-      stance: stance(winPct, avgAge || 27),
+      stance: stance((wins + losses) > 0 ? winPct : (((OWNER_HISTORY[r.owner_id]||{}).win_pct) ?? 0.5), avgAge || 27),
       history: OWNER_HISTORY[r.owner_id] || {},
       isMe: r.owner_id === MY_USER_ID,
     };
   });
+  const anyGames = teams.some(t => (t.wins + t.losses) > 0);
+  const histPctOf = t => ((t.history || {}).win_pct ?? 0);
+  const ranked = [...teams].sort((a, b) =>
+    anyGames ? ((b.wins - a.wins) || (b.pointsFor - a.pointsFor)) : (histPctOf(b) - histPctOf(a))
+  );
+  ranked.forEach((t, i) => { t.projectedSeed = i + 1; });
+  S.preseason = !anyGames;
+  return teams;
 }
 
 function exploitBoard() {
@@ -1302,8 +1312,10 @@ function powerRankRows(teams) {
 // engine's daily datapoints. Needs 3+ days of history to be worth showing.
 function seedTrendChart(teams, meName) {
   const trends = (S.server || {}).trends;
-  if (!trends || !trends.days || trends.days.length < 3) return null;
-  const days = trends.days.slice(-30);
+  if (!trends || !trends.days) return null;
+  const curId = (S.server && S.server.snapshot && S.server.snapshot.leagueId) || null;
+  const days = trends.days.filter(d => d.leagueId && d.leagueId === curId).slice(-30);
+  if (days.length < 3) return null;
   const W = 640, H = 300, pad = 40;
   const n = teams.length || 8;
   const px = i => pad + (days.length > 1 ? i / (days.length - 1) : 0) * (W - pad * 2);
@@ -1627,7 +1639,7 @@ function renderStandings() {
       <td><span class="stance-badge ${t.stance.cls}">${t.stance.label}</span></td>
     </tr>`;
   }).join('');
-  return `<div class="chart-note" style="margin-bottom:10px">Green dot = in the projected playoff cut (top ${playoffN}). Ranked by wins, then points for. Preseason this reflects points-for order until games are played.</div>
+  return `<div class="chart-note" style="margin-bottom:10px">Green dot = in the projected playoff cut (top ${playoffN}). ${S.preseason ? 'No games played yet, so this is ranked by last season\\'s win rate as a placeholder.' : 'Ranked by wins, then points for.'}</div>
     <table class="trend-table"><tr><th>Seed</th><th>Team</th><th>Rec</th><th>PF</th><th>PA</th><th>Stance</th></tr>${rows}</table>`;
 }
 
@@ -2130,7 +2142,11 @@ function renderTrends() {
   if (!trends || !trends.days || trends.days.length < 2) {
     return `<div class="empty-msg">The trend engine needs a few days of history to show movement. It records one datapoint per team per day on the deployed site; check back after it has been live 2+ days.</div>`;
   }
-  const days = trends.days;
+  const curId = (S.server && S.server.snapshot && S.server.snapshot.leagueId) || null;
+  const days = trends.days.filter(d => d.leagueId && d.leagueId === curId);
+  if (days.length < 2) {
+    return `<div class="empty-msg">Trend history restarted with the new season's league. It needs a couple of days of datapoints before movement can be shown.</div>`;
+  }
   const latest = days[days.length - 1];
   const prior = days.find(d => (new Date(latest.date) - new Date(d.date)) / 86400000 >= 6) || days[0];
   const prevByName = Object.fromEntries((prior.teams || []).map(t => [t.name, t]));
@@ -2250,24 +2266,32 @@ async function evaluateTrade(passedOffer) {
   if (!offer) return;
   S.evalRunning = true; S.evalResult = null; renderTab();
   try {
-    let result = null;
     if (S.isDeployed) {
-      try {
-        const res = await fetch('/.netlify/functions/evaluate', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offer }),
-        });
-        const ct = res.headers.get('content-type') || '';
-        if (res.ok && ct.includes('application/json')) {
-          const data = await res.json();
-          if (data.text) result = data.text;
-        }
-      } catch (inner) { /* fall through to the direct AI call */ }
+      const prevAt = ((S.server || {}).evaluation || {}).at || 0;
+      await fetch('/.netlify/functions/evaluate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer }),
+      });
+      let polls = 0;
+      await new Promise(resolve => {
+        const timer = setInterval(async () => {
+          polls++;
+          await loadServerData();
+          const cur = (S.server || {}).evaluation || {};
+          if ((cur.status === 'done' || cur.status === 'error') && (cur.at || 0) > prevAt) {
+            clearInterval(timer);
+            S.evalResult = cur.status === 'done' ? cur.text : ('Could not evaluate: ' + (cur.error || 'unknown error'));
+            resolve();
+          } else if (polls > 24) {
+            clearInterval(timer);
+            S.evalResult = 'Evaluation timed out waiting for the background run. Check the Netlify function logs.';
+            resolve();
+          }
+        }, 5000);
+      });
+    } else {
+      S.evalResult = await callClaude(buildEvalPrompt(offer), { useSearch: false, maxTokens: 2200 });
     }
-    if (!result) {
-      result = await callClaude(buildEvalPrompt(offer), { useSearch: false, maxTokens: 2200 });
-    }
-    S.evalResult = result;
   } catch (e) {
     S.evalResult = 'Could not evaluate: ' + e.message;
   } finally {

@@ -151,11 +151,17 @@ export function computeSnapshot(core, playersDB) {
       .map(([pos]) => `${pos.replace("_eligible", " (IDP)")}: only ${depth[pos] || 0} rostered`);
     const surplus = ["RB", "WR", "TE"].filter(p => (depth[p] || 0) >= 8).map(p => `${p}: ${depth[p]} rostered`);
     const injured = players.filter(p => p.inj && p.inj !== "Questionable").map(p => `${p.name} (${p.inj})`);
+    // Preseason (0-0) makes winPct 0 for everyone, which used to label the
+    // entire league as rebuilding/retooling and poisoned every AI prompt.
+    // Fall back to last season's win% until games are actually played.
+    const played = wins + losses;
+    const histPct = (OWNER_HISTORY[r.owner_id] || {}).win_pct;
+    const stancePct = played > 0 ? winPct : (histPct != null ? histPct : 0.5);
     let stance;
-    if (winPct >= 0.55 && (avgAge || 27) >= 27) stance = "Win-Now";
-    else if (winPct >= 0.55) stance = "Ascending";
-    else if (winPct < 0.45 && (avgAge || 27) < 26.5) stance = "Rebuilding";
-    else if (winPct < 0.45) stance = "Retool Needed";
+    if (stancePct >= 0.55 && (avgAge || 27) >= 27) stance = "Win-Now";
+    else if (stancePct >= 0.55) stance = "Ascending";
+    else if (stancePct < 0.45 && (avgAge || 27) < 26.5) stance = "Rebuilding";
+    else if (stancePct < 0.45) stance = "Retool Needed";
     else stance = "Middle of Pack";
     return {
       rosterId: r.roster_id, ownerId: r.owner_id,
@@ -174,8 +180,14 @@ export function computeSnapshot(core, playersDB) {
     };
   });
 
+  // Preseason everything is 0-0, so ranking by record collapses to roster
+  // order. Rank by last season's win% until real games exist.
+  const anyGames = teams.some(t => (t.wins + t.losses) > 0);
+  const histPctOf = t => ((OWNER_HISTORY[t.ownerId] || {}).win_pct ?? 0);
   const ranked = [...teams].sort((a, b) =>
-    (b.wins - a.wins) || (b.pointsFor - a.pointsFor) || (b.winPct - a.winPct)
+    anyGames
+      ? ((b.wins - a.wins) || (b.pointsFor - a.pointsFor) || (b.winPct - a.winPct))
+      : (histPctOf(b) - histPctOf(a))
   );
   const playoffTeams = (league.settings || {}).playoff_teams || 6;
   ranked.forEach((t, i) => {
@@ -197,6 +209,7 @@ export function computeSnapshot(core, playersDB) {
     },
     leagueStatus: league.status,
     playoffTeams,
+    preseason: !anyGames,
     nflState: {
       week: core.nflState.week, season_type: core.nflState.season_type, season: core.nflState.season,
     },
@@ -470,4 +483,50 @@ export function leagueStateBlock(snapshot, playerValues) {
     : (me.avgAge < avgLeagueAge ? "ascending/rebuild: young and not yet winning, accumulate" : "retool: older and losing, sell aging pieces before they crater");
 
   return `\n\nLEAGUE STATE (shared picture, computed from market values so every recommendation is consistent):\nMy contention window: ${window}.\nPositional scarcity and my standing:\n${lines.join("\n")}\nUse this as the strategic frame: chase scarce positions, sell from positions where I am already deep, and match every move to my contention window.`;
+}
+// TRADE VALIDATOR. The analyzer sometimes proposes acquiring players you
+// already own, or players the named partner does not roster (usually pulled
+// forward from its own analysis-history memory). Every roster is in the
+// snapshot, so this is checkable. Invalid cards are dropped before storage.
+export function validateTrades(text, snapshot) {
+  const me = snapshot.teams.find(t => t.isMe);
+  if (!me || !text) return { text, removed: [] };
+  const myNames = new Set(me.players.map(p => normName(p.name)));
+  const rosterByTeam = {};
+  for (const t of snapshot.teams) rosterByTeam[t.name] = new Set(t.players.map(p => normName(p.name)));
+
+  const m = text.match(/<TRADES_JSON>([\s\S]*?)<\/TRADES_JSON>/i);
+  if (!m) return { text, removed: [] };
+  let cards;
+  try {
+    let clean = m[1].replace(/```json|```/gi, "").trim();
+    const a = clean.indexOf("["), b = clean.lastIndexOf("]");
+    if (a !== -1 && b !== -1) clean = clean.slice(a, b + 1);
+    clean = clean.replace(/,\s*([\]}])/g, "$1");
+    cards = JSON.parse(clean);
+  } catch (e) { return { text, removed: [] }; }
+  if (!Array.isArray(cards)) return { text, removed: [] };
+
+  const removed = [];
+  const kept = cards.filter(c => {
+    for (const a of (c.iGet || [])) {
+      if (a.type === "pick") continue;
+      const key = normName(a.name);
+      if (myNames.has(key)) { removed.push(`${a.name} is already on my roster`); return false; }
+      const partnerSet = rosterByTeam[c.partner];
+      if (partnerSet && !partnerSet.has(key)) { removed.push(`${a.name} is not on ${c.partner}'s roster`); return false; }
+    }
+    for (const a of (c.iSend || [])) {
+      if (a.type === "pick") continue;
+      if (!myNames.has(normName(a.name))) { removed.push(`${a.name} is not on my roster to send`); return false; }
+    }
+    return true;
+  });
+
+  let out = text.replace(/<TRADES_JSON>[\s\S]*?<\/TRADES_JSON>/i,
+    `<TRADES_JSON>${JSON.stringify(kept)}</TRADES_JSON>`);
+  if (removed.length) {
+    out = `**${removed.length} proposed trade${removed.length > 1 ? "s were" : " was"} automatically removed as impossible:** ${removed.join("; ")}. The written analysis below may still reference them.\n\n---\n\n` + out;
+  }
+  return { text: out, removed };
 }

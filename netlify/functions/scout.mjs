@@ -87,12 +87,16 @@ export default async () => {
   // ---------- Haiku go/no-go ----------
   const holes = (me.holes || []).join("; ") || "none flagged";
   const surplus = (me.surplus || []).join("; ") || "none flagged";
+  const waiversLocked = snapshot.leagueStatus === "pre_draft" || snapshot.leagueStatus === "drafting";
   const prompt = `You are an alert scout for my dynasty fantasy football team. Your ONLY job is to decide if any of the NEW SIGNALS below demand an action from me RIGHT NOW. The default and most common correct answer is NO ALERTS. Only alert when the action is clear, time-sensitive, and materially valuable. Never alert to merely "monitor" something unless it is my own player's serious injury.
 
 MY TEAM (The Nightmen): record ${me.wins}-${me.losses}, waiver position ${me.waiverPosition ?? "?"} of ${snapshot.teams.length} (rolling priority, no FAAB).
 MY HOLES: ${holes}
 MY SURPLUS: ${surplus}
 MY ROSTER: ${(me.players || []).map(p => `${p.name} (${p.pos})`).join(", ")}
+${waiversLocked ? "IMPORTANT: waivers and free agency are LOCKED right now because the rookie draft has not happened yet. Do NOT issue PICKUP or DROP alerts; I cannot act on them. Only INJURY or TRADE alerts are actionable today." : ""}
+
+ACCURACY RULE: only name a player in an alert if that exact player's name appears in the signal text you are citing. Never infer that a story about a team or another player affects someone who is not named in it.
 
 NEW SIGNALS THIS HOUR:
 ${signals.join("\n")}
@@ -113,6 +117,7 @@ Empty array if nothing warrants action.`;
   }
 
   // ---------- dedupe + push ----------
+  if (waiversLocked) alerts = alerts.filter(a => a.action !== "PICKUP" && a.action !== "DROP");
   const now = Date.now();
   const sent = [];
   const alertLog = (await store.get("alerts", { type: "json" })) || [];

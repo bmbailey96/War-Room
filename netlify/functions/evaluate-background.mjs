@@ -1,0 +1,80 @@
+// TRADE EVALUATOR. On demand. Brandon describes a trade someone offered him
+// (or one he's considering), and this grades it: accept / decline / counter,
+// with a specific counter if warranted. This is the missing half of the
+// trade game: the app could propose trades but not judge incoming ones.
+//
+// Output includes the same <TRADES_JSON> structured block the trades tab
+// uses, so the app renders it as the same visual card.
+
+import {
+  blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock, valuesBlock, leagueStateBlock,
+} from "./lib/ocho.mjs";
+
+export default async (req) => {
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "POST only" }), { status: 405 });
+  }
+  let offer = "";
+  try {
+    const body = await req.json();
+    offer = (body.offer || "").slice(0, 1200);
+  } catch (e) { /* empty */ }
+  if (!offer.trim()) {
+    return new Response(JSON.stringify({ error: "describe the trade to evaluate" }), { status: 400 });
+  }
+
+  const store = blobs();
+  const snapshot = await store.get("snapshot", { type: "json" });
+  if (!snapshot) return new Response(JSON.stringify({ error: "no snapshot yet" }), { status: 409 });
+  const [newsDigest, statsDigest, trends, playerValues] = await Promise.all([
+    store.get("news_digest", { type: "json" }),
+    store.get("stats_digest", { type: "json" }),
+    store.get("trends", { type: "json" }),
+    store.get("player_values", { type: "json" }),
+  ]);
+
+  const newsLine = (newsDigest?.items || []).filter(i => i.score >= 40).slice(0, 12)
+    .map(i => `- ${i.title}`).join("\n");
+  const trendLine = trendBlock(trends);
+  const valueLine = valuesBlock(snapshot, playerValues);
+  const stateLine = leagueStateBlock(snapshot, playerValues);
+
+  const prompt = `You are my dynasty trade evaluator. Someone in my league has offered me a trade (or I'm considering one). Judge it honestly and tell me accept, decline, or counter. Use web search for current dynasty values, injuries, and news on the players involved.
+
+${leagueContextBlock(snapshot)}
+
+MY FULL ROSTER (The Nightmen):
+${myRosterBlock(snapshot)}
+${newsLine ? `\nRELEVANT RECENT HEADLINES:\n${newsLine}` : ""}${stateLine}${trendLine}${valueLine}
+
+THE TRADE ON THE TABLE (as I described it):
+"${offer}"
+
+First, if I didn't clearly specify which side gets what, infer it sensibly and state your assumption in one line.
+
+OUTPUT FORMAT: emit a <TRADES_JSON> ... </TRADES_JSON> block with a SINGLE-element array in this shape:
+[{"partner":"other manager/team","iSend":[{"name":"...","type":"player"|"pick","pos":"RB"|null,"value":0-100}],"iGet":[...],"verdict":"ACCEPT / DECLINE / COUNTER + one line why","confidence":"High"|"Medium"|"Low","leanScore":-100 to 100 (positive favors me),"caseAgainst":"one line"}]
+Values are dynasty trade value 0-100 from the market anchor above. Then in prose:
+1. Your verdict (accept/decline/counter) and the real reason, tied to MY roster needs and this player's current outlook.
+2. If COUNTER: the exact counter-offer I should send back, and why it's still fair to them (so they'll take it).
+3. Fit note: does this fix a hole of mine or open one.
+
+Then a short "## HOW SURE I AM" section with exactly three lines:
+- Confidence: High/Medium/Low, and the one biggest reason for that level.
+- Based on: name the specific things driving this call (the market values as of their date, my roster construction, the age curve, positional scarcity). Be concrete about what you used.
+- Would change if: the single piece of new information that would flip your verdict (a specific injury clearing, a role change, a value swing). This tells me what to watch.
+
+Note on data freshness: you are working from market values dated ${playerValues && playerValues.scrapeDate ? playerValues.scrapeDate : "recently"} plus my league context, not a live lookup at this moment. If the players involved are in a volatile situation where that matters, say so in the "Would change if" line.
+
+MANDATORY FINAL SECTION: end with "## THE MOVE" and one directive (accept as-is, send this counter, or walk away).`;
+
+  await store.setJSON("evaluation_result", { status: "running", startedAt: Date.now(), offer });
+  try {
+    const text = await callClaude(prompt, { maxTokens: 2000, useSearch: false });
+    await store.setJSON("evaluation_result", { status: "done", at: Date.now(), offer, text });
+    return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
+  } catch (err) {
+    await store.setJSON("evaluation_result", { status: "error", at: Date.now(), offer, error: err.message });
+    return new Response(JSON.stringify({ error: err.message }), { status: 502 });
+  }
+};

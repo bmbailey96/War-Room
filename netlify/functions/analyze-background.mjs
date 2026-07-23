@@ -4,7 +4,7 @@
 
 import {
   blobs, OWNER_HISTORY, leagueContextBlock, myRosterBlock,
-  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock, leagueStateBlock,
+  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock, leagueStateBlock, validateTrades,
 } from "./lib/ocho.mjs";
 
 function buildTrendingBlock(trendingRaw, rostersRaw, playersDB) {
@@ -94,7 +94,9 @@ ${ctx}
 MY FULL ROSTER (The Nightmen):
 ${mine}
 
-TASK: Recommend my 3 to 5 best realistic trades right now. For each: (1) exact partner and why their stance, holes, tendencies, and engagement level make them likely to deal; (2) a specific package including future picks where sensible; (3) valuations grounded in your current web research, say what you found; (4) honest risk. Prioritize my flagged holes and monetize my flagged surplus. Weight owner behavior: fair deals with active traders beat perfect deals with owners who never trade. No filler.${groundNote}
+TASK: Recommend my 3 to 5 best realistic trades right now. For each: (1) exact partner and why their stance, holes, tendencies, and engagement level make them likely to deal; (2) a specific package including future picks where sensible; (3) valuations grounded in your current web research, say what you found; (4) honest risk. Prioritize my flagged holes and monetize my flagged surplus. Weight owner behavior: fair deals with active traders beat perfect deals with owners who never trade. No filler.
+
+HARD CONSTRAINT: every player in "iGet" must currently be on the named partner's roster in the league data above, and must NOT already be on my roster. Every player in "iSend" must currently be on MY roster. Check each name against the rosters above before you write it. Do not propose acquiring a player I already own; if a player you remember targeting is now on my roster, say so and move on.${groundNote}
 
 CRITICAL OUTPUT FORMAT: Before any prose, emit a machine-readable block wrapped in <TRADES_JSON> and </TRADES_JSON> tags containing a JSON array, one object per recommended trade, in this exact shape:
 [{
@@ -223,7 +225,11 @@ export default async (req) => {
     }
     await store.setJSON(`analysis_${task}`, { status: "running", startedAt: Date.now() });
     try {
-      const text = await callClaude(P[task] + memoryBlock + trackBlock);
+      let text = await callClaude(P[task] + memoryBlock + trackBlock);
+      if (task === "trades") {
+        const v = validateTrades(text, snapshot);
+        text = v.text;
+      }
       await store.setJSON(`analysis_${task}`, { status: "done", at: Date.now(), text });
       history.push({ at: Date.now(), text });
       while (history.length > 5) history.shift();
