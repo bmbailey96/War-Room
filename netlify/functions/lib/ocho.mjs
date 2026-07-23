@@ -424,10 +424,26 @@ export function valuesBlock(snapshot, playerValues) {
     const rb = playerValues.picks[`${season} ${round}`];
     return rb ? rb.v : null;
   };
+  // A pick's worth depends enormously on where it lands: 1.01 is 64, 1.12 is
+  // 8, and the round-average bucket calls both 29. Rookie draft order is
+  // reverse standings, so estimate each pick's slot from the projected finish
+  // of the team it originally belongs to. Only for the current season's
+  // draft; future-year order is genuinely unknowable, so those stay round-avg.
+  const numTeams = snapshot.teams.length || 8;
+  const estSlot = pk => {
+    if (String(pk.season) !== String(snapshot.season)) return null;
+    const t = snapshot.teams.find(x => x.name === pk.original);
+    return t && t.projectedSeed ? (numTeams + 1 - t.projectedSeed) : null;
+  };
   const addPicks = (label, picks) => {
     const vals = (picks || []).map(pk => {
-      const v = pickVal(pk.season, pk.round, pk.slot);
-      return v != null ? `${pk.season} R${pk.round} ${v}` : null;
+      const slot = pk.slot != null ? pk.slot : estSlot(pk);
+      const v = pickVal(pk.season, pk.round, slot);
+      if (v == null) return null;
+      const from = pk.original && pk.original !== label ? ` from ${pk.original}` : "";
+      return slot != null
+        ? `${pk.season} ${pk.round}.${String(slot).padStart(2, "0")} (est${from}) = ${v}`
+        : `${pk.season} R${pk.round}${from} = ${v}`;
     }).filter(Boolean);
     if (vals.length) lines.push(`${label} pick values: ${vals.join(", ")}`);
   };

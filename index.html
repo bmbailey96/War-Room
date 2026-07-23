@@ -421,15 +421,18 @@ function renderChangeFeed() {
     const items = alerts.slice(0, 5).map(a =>
       `<div class="feed-item"><span class="when">${timeAgo(a.at)}</span> · <b style="color:var(--rust)">${esc(a.action)}</b> <b>${esc(a.title || a.player || '')}</b>: ${esc(a.message || '')}</div>`
     ).join('');
-    html += `<div class="feed-box" style="border-color:var(--rust);background:rgba(217,105,79,0.07);margin-bottom:8px"><div class="feed-title" style="color:var(--rust)">Action alerts / pushed to your phone by the hourly scout</div>${items}</div>`;
+    html += `<div class="feed-box" style="border-color:var(--rust);background:rgba(217,105,79,0.07);margin-bottom:8px"><div class="feed-title" style="color:var(--rust)">Action alerts</div>${items}</div>`;
   }
   if (log.length) {
-    const items = log.slice(0, 8).map(e =>
+    const items = log.slice(0, 20).map(e =>
       `<div class="feed-item"><span class="when">${timeAgo(e.at)}</span> · <b>${esc(e.type === 'trade' ? 'TRADE' : 'MOVE')}</b> ${esc(e.desc)}${
         e.verdict ? `<div style="padding:3px 0 3px 14px;color:var(--paper);font-size:10.5px;border-left:2px solid var(--line-bright);margin:2px 0 4px">${esc(e.verdict)}</div>` : ''
       }</div>`
     ).join('');
-    html += `<div class="feed-box"><div class="feed-title">League activity / auto-detected by the 2-hour watcher</div>${items}</div>`;
+    html += `<div class="feed-box"><details ${S.feedOpen ? 'open' : ''} ontoggle="S.feedOpen = this.open">
+      <summary style="cursor:pointer;user-select:none;list-style:none"><span class="feed-title" style="display:inline">League activity</span> <span style="color:var(--muted);font-size:10px">${log.length} recent move${log.length === 1 ? '' : 's'}, click to ${S.feedOpen ? 'collapse' : 'expand'}</span></summary>
+      <div style="margin-top:6px">${items}</div>
+    </details></div>`;
   }
   el.innerHTML = html;
 }
