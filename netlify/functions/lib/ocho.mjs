@@ -90,7 +90,16 @@ export function computeSnapshot(core, playersDB) {
 
   const draftRounds = (league.settings || {}).draft_rounds || 3;
   const currentSeason = parseInt(league.season, 10);
-  const nextSeasons = [String(currentSeason + 1), String(currentSeason + 2)];
+  // Include CURRENT-season picks while that rookie draft hasn't happened yet
+  // (pre_draft/drafting). Once it completes, those picks stop being assets
+  // and the window slides to the next two seasons, which is what the old
+  // code assumed year-round and why 2026 picks vanished after rollover.
+  const draftPending = league.status === "pre_draft" || league.status === "drafting";
+  const nextSeasons = [
+    ...(draftPending ? [String(currentSeason)] : []),
+    String(currentSeason + 1),
+    String(currentSeason + 2),
+  ];
   const tradedKeys = new Set();
   const ledger = Object.fromEntries(rosters.map(r => [r.roster_id, []]));
   for (const tp of tradedPicks || []) {
