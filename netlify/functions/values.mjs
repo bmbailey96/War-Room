@@ -25,10 +25,6 @@ function parseCsv(text) {
   });
 }
 
-function normName(s) {
-  return (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
-}
-
 // Normalize a "2026 Pick 1.03" / "2026 1st" style label into stable keys the
 // roster ledger can match: exact ("2026 1.03") and round-bucket ("2026 1").
 function pickKeys(label) {
