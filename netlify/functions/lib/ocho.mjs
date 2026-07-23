@@ -654,3 +654,25 @@ export function tradeGradeBlock(grades) {
   }).length;
   return `\n\nMY COMPLETED TRADES, GRADED IN HINDSIGHT (${wins} clear wins out of ${mine.length} graded, measured by how the acquired assets' market values actually moved after the deal):\n${lines.join("\n")}\nLet this calibrate you. If my trades have been losing, be far more conservative about what you tell me to send.`;
 }
+// UPCOMING ROOKIE DRAFT CLASS. Trade prompts otherwise treat picks as
+// abstract value ("2027 R2 = 2") with no idea who those picks become, so
+// they can't reason about drafting a hole shut instead of trading for it.
+export function draftClassBlock(draftBoard, snapshot) {
+  if (!draftBoard || !Array.isArray(draftBoard.board) || !draftBoard.board.length) return "";
+  const status = snapshot.leagueStatus;
+  if (status !== "pre_draft" && status !== "drafting") return "";
+  const me = snapshot.teams.find(t => t.isMe);
+  const myPicks = me ? (me.picks || []).filter(p => String(p.season) === String(snapshot.season)) : [];
+  const top = draftBoard.board.slice(0, 20)
+    .map((p, i) => `${i + 1}. ${p.name} ${p.pos}${p.age ? " age " + p.age : " (rookie)"} val ${p.value}`)
+    .join("\n");
+  const byPos = {};
+  for (const p of draftBoard.board.slice(0, 40)) byPos[p.pos] = (byPos[p.pos] || 0) + 1;
+  const posLine = Object.entries(byPos).map(([k, v]) => `${k} ${v}`).join(", ");
+  return `\n\nUPCOMING ROOKIE DRAFT (${snapshot.season} class, league status ${status}). My picks convert into these SPECIFIC players, so do not treat picks as abstract value.
+MY PICKS IN THIS DRAFT: ${myPicks.length ? myPicks.map(p => `${p.season} R${p.round}${me && p.original !== me.name ? ` (from ${p.original})` : ""}`).join(", ") : "none"}.
+BEST AVAILABLE IN THE CLASS (market value 0-100):
+${top}
+Top-40 class depth by position: ${posLine}.
+HOW TO USE THIS: before recommending I trade FOR a player, check whether this draft fills that need more cheaply with picks I already hold, and say so if it does. Before recommending I trade AWAY a pick, name the specific tier of player I would be giving up rather than just its point value. Trade for positions this class is thin at; draft the ones it is deep at. Kickers and defenses are never in a rookie draft, so holes there can only be fixed on waivers or by trade.`;
+}
