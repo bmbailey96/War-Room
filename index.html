@@ -1639,7 +1639,7 @@ function renderStandings() {
       <td><span class="stance-badge ${t.stance.cls}">${t.stance.label}</span></td>
     </tr>`;
   }).join('');
-  return `<div class="chart-note" style="margin-bottom:10px">Green dot = in the projected playoff cut (top ${playoffN}). ${S.preseason ? 'No games played yet, so this is ranked by last season\\'s win rate as a placeholder.' : 'Ranked by wins, then points for.'}</div>
+  return `<div class="chart-note" style="margin-bottom:10px">Green dot = in the projected playoff cut (top ${playoffN}). ${S.preseason ? 'No games played yet, so this is ranked by prior-season win rate as a placeholder.' : 'Ranked by wins, then points for.'}</div>
     <table class="trend-table"><tr><th>Seed</th><th>Team</th><th>Rec</th><th>PF</th><th>PA</th><th>Stance</th></tr>${rows}</table>`;
 }
 
