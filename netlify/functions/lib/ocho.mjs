@@ -204,11 +204,10 @@ export function describeTransaction(t, snapshot, playersDB) {
 }
 
 // ONE-LINE ACTIVITY VERDICT. Grades a single detected transaction from the
-// transacting owner's perspective: was this a smart move given their roster,
-// or a lopsided trade, and who won it. Haiku, no search, cheap enough to run
-// on every new item the watcher detects. Returns null on any failure so a
-// verdict miss never blocks the changelog entry itself from being written.
-export async function gradeTransaction(t, snapshot, playersDB, playerValues) {
+// transacting owner's perspective, anchored to market values and recent
+// headlines so it doesn't grade off stale name recognition. Returns null on
+// any failure so a verdict miss never blocks the changelog entry.
+export async function gradeTransaction(t, snapshot, playersDB, playerValues, newsDigest) {
   const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
   const valueOf = name => {
     const m = playerValues?.players?.[norm(name)];
@@ -217,18 +216,37 @@ export async function gradeTransaction(t, snapshot, playersDB, playerValues) {
   const teamOf = rid => snapshot.teams.find(x => x.rosterId === rid);
   const pName = pid => pInfo(playersDB, pid).name;
 
+  const namesInvolved = [
+    ...Object.keys(t.adds || {}).map(pName),
+    ...Object.keys(t.drops || {}).map(pName),
+  ];
+  const headlines = (newsDigest?.items || [])
+    .filter(i => namesInvolved.some(n => n && n.length >= 5 && (i.title || "").toLowerCase().includes(n.toLowerCase())))
+    .slice(0, 4)
+    .map(i => `- ${i.title}`)
+    .join("\n");
+  const newsLine = headlines ? `\nRECENT HEADLINES ON THESE PLAYERS (trust these over your general knowledge; they are current):\n${headlines}` : "";
+
+  const valTag = name => {
+    const v = valueOf(name);
+    return v != null ? `${name} (market value ${v}/100)` : name;
+  };
+
+  const RULES = `Rules: Ground your judgment in the market values given (0-100 dynasty consensus) and the headlines, NOT your general memory of these players; your training knowledge of roles and situations is stale. A player with market value under 15 is a fringe asset regardless of name recognition. If a move looks odd but you have no headline or value evidence explaining it, say it looks odd at a glance but the manager may know something recent, and keep it to one sentence; do not lecture. Never say you need more information; give your best read from what is here.`;
+
   if (t.type === "trade") {
     const sides = (t.roster_ids || []).map(rid => {
       const team = teamOf(rid);
       const gotNames = Object.entries(t.adds || {}).filter(([, r]) => r === rid).map(([pid]) => pName(pid));
       const picks = (t.draft_picks || []).filter(dp => dp.owner_id === rid).map(dp => `${dp.season} R${dp.round}`);
-      const val = gotNames.map(n => valueOf(n)).filter(v => v != null).reduce((a, b) => a + b, 0);
       const h = OWNER_HISTORY[team?.ownerId] || {};
-      return `${team?.name || rid} (${h.display_name || "?"}): received ${[...gotNames, ...picks].join(", ") || "nothing listed"} (named-player value ${val}/100). Stance: ${team?.stance || "?"}. Holes: ${(team?.holes || []).join("; ") || "none"}. Surplus: ${(team?.surplus || []).join("; ") || "none"}.`;
+      return `${team?.name || rid} (${h.display_name || "?"}): received ${[...gotNames.map(valTag), ...picks].join(", ") || "nothing listed"}. Stance: ${team?.stance || "?"}. Holes: ${(team?.holes || []).join("; ") || "none"}. Surplus: ${(team?.surplus || []).join("; ") || "none"}.`;
     }).join("\n");
-    const prompt = `Grade this fantasy football trade in 2 sentences max, plain language, no hedging. Say who won it and why, weighing value and roster fit. If it is close to even, say that plainly.
+    const prompt = `Grade this fantasy football trade in 2 sentences max, plain language. Say who won it and why, weighing the market values and roster fit. If it is close to even, say that plainly.
 
-${sides}
+${sides}${newsLine}
+
+${RULES}
 
 Return ONLY the verdict, 2 sentences max.`;
     try {
@@ -242,15 +260,20 @@ Return ONLY the verdict, 2 sentences max.`;
   const added = Object.keys(t.adds || {}).map(pName);
   const dropped = Object.keys(t.drops || {}).map(pName);
   const h = OWNER_HISTORY[team.ownerId] || {};
-  const prompt = `Grade this single fantasy football roster move in 1-2 sentences, plain language, from ${team.name}'s (${h.display_name || "?"}) perspective: was it smart given their roster? Stance: ${team.stance}. Holes: ${(team.holes || []).join("; ") || "none"}. Surplus: ${(team.surplus || []).join("; ") || "none"}.
-${added.length ? `Added: ${added.join(", ")}` : ""}${dropped.length ? `
-Dropped: ${dropped.join(", ")}` : ""}
+  const dropOnly = dropped.length && !added.length;
+  const prompt = `Grade this fantasy football roster move in 1-2 sentences, plain language, from ${team.name}'s (${h.display_name || "?"}) perspective. Stance: ${team.stance}. Holes: ${(team.holes || []).join("; ") || "none"}. Surplus: ${(team.surplus || []).join("; ") || "none"}.
+${added.length ? `Added: ${added.map(valTag).join(", ")}` : ""}${dropped.length ? `
+Dropped: ${dropped.map(valTag).join(", ")}` : ""}${newsLine}
+${dropOnly ? "\nNote: this is a standalone drop; on Sleeper a corresponding pickup often follows as a separate transaction, so judge the drop on its own merits (was this player worth a roster spot?) rather than assuming it is the whole move." : ""}
+
+${RULES}
 
 Return ONLY the verdict, 1-2 sentences.`;
   try {
     return (await callClaude(prompt, { model: "claude-haiku-4-5", useSearch: false, maxTokens: 150 })).trim();
   } catch (e) { return null; }
 }
+
 
 export function leagueContextBlock(snapshot) {
   const lines = snapshot.teams.map(t => {
