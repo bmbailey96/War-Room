@@ -6,7 +6,7 @@
 
 import {
   blobs, resolveLeague, fetchLeagueCore, getPlayersTrim,
-  computeSnapshot, describeTransaction, gradeTransaction,
+  computeSnapshot, describeTransaction, gradeTransaction, tradeLedgerEntry,
 } from "./lib/ocho.mjs";
 
 async function notify(title, message) {
@@ -56,6 +56,17 @@ export default async (req) => {
         verdict,
       });
     }
+    // Record trades with their at-the-time values so the grader can re-price
+    // them later and tell me who actually won.
+    const ledger = (await store.get("trade_ledger", { type: "json" })) || [];
+    const known = new Set(ledger.map(e => e.id));
+    for (const t of newTxns) {
+      if (t.type !== "trade" || known.has(t.transaction_id)) continue;
+      const entry = tradeLedgerEntry(t, snapshot, playersDB, playerValues);
+      if (entry) ledger.push(entry);
+    }
+    while (ledger.length > 60) ledger.shift();
+    await store.setJSON("trade_ledger", ledger);
   }
   while (changelog.length > 60) changelog.shift();
 

@@ -4,7 +4,8 @@
 
 import {
   blobs, OWNER_HISTORY, leagueContextBlock, myRosterBlock,
-  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock, leagueStateBlock, validateTrades,
+  callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock, leagueStateBlock,
+  validateTrades, draftClassBlock, valueTrendBlock, tradeGradeBlock,
 } from "./lib/ocho.mjs";
 
 function buildTrendingBlock(trendingRaw, rostersRaw, playersDB) {
@@ -71,7 +72,7 @@ function digestBlocks(newsDigest, statsDigest, snapshot) {
   return { newsBlock, statsBlock };
 }
 
-function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory) {
+function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory, draftBoard, valueHistory) {
   const ctx = leagueContextBlock(snapshot);
   const mine = myRosterBlock(snapshot);
   const { newsBlock, statsBlock } = digestBlocks(newsDigest, statsDigest, snapshot);
@@ -80,9 +81,11 @@ function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, player
   const valueData = valuesBlock(snapshot, playerValues);
   const memoryData = leagueMemoryBlock(leagueMemory);
   const stateData = leagueStateBlock(snapshot, playerValues);
+  const draftData = draftClassBlock(draftBoard, snapshot);
+  const moversData = valueTrendBlock(snapshot, valueHistory);
   const groundNote = (groundData
     ? `\n\nGROUND DATA COLLECTED BY MY SYSTEM (verify anything surprising with your own web search; recency beats this data):\n${groundData}`
-    : "") + stateData + trendData + valueData + memoryData;
+    : "") + stateData + trendData + valueData + memoryData + draftData + moversData;
   const wk = snapshot.nflState || {};
   const inSeason = wk.season_type === "regular" && wk.week >= 1;
   const MOVE = `\n\nREASONING STANDARD, apply to every recommendation: (a) Show the value math explicitly using the market-value anchors above, for example "I send 58 (Player 40 + 2026 1st 18), I get 62, and the position I gain is scarcer for me than the one I give up." Do not assert a deal is fair without the numbers. (b) Steelman the other manager: state what THEY get and why a rational owner would say yes, not just why it helps me. A trade only happens if both sides win something. (c) Tag confidence High/Medium/Low, and add a one-line "Case against:" naming the strongest reason you could be wrong. Never present a call as risk-free. (d) If the market value and my roster need point in different directions, say so and pick a side with a reason, do not split the difference vaguely.\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
@@ -96,7 +99,9 @@ ${mine}
 
 TASK: Recommend my 3 to 5 best realistic trades right now. For each: (1) exact partner and why their stance, holes, tendencies, and engagement level make them likely to deal; (2) a specific package including future picks where sensible; (3) valuations grounded in your current web research, say what you found; (4) honest risk. Prioritize my flagged holes and monetize my flagged surplus. Weight owner behavior: fair deals with active traders beat perfect deals with owners who never trade. No filler.
 
-HARD CONSTRAINT: every player in "iGet" must currently be on the named partner's roster in the league data above, and must NOT already be on my roster. Every player in "iSend" must currently be on MY roster. Check each name against the rosters above before you write it. Do not propose acquiring a player I already own; if a player you remember targeting is now on my roster, say so and move on. PICK CAPITAL RULES: my picks are not interchangeable currency, and I do not want to give up premium picks casually. (a) Use the estimated slot values above, never the round average; a 1.02 and a 1.08 are different assets even though both are "a first." (b) Before proposing I send any pick, name the specific tier of rookie that pick likely lands and what I am giving up in real terms, not just its number. (c) Do not propose sending a CURRENT-season first unless what comes back is a proven starter at a position this rookie class cannot fill for me. (d) When a pick must go, prefer future seconds and thirds, and prefer picks originating from strong teams (which land late) over picks originating from weak teams (which land early). (e) If a hole I have could be filled by drafting rather than trading, say so and recommend the draft instead of the trade. ${groundNote}
+HARD CONSTRAINT: every player in "iGet" must currently be on the named partner's roster in the league data above, and must NOT already be on my roster. Every player in "iSend" must currently be on MY roster. Check each name against the rosters above before you write it. Do not propose acquiring a player I already own; if a player you remember targeting is now on my roster, say so and move on.
+
+PICK CAPITAL RULES: my picks are not interchangeable currency, and I do not want to give up premium picks casually. (a) Use the estimated slot values above, never the round average; a 1.02 and a 1.08 are different assets even though both are "a first." (b) Before proposing I send any pick, name the specific tier of rookie that pick likely lands and what I am giving up in real terms, not just its number. (c) Do not propose sending a CURRENT-season first unless what comes back is a proven starter at a position this rookie class cannot fill for me. (d) When a pick must go, prefer future seconds and thirds, and prefer picks originating from strong teams (which land late) over picks originating from weak teams (which land early). (e) If a hole I have could be filled by drafting rather than trading, say so and recommend the draft instead of the trade.${groundNote}
 
 CRITICAL OUTPUT FORMAT: Before any prose, emit a machine-readable block wrapped in <TRADES_JSON> and </TRADES_JSON> tags containing a JSON array, one object per recommended trade, in this exact shape:
 [{
@@ -189,8 +194,11 @@ export default async (req) => {
   const leagueMemory = await store.get("league_memory", { type: "json" });
   const playerValues = await store.get("player_values", { type: "json" });
   const gradingRecord = await store.get("grading_record", { type: "json" });
+  const draftBoard = await store.get("draft_board", { type: "json" });
+  const valueHistory = await store.get("value_history", { type: "json" });
+  const tradeGrades = await store.get("trade_grades", { type: "json" });
   const trendingText = buildTrendingBlock(trendingRaw, rostersRaw, playersDB);
-  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory);
+  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory, draftBoard, valueHistory);
 
   // Track-record block: shows the model its own calibrated hit rate
   let trackBlock = "";
@@ -207,6 +215,7 @@ export default async (req) => {
     }
     trackBlock = `\n\nYOUR OWN TRACK RECORD SO FAR: ${gradingRecord.hits}/${gradingRecord.total} graded calls hit (${rate}%).${catLine} Recent: ${recent}. Let this calibrate your confidence; if your hit rate is low, tighten up and be more selective.`;
   }
+  trackBlock += tradeGradeBlock(tradeGrades);
 
   const nflWeek = (snapshot.nflState || {}).week || 0;
 

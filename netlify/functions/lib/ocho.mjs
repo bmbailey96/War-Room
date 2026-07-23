@@ -546,3 +546,111 @@ export function validateTrades(text, snapshot) {
   }
   return { text: out, removed };
 }
+// Standalone pick lookup so the trade ledger and grader can price picks
+// without duplicating valuesBlock's internals.
+export function pickValueOf(playerValues, season, round, slot) {
+  const picks = playerValues && playerValues.picks;
+  if (!picks) return null;
+  if (slot != null) {
+    const exact = picks[`${season} ${round}.${String(slot).padStart(2, "0")}`];
+    if (exact) return exact.v;
+  }
+  const rb = picks[`${season} ${round}`];
+  return rb ? rb.v : null;
+}
+
+// VALUE TREND. Dynasty is about direction, not the still photo: the game is
+// selling the guy whose price just spiked and buying the guy who cratered on
+// noise. Returns the move for one player over roughly the requested window.
+export function valueTrend(history, name, days = 21) {
+  if (!history || !Array.isArray(history.days) || history.days.length < 2) return null;
+  const key = normName(name);
+  const arr = history.days;
+  const latest = arr[arr.length - 1];
+  const now = latest.v ? latest.v[key] : undefined;
+  if (now == null) return null;
+  const target = new Date(latest.date).getTime() - days * 86400000;
+  let past = null;
+  for (const d of arr) {
+    if (d === latest) break;
+    if (!d.v || d.v[key] == null) continue;
+    if (new Date(d.date).getTime() <= target) past = d;
+  }
+  if (!past) past = arr.find(d => d !== latest && d.v && d.v[key] != null) || null;
+  if (!past) return null;
+  const then = past.v[key];
+  return {
+    now, then, delta: now - then,
+    days: Math.max(1, Math.round((new Date(latest.date) - new Date(past.date)) / 86400000)),
+  };
+}
+
+// The movers block every prompt gets: who is rising, who is falling, and on
+// whose roster. This is what turns "Player X is worth 40" into "Player X is
+// worth 40 and was 55 three weeks ago, so his owner may be souring on him."
+export function valueTrendBlock(snapshot, history) {
+  if (!history || !Array.isArray(history.days) || history.days.length < 3) return "";
+  const rows = [];
+  for (const t of snapshot.teams) {
+    for (const p of t.players) {
+      const tr = valueTrend(history, p.name);
+      if (!tr || Math.abs(tr.delta) < 4) continue;
+      rows.push({ ...tr, name: p.name, team: t.name, isMe: !!t.isMe });
+    }
+  }
+  if (!rows.length) return "";
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  const fmt = r => `${r.name} (${r.team}${r.isMe ? ", MINE" : ""}) ${r.then} -> ${r.now} (${r.delta > 0 ? "+" : ""}${r.delta} over ${r.days}d)`;
+  const up = rows.filter(r => r.delta > 0).slice(0, 10).map(fmt);
+  const down = rows.filter(r => r.delta < 0).slice(0, 10).map(fmt);
+  let out = `\n\nMARKET VALUE MOVEMENT (how consensus value has actually changed; this is the sell-high / buy-low engine, weigh it heavily):`;
+  if (up.length) out += `\nRISING:\n${up.join("\n")}`;
+  if (down.length) out += `\nFALLING:\n${down.join("\n")}`;
+  out += `\nHOW TO USE: a player of mine who is rising fast is a SELL-HIGH candidate; his price may not hold. A rival's player who is falling fast is a BUY-LOW candidate, especially if the fall is sentiment rather than a real role change, and especially if that owner is inattentive. Say explicitly when a recommendation is driven by movement rather than by the static value.`;
+  return out;
+}
+// TRADE LEDGER ENTRY. Snapshots what each side received and what it was worth
+// THE DAY THE TRADE HAPPENED. The grader later re-prices the same assets to
+// see who actually won. Trades are the centerpiece of this app and were the
+// one thing it never held itself accountable for.
+export function tradeLedgerEntry(t, snapshot, playersDB, playerValues) {
+  if (t.type !== "trade") return null;
+  const sides = (t.roster_ids || []).map(rid => {
+    const team = snapshot.teams.find(x => x.rosterId === rid);
+    const got = Object.entries(t.adds || {})
+      .filter(([, r]) => r === rid)
+      .map(([pid]) => {
+        const name = pInfo(playersDB, pid).name;
+        const v = (playerValues?.players?.[normName(name)] || {}).v;
+        return { name, value: v ?? null };
+      });
+    const picks = (t.draft_picks || [])
+      .filter(dp => dp.owner_id === rid)
+      .map(dp => ({
+        season: dp.season, round: dp.round,
+        value: pickValueOf(playerValues, dp.season, dp.round, null),
+      }));
+    return { team: team ? team.name : `roster ${rid}`, isMe: team ? !!team.isMe : false, got, picks };
+  });
+  return { id: t.transaction_id, at: t.created || Date.now(), sides };
+}
+
+// The graded-trades block for prompts: the model's own trade record, measured.
+export function tradeGradeBlock(grades) {
+  if (!grades || !Array.isArray(grades.trades) || !grades.trades.length) return "";
+  const mine = grades.trades.filter(g => g.sides.some(s => s.isMe));
+  if (!mine.length) return "";
+  const lines = mine.slice(-6).map(g => {
+    const me = g.sides.find(s => s.isMe);
+    const them = g.sides.find(s => !s.isMe);
+    if (!me || !them) return null;
+    const verdict = me.delta > them.delta + 5 ? "I WON" : them.delta > me.delta + 5 ? "I LOST" : "roughly even";
+    return `${new Date(g.at).toISOString().slice(0, 10)} vs ${them.team}: what I got moved ${me.delta > 0 ? "+" : ""}${me.delta}, what they got moved ${them.delta > 0 ? "+" : ""}${them.delta} in the ${g.daysElapsed} days since. Hindsight: ${verdict}.`;
+  }).filter(Boolean);
+  if (!lines.length) return "";
+  const wins = mine.filter(g => {
+    const me = g.sides.find(s => s.isMe), them = g.sides.find(s => !s.isMe);
+    return me && them && me.delta > them.delta + 5;
+  }).length;
+  return `\n\nMY COMPLETED TRADES, GRADED IN HINDSIGHT (${wins} clear wins out of ${mine.length} graded, measured by how the acquired assets' market values actually moved after the deal):\n${lines.join("\n")}\nLet this calibrate you. If my trades have been losing, be far more conservative about what you tell me to send.`;
+}

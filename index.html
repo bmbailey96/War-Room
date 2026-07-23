@@ -1146,7 +1146,10 @@ function renderTeams() {
       .map(k => `<div class="pos-row"><span class="pos-label">${k}</span>${
         byPos[k].map(p => {
           const cls = p.age >= 29 ? 'old' : (p.age <= 24 ? 'young' : '');
-          return `<span class="player-chip ${cls}">${esc(p.name)} <span class="meta">${p.age || '?'}</span>${p.inj ? ` <span style="color:var(--rust)">${esc(p.inj)}</span>` : ''}</span>`;
+          const tr = valueTrendFE(p.name);
+          const arrow = tr && Math.abs(tr.delta) >= 4
+            ? ` <span style="color:${tr.delta > 0 ? 'var(--green)' : 'var(--rust)'};font-size:9.5px">${tr.delta > 0 ? '▲' : '▼'}${Math.abs(tr.delta)}</span>` : '';
+          return `<span class="player-chip ${cls}">${esc(p.name)} <span class="meta">${p.age || '?'}</span>${arrow}${p.inj ? ` <span style="color:var(--rust)">${esc(p.inj)}</span>` : ''}</span>`;
         }).join('')
       }</div>`).join('');
     const picksLine = t.picks.map(p => `${p.season} R${p.round}${p.original !== t.name ? `*` : ''}`).join(', ');
@@ -1311,6 +1314,27 @@ function powerRankRows(teams) {
   })).sort((a, b) => b.v - a.v);
 }
 
+// Value movement for one player, from the stored history.
+function valueTrendFE(name, days = 21) {
+  const h = (S.server || {}).valueHistory;
+  if (!h || !h.days || h.days.length < 2) return null;
+  const key = normName(name);
+  const arr = h.days;
+  const latest = arr[arr.length - 1];
+  const now = latest.v ? latest.v[key] : undefined;
+  if (now == null) return null;
+  const target = new Date(latest.date).getTime() - days * 86400000;
+  let past = null;
+  for (const d of arr) {
+    if (d === latest) break;
+    if (!d.v || d.v[key] == null) continue;
+    if (new Date(d.date).getTime() <= target) past = d;
+  }
+  if (!past) past = arr.find(d => d !== latest && d.v && d.v[key] != null) || null;
+  if (!past) return null;
+  return { now, then: past.v[key], delta: now - past.v[key] };
+}
+
 // Seed trajectory: every team's projected seed over time, from the trend
 // engine's daily datapoints. Needs 3+ days of history to be worth showing.
 function seedTrendChart(teams, meName) {
@@ -1337,6 +1361,97 @@ function seedTrendChart(teams, meName) {
     <text x="8" y="${py(n) + 4}" font-size="9" fill="var(--muted)">${n}th</text>
     ${lines}
   </svg>`;
+}
+
+// Biggest value movers league-wide. Deltas are signed, so this uses a
+// centered bar rather than the standard barChart.
+function valueMoversBlock() {
+  const h = (S.server || {}).valueHistory;
+  if (!h || !h.days || h.days.length < 3 || !S.teams) return '';
+  const rows = [];
+  for (const t of S.teams) for (const p of t.players) {
+    const tr = valueTrendFE(p.name);
+    if (!tr || Math.abs(tr.delta) < 4) continue;
+    rows.push({ name: p.name, team: t.name, isMe: t.isMe, ...tr });
+  }
+  if (!rows.length) return '';
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  const top = rows.slice(0, 16);
+  const max = Math.max(...top.map(r => Math.abs(r.delta)), 1);
+  const bars = top.map(r => {
+    const w = Math.abs(r.delta) / max * 46;
+    const color = r.delta > 0 ? 'var(--green)' : 'var(--rust)';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px">
+      <span style="width:150px;color:${r.isMe ? 'var(--amber)' : 'var(--muted)'};font-family:var(--mono)">${esc(r.name).slice(0,18)}${r.isMe ? ' ★' : ''}</span>
+      <span style="width:96px;color:var(--muted);font-size:10px">${esc(r.team).slice(0,14)}</span>
+      <div style="flex:1;position:relative;height:12px;background:var(--bg-deep);border-radius:2px">
+        <div style="position:absolute;left:50%;top:-2px;width:1px;height:16px;background:var(--line)"></div>
+        <div style="position:absolute;top:0;height:12px;border-radius:2px;background:${color};${r.delta > 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`}"></div>
+      </div>
+      <span style="width:44px;text-align:right;color:${color};font-family:var(--mono)">${r.delta > 0 ? '+' : ''}${r.delta}</span>
+      <span style="width:56px;text-align:right;color:var(--muted);font-family:var(--mono);font-size:10px">${r.then}→${r.now}</span>
+    </div>`;
+  }).join('');
+  return `<div class="chart-block"><div class="chart-title">Biggest Value Movers, last 3 weeks</div>
+    ${legend([{color:'var(--green)',label:'Rising (sell-high if yours)'},{color:'var(--rust)',label:'Falling (buy-low if theirs)'},{color:'var(--amber)',label:'Your players'}])}
+    ${bars}
+    <div class="chart-note">Real movement in consensus dynasty value, not the static number. Your risers are sell-high candidates; rivals' fallers are buy-low targets, especially on inattentive teams. Fills in as the value history accumulates.</div></div>`;
+}
+
+// Value movement for one player, from the stored history.
+function valueTrendFE(name, days = 21) {
+  const h = (S.server || {}).valueHistory;
+  if (!h || !h.days || h.days.length < 2) return null;
+  const key = normName(name);
+  const arr = h.days;
+  const latest = arr[arr.length - 1];
+  const now = latest.v ? latest.v[key] : undefined;
+  if (now == null) return null;
+  const target = new Date(latest.date).getTime() - days * 86400000;
+  let past = null;
+  for (const d of arr) {
+    if (d === latest) break;
+    if (!d.v || d.v[key] == null) continue;
+    if (new Date(d.date).getTime() <= target) past = d;
+  }
+  if (!past) past = arr.find(d => d !== latest && d.v && d.v[key] != null) || null;
+  if (!past) return null;
+  return { now, then: past.v[key], delta: now - past.v[key] };
+}
+
+// Biggest value movers league-wide. Deltas are signed, so this uses a
+// centered bar rather than the standard barChart.
+function valueMoversBlock() {
+  const h = (S.server || {}).valueHistory;
+  if (!h || !h.days || h.days.length < 3 || !S.teams) return '';
+  const rows = [];
+  for (const t of S.teams) for (const p of t.players) {
+    const tr = valueTrendFE(p.name);
+    if (!tr || Math.abs(tr.delta) < 4) continue;
+    rows.push({ name: p.name, team: t.name, isMe: t.isMe, ...tr });
+  }
+  if (!rows.length) return '';
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  const top = rows.slice(0, 16);
+  const max = Math.max(...top.map(r => Math.abs(r.delta)), 1);
+  const bars = top.map(r => {
+    const w = Math.abs(r.delta) / max * 46;
+    const color = r.delta > 0 ? 'var(--green)' : 'var(--rust)';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px">
+      <span style="width:150px;color:${r.isMe ? 'var(--amber)' : 'var(--muted)'};font-family:var(--mono)">${esc(r.name).slice(0,18)}${r.isMe ? ' ★' : ''}</span>
+      <span style="width:96px;color:var(--muted);font-size:10px">${esc(r.team).slice(0,14)}</span>
+      <div style="flex:1;position:relative;height:12px;background:var(--bg-deep);border-radius:2px">
+        <div style="position:absolute;left:50%;top:-2px;width:1px;height:16px;background:var(--line)"></div>
+        <div style="position:absolute;top:0;height:12px;border-radius:2px;background:${color};${r.delta > 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`}"></div>
+      </div>
+      <span style="width:44px;text-align:right;color:${color};font-family:var(--mono)">${r.delta > 0 ? '+' : ''}${r.delta}</span>
+      <span style="width:56px;text-align:right;color:var(--muted);font-family:var(--mono);font-size:10px">${r.then}&rarr;${r.now}</span>
+    </div>`;
+  }).join('');
+  return `<div class="chart-block"><div class="chart-title">Biggest Value Movers, last 3 weeks</div>
+    ${legend([{color:'var(--green)',label:'Rising (sell-high if yours)'},{color:'var(--rust)',label:'Falling (buy-low if theirs)'},{color:'var(--amber)',label:'Your players'}])}
+    ${bars}
+    <div class="chart-note">Real movement in consensus dynasty value, not the static number. Your risers are sell-high candidates; rivals' fallers are buy-low targets, especially on inattentive teams. Fills in as the value history accumulates.</div></div>`;
 }
 
 function renderData() {
@@ -1395,6 +1510,8 @@ function renderData() {
       ${barLegendGood}
       ${barChart(powerRank, { highlight: meName })}
       <div class="chart-note">Real dynasty trade value, every roster, summed from live market data. This is the closest thing to an objective power ranking the league has.</div></div>` : ''}
+
+    ${valueMoversBlock()}
 
     ${seedTrend ? `<div class="chart-block"><div class="chart-title">Playoff Seed Trajectory</div>
       ${legend([{color:'var(--amber)',label:'You'},{color:'var(--line-bright)',label:'Other teams'}])}
@@ -1840,10 +1957,32 @@ function renderBriefing() {
       <div class="depth-row" style="margin-top:8px">${recent}</div>
       <div class="chart-note">Every pickup/start the engine recommended, graded against what the player actually scored the next 2+ weeks. This is the honesty check.</div></div>`;
   }
+  const tg = (S.server || {}).tradeGrades;
+  let tradeTrack = '';
+  if (tg && tg.trades && tg.trades.length) {
+    const mine = tg.trades.filter(g => g.sides.some(s => s.isMe));
+    if (mine.length) {
+      const rows = mine.slice().reverse().slice(0, 8).map(g => {
+        const me = g.sides.find(s => s.isMe), them = g.sides.find(s => !s.isMe);
+        if (!me || !them) return '';
+        const won = me.delta > them.delta + 5, lost = them.delta > me.delta + 5;
+        const color = won ? 'var(--green)' : lost ? 'var(--rust)' : 'var(--muted)';
+        return `<tr><td><b>vs ${esc(them.team)}</b><br/><span style="font-size:10px;color:var(--muted)">${new Date(g.at).toLocaleDateString()}, ${g.daysElapsed}d ago</span></td>
+          <td style="color:${me.delta>=0?'var(--green)':'var(--rust)'}">${me.delta>0?'+':''}${me.delta}</td>
+          <td style="color:${them.delta>=0?'var(--green)':'var(--rust)'}">${them.delta>0?'+':''}${them.delta}</td>
+          <td style="color:${color};font-weight:600">${won?'Won':lost?'Lost':'Even'}</td></tr>`;
+      }).join('');
+      const wins = mine.filter(g => { const m=g.sides.find(s=>s.isMe), t=g.sides.find(s=>!s.isMe); return m&&t&&m.delta>t.delta+5; }).length;
+      tradeTrack = `<div class="chart-block"><div class="chart-title">Trade Record, graded in hindsight</div>
+        <div style="font-size:22px;font-family:var(--display);color:${wins/mine.length>=0.5?'var(--green)':'var(--amber)'}">${wins}/${mine.length} <span style="font-size:12px;color:var(--muted)">clear wins</span></div>
+        <table class="trend-table"><tr><th>Trade</th><th>My side moved</th><th>Theirs moved</th><th>Verdict</th></tr>${rows}</table>
+        <div class="chart-note">Every completed trade re-priced 6 weeks later against live market values. This is the only honest scoreboard on the thing this app does most.</div></div>`;
+    }
+  }
   let brief = '';
   if (b && b.text) brief = `<div class="chart-title">State of the Nightmen</div><div class="ai-result">${renderMd(b.text)}</div><div class="ai-note" style="margin-top:8px">Composed ${timeAgo(b.at)}. Auto-runs Sunday nights and pushes THE MOVE to your phone.</div>`;
   else brief = `<div class="empty-msg">The weekly briefing composes Sunday nights and pushes to your phone. In season it summarizes where you stand, what moved, and the one move for the week.</div>`;
-  return `${track}${brief}`;
+  return `${track}${tradeTrack}${brief}`;
 }
 
 function renderTab() {

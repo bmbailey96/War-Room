@@ -23,6 +23,8 @@ export default async () => {
     store.get("pregame_flagged", { type: "json" }),
     store.get("league_memory", { type: "json" }),
     store.get("player_values", { type: "json" }),
+    store.get("value_history", { type: "json" }),
+    store.get("trade_grades", { type: "json" }),
   ]);
   return new Response(JSON.stringify({
     snapshot: snapshot || null,
@@ -40,5 +42,7 @@ export default async () => {
     trends: trends || null,
     playerValues: playerValues || null,
     evaluation: evaluation || null,
+    valueHistory: valueHistory ? { days: (valueHistory.days || []).slice(-45) } : null,
+    tradeGrades: tradeGrades || null,
   }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
 };

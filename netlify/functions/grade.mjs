@@ -10,7 +10,7 @@
 // in a GRAB/target/start context). The grader reads those, matches to
 // Sleeper player ids, and scores rest-of-period points.
 
-import { blobs, resolveLeague, getPlayersTrim } from "./lib/ocho.mjs";
+import { blobs, resolveLeague, getPlayersTrim, normName, pickValueOf } from "./lib/ocho.mjs";
 
 async function scoringSince(leagueId, sinceWeek, playerIds) {
   // Sum each player's points across weeks sinceWeek..18 from Sleeper matchups
@@ -39,14 +39,57 @@ function nameToId(playersDB, name) {
   }
   return null;
 }
+// Re-price every trade older than 6 weeks using today's market values.
+// Runs year-round, including the offseason, because dynasty value moves
+// hardest between February and August.
+async function gradeTrades(store) {
+  const ledger = (await store.get("trade_ledger", { type: "json" })) || [];
+  const playerValues = await store.get("player_values", { type: "json" });
+  if (!ledger.length || !playerValues || !playerValues.players) return { added: 0, total: 0 };
 
+  const grades = (await store.get("trade_grades", { type: "json" })) || { trades: [] };
+  const done = new Set(grades.trades.map(g => g.id));
+  const MATURE_MS = 1000 * 60 * 60 * 24 * 42;
+  let added = 0;
+
+  for (const e of ledger) {
+    if (done.has(e.id)) continue;
+    const elapsed = Date.now() - e.at;
+    if (elapsed < MATURE_MS) continue;
+    const sides = e.sides.map(s => {
+      const then =
+        s.got.reduce((a, g) => a + (g.value || 0), 0) +
+        s.picks.reduce((a, p) => a + (p.value || 0), 0);
+      const now =
+        s.got.reduce((a, g) => a + ((playerValues.players[normName(g.name)] || {}).v || 0), 0) +
+        s.picks.reduce((a, p) => a + (pickValueOf(playerValues, p.season, p.round, null) || 0), 0);
+      return { team: s.team, isMe: s.isMe, then, now, delta: now - then };
+    });
+    grades.trades.push({
+      id: e.id, at: e.at, gradedAt: Date.now(),
+      daysElapsed: Math.round(elapsed / 86400000),
+      sides,
+    });
+    added++;
+  }
+  while (grades.trades.length > 40) grades.trades.shift();
+  if (added) await store.setJSON("trade_grades", grades);
+  return { added, total: grades.trades.length };
+}
 export default async () => {
   const store = blobs();
   const nflState = await fetch("https://api.sleeper.app/v1/state/nfl").then(r => r.json()).catch(() => ({}));
   const curWeek = nflState.week || 0;
   const inSeason = nflState.season_type === "regular" && curWeek >= 2;
+
+  // Trade grading runs year-round; player-scoring grading needs games.
+  const tradeResult = await gradeTrades(store);
+
   if (!inSeason) {
-    return new Response(JSON.stringify({ ok: true, skipped: "offseason or week 1, nothing to grade yet" }));
+    return new Response(JSON.stringify({
+      ok: true, tradesGraded: tradeResult.added, tradeTotal: tradeResult.total,
+      skipped: "offseason or week 1, no player scoring to grade yet",
+    }), { headers: { "content-type": "application/json" } });
   }
 
   const leagueId = await resolveLeague();
@@ -97,6 +140,7 @@ export default async () => {
   return new Response(JSON.stringify({
     ok: true, graded: record.total, hitRate: hitRate != null ? hitRate + "%" : "n/a",
     stillPending: stillPending.length,
+    tradesGraded: tradeResult.added, tradeTotal: tradeResult.total,
   }), { headers: { "content-type": "application/json" } });
 };
 

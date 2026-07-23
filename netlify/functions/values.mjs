@@ -111,7 +111,29 @@ export default async () => {
     count: Object.keys(playerValues).length,
     pickCount: Object.keys(pickValues).length,
   });
+// VALUE HISTORY. One compact datapoint per day so the app can see direction,
+  // not just today's number. Kept to league-rostered players plus the top 200
+  // overall so the blob stays small (roughly 10KB a day, 90 days retained).
+  try {
+    const snapshot = await store.get("snapshot", { type: "json" });
+    const keep = new Set();
+    if (snapshot) for (const t of snapshot.teams) for (const p of t.players) keep.add(normName(p.name));
+    Object.entries(playerValues)
+      .sort((a, b) => (b[1].v || 0) - (a[1].v || 0))
+      .slice(0, 200)
+      .forEach(([k]) => keep.add(k));
 
+    const snapV = {};
+    for (const k of keep) if (playerValues[k]) snapV[k] = playerValues[k].v;
+
+    const hist = (await store.get("value_history", { type: "json" })) || { days: [] };
+    const today = new Date().toISOString().slice(0, 10);
+    const last = hist.days.length ? hist.days[hist.days.length - 1] : null;
+    if (last && last.date === today) hist.days[hist.days.length - 1] = { date: today, v: snapV };
+    else hist.days.push({ date: today, v: snapV });
+    while (hist.days.length > 90) hist.days.shift();
+    await store.setJSON("value_history", hist);
+  } catch (e) { /* history is a bonus, never block the values write */ }
   return new Response(JSON.stringify({
     ok: true, scrapeDate,
     players: Object.keys(playerValues).length,
