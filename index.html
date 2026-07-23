@@ -1095,15 +1095,6 @@ function renderTheCall() {
     ? `<b>${esc(drop.name)}</b>${drop.pos?` <span style="color:var(--muted)">${esc(drop.pos)}</span>`:''}${drop.why?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(drop.why)}</div>`:''}`
     : `<span style="color:var(--muted)">Hold your roster. No clear drop.</span>`;
 
-  const pg = (S.server || {}).pregame;
-  let alertHtml = '';
-  if (pg && pg.detail && pg.detail.length) {
-    const items = pg.detail.map(f => `<div style="font-size:12.5px;color:var(--paper)">${esc(f.starter)} (${esc(f.pos)}) is <b style="color:var(--rust)">${esc(f.status)}</b>. ${f.pivot ? `Start <b style="color:var(--green)">${esc(f.pivot)}</b> instead.` : `No healthy ${esc(f.pos)} on your bench, hit waivers.`}</div>`).join('');
-    alertHtml = `<div style="border:2px solid var(--rust);background:rgba(198,93,59,0.12);padding:10px 12px;margin-bottom:10px">
-      <div class="call-slot-label" style="color:var(--rust);margin-bottom:6px">Lineup alert &mdash; fix before kickoff</div>
-      ${items}
-    </div>`;
-  }
 
   el.innerHTML = `<div class="call-box">
     ${alertHtml}
