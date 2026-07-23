@@ -9,7 +9,19 @@ export const FALLBACK_LEAGUE_ID = "1205222463223365632";
 export const LEAGUE_NAME_PATTERN = /ocho|teenypetes/i;
 
 export const STARTER_NEEDS = { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1, DL_eligible: 1 };
-
+// Name normalizer used EVERYWHERE names are matched across data sources.
+// Strips generational suffixes (II, III, Jr, Sr...) because DynastyProcess
+// writes "Patrick Mahomes II" while Sleeper stores "Patrick Mahomes", and
+// that mismatch was leaking rostered players onto the draft board and
+// dropping market values for suffix players app-wide.
+export function normName(s) {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z ]/g, "")
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 export const OWNER_HISTORY = {"460522508903247872":{"display_name":"AverageRedneck","championships":["2023"],"win_pct":0.589,"trades_count":12,"trade_positions_acquired":{"RB":5,"WR":3,"QB":4,"TE":2},"lineup_efficiency_pct":82.2,"avg_bench_leak_per_week":37.0,"dead_starts_4yr":11,"trade_ros_net_pts":167.8},"862447704859635712":{"display_name":"lackeymatt","championships":[],"win_pct":0.536,"trades_count":23,"trade_positions_acquired":{"QB":4,"WR":19,"TE":1,"RB":7,"DL":2},"lineup_efficiency_pct":80.3,"avg_bench_leak_per_week":40.2,"dead_starts_4yr":13,"trade_ros_net_pts":735.1},"862526263095586816":{"display_name":"owmyballs","championships":[],"win_pct":0.268,"trades_count":4,"trade_positions_acquired":{"QB":2,"WR":1},"lineup_efficiency_pct":81.4,"avg_bench_leak_per_week":29.5,"dead_starts_4yr":64,"trade_ros_net_pts":444.3},"863128676391383040":{"display_name":"SigourneyBeaver","championships":[],"win_pct":0.607,"trades_count":26,"trade_positions_acquired":{"TE":3,"RB":5,"WR":9},"lineup_efficiency_pct":84.7,"avg_bench_leak_per_week":32.3,"dead_starts_4yr":10,"trade_ros_net_pts":-1647.1},"863157773284864000":{"display_name":"Birkey","championships":["2024"],"win_pct":0.679,"trades_count":23,"trade_positions_acquired":{"RB":9,"WR":9,"QB":6,"DL":1},"lineup_efficiency_pct":84.9,"avg_bench_leak_per_week":32.6,"dead_starts_4yr":11,"trade_ros_net_pts":-2601.1},"863467130702671872":{"display_name":"MikahH","championships":["2022"],"win_pct":0.464,"trades_count":33,"trade_positions_acquired":{"QB":7,"WR":20,"RB":12,"TE":3},"lineup_efficiency_pct":84.6,"avg_bench_leak_per_week":30.7,"dead_starts_4yr":14,"trade_ros_net_pts":255.6},"994817581137604608":{"display_name":"SexyJexy19","championships":["2025"],"win_pct":0.429,"trades_count":11,"trade_positions_acquired":{"QB":2,"RB":3,"TE":1,"WR":4},"lineup_efficiency_pct":81.7,"avg_bench_leak_per_week":36.8,"dead_starts_4yr":10,"trade_ros_net_pts":699.3},"1027938591684538368":{"display_name":"aaronjy1999","championships":[],"win_pct":0.393,"trades_count":7,"trade_positions_acquired":{"RB":2,"WR":3,"QB":2},"lineup_efficiency_pct":76.9,"avg_bench_leak_per_week":45.4,"dead_starts_4yr":36,"trade_ros_net_pts":516.3},"501533314885087232":{"display_name":"vic2252","championships":[],"win_pct":0.357,"trades_count":3,"trade_positions_acquired":{"RB":1,"QB":2,"WR":1},"lineup_efficiency_pct":85.9,"avg_bench_leak_per_week":28.8,"dead_starts_4yr":3,"trade_ros_net_pts":206.8}};
 
 export function blobs() {
@@ -217,7 +229,7 @@ export function describeTransaction(t, snapshot, playersDB) {
 // headlines so it doesn't grade off stale name recognition. Returns null on
 // any failure so a verdict miss never blocks the changelog entry.
 export async function gradeTransaction(t, snapshot, playersDB, playerValues, newsDigest) {
-  const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+  const norm = normName;
   const valueOf = name => {
     const m = playerValues?.players?.[norm(name)];
     return m ? m.v : null;
@@ -379,7 +391,7 @@ export function trendBlock(trends) {
 
 export function valuesBlock(snapshot, playerValues) {
   if (!playerValues || !playerValues.players) return "";
-  const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+  const norm = normName;
   const me = snapshot.teams.find(t => t.isMe);
   const lines = [];
   const seen = new Set();
@@ -431,7 +443,7 @@ export function leagueMemoryBlock(leagueMemory) {
 }
 
 export function leagueStateBlock(snapshot, playerValues) {
-  const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+  const norm = normName;
   const pv = (playerValues && playerValues.players) || {};
   const val = name => (pv[norm(name)] || {}).v || 0;
   const me = snapshot.teams.find(t => t.isMe);
