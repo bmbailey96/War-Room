@@ -572,7 +572,12 @@ function engagement(count) {
 function computeTeams() {
   const draftRounds = (S.league.settings || {}).draft_rounds || 3;
   const currentSeason = parseInt(S.league.season, 10);
-  const nextSeasons = [String(currentSeason + 1), String(currentSeason + 2)];
+  const draftPending = S.league.status === 'pre_draft' || S.league.status === 'drafting';
+  const nextSeasons = [
+    ...(draftPending ? [String(currentSeason)] : []),
+    String(currentSeason + 1),
+    String(currentSeason + 2),
+  ];
   const ridToOwner = {}; S.rosters.forEach(r => ridToOwner[r.roster_id] = r.owner_id);
 
   const tradedKeys = new Set();
