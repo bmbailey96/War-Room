@@ -1146,10 +1146,12 @@ function renderTeams() {
       .map(k => `<div class="pos-row"><span class="pos-label">${k}</span>${
         byPos[k].map(p => {
           const cls = p.age >= 29 ? 'old' : (p.age <= 24 ? 'young' : '');
-          const tr = valueTrendFE(p.name);
-          const arrow = tr && Math.abs(tr.delta) >= 4
-            ? ` <span style="color:${tr.delta > 0 ? 'var(--green)' : 'var(--rust)'};font-size:9.5px">${tr.delta > 0 ? '▲' : '▼'}${Math.abs(tr.delta)}</span>` : '';
-          return `<span class="player-chip ${cls}">${esc(p.name)} <span class="meta">${p.age || '?'}</span>${arrow}${p.inj ? ` <span style="color:var(--rust)">${esc(p.inj)}</span>` : ''}</span>`;
+          const vtr = (typeof valueTrendFE === 'function') ? valueTrendFE(p.name) : null;
+          const arrow = vtr && Math.abs(vtr.delta) >= 4
+            ? ` <span style="color:${vtr.delta > 0 ? 'var(--green)' : 'var(--rust)'};font-size:9.5px">${vtr.delta > 0 ? '&#9650;' : '&#9660;'}${Math.abs(vtr.delta)}</span>` : '';
+          const tier = playerTier(p, t);
+          const tierMark = tier ? ` <span title="${esc(tier.label)}. ${esc(tier.why)}" style="color:${tier.color};font-size:10px">${tier.icon}</span>` : '';
+          return `<span class="player-chip ${cls}">${esc(p.name)} <span class="meta">${p.age || '?'}</span>${arrow}${tierMark}${p.inj ? ` <span style="color:var(--rust)">${esc(p.inj)}</span>` : ''}</span>`;
         }).join('')
       }</div>`).join('');
     const picksLine = t.picks.map(p => `${p.season} R${p.round}${p.original !== t.name ? `*` : ''}`).join(', ');
@@ -1177,6 +1179,10 @@ function renderTeams() {
       <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--line);display:inline-block;border-radius:2px"></span>Prime (25 to 28)</span>
       <span style="display:inline-flex;gap:5px;align-items:center"><span style="width:11px;height:11px;border:1px solid var(--rust);display:inline-block;border-radius:2px"></span>Age 29+ (declining window)</span>
       <span style="display:inline-flex;gap:5px;align-items:center"><span style="color:var(--rust)">red text</span> = injury flag</span>
+      <span style="display:inline-flex;gap:5px;align-items:center"><span style="color:var(--green)">&#128274;</span> do not trade</span>
+      <span style="display:inline-flex;gap:5px;align-items:center"><span style="color:var(--amber)">$</span> shop him</span>
+      <span style="display:inline-flex;gap:5px;align-items:center"><span style="color:var(--line-bright)">&#8646;</span> tradable</span>
+      <span style="display:inline-flex;gap:5px;align-items:center">hover any marker for the reason</span>
     </div>
     <div class="ai-controls" style="margin-top:6px">
       <button onclick="runAI('teams')" ${S.aiRunning.teams ? 'disabled' : ''}>Run Team Intel Scout</button>
@@ -1549,6 +1555,87 @@ function renderData() {
       <div class="chart-note">Live. Youth is future capital; age is a win-now clock ticking. Lower is younger.</div></div>`;
 }
 
+// PLAYER TIER. Which of my guys are untouchable, which are fair game, and
+// which I should be actively shopping. Derived from live market value, age,
+// recent value movement, and my own positional depth, so it re-decides
+// itself every pull instead of going stale like a hand-kept list.
+function playerTier(p, team) {
+  if (!team || !team.isMe || !p.pos) return null;
+  const pv = (S.server && S.server.playerValues && S.server.playerValues.players) || {};
+  const v = (pv[normName(p.name)] || {}).v;
+  if (v == null) return null;
+  const age = p.age || 27;
+  const tr = (typeof valueTrendFE === 'function') ? valueTrendFE(p.name) : null;
+  const rising = tr && tr.delta >= 8;
+  const falling = tr && tr.delta <= -8;
+  const surplus = (team.surplus || []).some(s => s.indexOf(p.pos + ':') === 0);
+
+  if (v <= 5) return { key: 'cut', icon: '&#10005;', label: 'Cut candidate', color: 'var(--muted)',
+    why: `Market value ${v} of 100. He is a roster spot, not an asset.` };
+
+  if (v >= 65) return { key: 'lock', icon: '&#128274;', label: 'Do not trade', color: 'var(--green)',
+    why: `Value ${v} of 100 puts him among the most valuable assets in the league. Only move him in a deal that obviously wins.` };
+
+  if (v >= 42 && age <= 24) return { key: 'lock', icon: '&#128274;', label: 'Do not trade', color: 'var(--green)',
+    why: `Value ${v} at age ${age}. Young and already valuable is the exact asset a dynasty roster is built on.` };
+
+  if (rising && age >= 26) return { key: 'shop', icon: '$', label: 'Shop him', color: 'var(--amber)',
+    why: `Value up ${tr.delta} over ${tr.days} days to ${v}, and he is ${age}. Sell into the spike before age catches the price.` };
+
+  if (age >= 29) return { key: 'shop', icon: '$', label: 'Shop him', color: 'var(--amber)',
+    why: `Age ${age} at value ${v}. He will not be part of your next contending roster, so convert him while he still returns something.` };
+
+  if (surplus && v <= 35) return { key: 'shop', icon: '$', label: 'Shop him', color: 'var(--amber)',
+    why: `You are flagged deep at ${p.pos} and he is the back of that group at value ${v}. Depth you never start is trade currency.` };
+
+  if (falling) return { key: 'trade', icon: '&#8646;', label: 'Tradable', color: 'var(--line-bright)',
+    why: `Value down ${Math.abs(tr.delta)} to ${v} over ${tr.days} days. Moving him now sells low, so hold unless someone overpays.` };
+
+  return { key: 'trade', icon: '&#8646;', label: 'Tradable', color: 'var(--line-bright)',
+    why: `Value ${v} of 100 at age ${age}. No reason to protect him and no reason to dump him. Fair game in the right deal.` };
+}
+
+// My roster sorted into keep, shop, and cut, so the Roster tab opens with a
+// direct answer to "who is actually available" instead of depth counts.
+function renderMyTiers() {
+  if (!S.teams) return '';
+  const me = S.teams.find(t => t.isMe);
+  if (!me) return '';
+  const groups = { lock: [], shop: [], cut: [], trade: [] };
+  for (const p of me.players) {
+    const tier = playerTier(p, me);
+    if (tier && groups[tier.key]) groups[tier.key].push({ p, tier });
+  }
+  const pv = (S.server && S.server.playerValues && S.server.playerValues.players) || {};
+  const valOf = n => (pv[normName(n)] || {}).v || 0;
+  for (const k of Object.keys(groups)) groups[k].sort((a, b) => valOf(b.p.name) - valOf(a.p.name));
+  if (!groups.lock.length && !groups.shop.length && !groups.cut.length) return '';
+
+  const section = (key, title, note) => {
+    const list = groups[key];
+    if (!list.length) return '';
+    const items = list.map(({ p, tier }) => `<div class="punch-item" style="align-items:flex-start">
+      <span style="flex:none;color:${tier.color};width:18px;text-align:center">${tier.icon}</span>
+      <span style="flex:1"><b>${esc(p.name)}</b> <span style="color:var(--muted)">${esc(p.pos || '')}${p.age ? ', ' + p.age : ''} &middot; val ${valOf(p.name)}</span>
+        <div style="font-size:10.5px;color:var(--muted);margin-top:1px">${esc(tier.why)}</div></span>
+    </div>`).join('');
+    return `<div style="margin-bottom:12px"><div class="call-slot-label" style="color:${list[0].tier.color};margin-bottom:4px">${title}</div>
+      <div class="chart-note" style="margin:0 0 4px">${note}</div>${items}</div>`;
+  };
+
+  return `<div class="feed-box" style="border-style:solid;border-color:var(--line);background:var(--panel-2);margin-bottom:14px">
+    <details ${S.tiersOpen ? 'open' : ''} ontoggle="S.tiersOpen = this.open">
+      <summary style="cursor:pointer;user-select:none;list-style:none"><span class="feed-title" style="display:inline;color:var(--line-bright)">Who is actually available</span>
+        <span style="color:var(--muted);font-size:10px">${groups.lock.length} locked, ${groups.shop.length} to shop, ${groups.trade.length} tradable, click to ${S.tiersOpen ? 'collapse' : 'expand'}</span></summary>
+      <div style="margin-top:8px">
+        ${section('lock', '&#128274; Do not trade', 'The core. Only move these in a deal that obviously wins.')}
+        ${section('shop', '$ Shop these', 'Actively float these. Either the price is peaking or the window does not match yours.')}
+        ${section('cut', '&#10005; Cut candidates', 'Roster spots, not assets. Drop these when you need room.')}
+        <div class="chart-note">Recomputed every pull from live market value, age, recent value movement, and your own positional depth. A starting point, not gospel. Disagree freely.</div>
+      </div>
+    </details></div>`;
+}
+
 function renderHoles() {
   if (!S.teams) return '<div class="empty-msg">Pull live data to survey rosters.</div>';
   const cards = [...S.teams].sort((a,b) => (b.isMe?1:0)-(a.isMe?1:0) || b.winPct - a.winPct).map(t => {
@@ -1582,7 +1669,7 @@ function renderHoles() {
     <span style="display:inline-flex;gap:5px;align-items:center"><span class="punch-flag surplus" style="width:13px;height:13px;font-size:9px">+</span>Surplus</span>
     <span style="display:inline-flex;gap:5px;align-items:center"><span style="color:var(--amber)">amber chip</span> = thin at position</span>
   </div>`;
-  return `${lg}<div class="grid">${cards}</div>`;
+  return `${renderMyTiers()}${lg}<div class="grid">${cards}</div>`;
 }
 
 function splitTradesText(text) {
