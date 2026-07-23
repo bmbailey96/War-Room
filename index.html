@@ -1071,41 +1071,7 @@ function renderTheCall() {
     <div class="call-src">Refreshed from your latest trades and pickups runs. Rerun those tabs to update.</div>
   </div>`;
 }
-  const pickSrc = freshest('pickups');
-  const { pick } = splitPickupText(pickSrc ? pickSrc.text : '');
-  const grab = pick && pick.grab && pick.grab.name ? pick.grab : null;
-  const drop = pick && pick.drop && pick.drop.name ? pick.drop : null;
-
-  if (!tradeMove && !grab && !drop) { el.innerHTML = ''; return; }
-
-  const slot = (label, color, body) => `<div class="call-slot">
-    <div class="call-slot-label" style="color:${color}">${label}</div>
-    <div class="call-slot-body">${body}</div>
-  </div>`;
-
-  const tradeBody = tradeMove
-    ? `${renderMd(tradeMove)}${S.callTrade ? `<button style="margin-top:8px" onclick="draftMessage()" ${S.draftingMsg?'disabled':''}>${S.draftingMsg?'Writing...':'Draft the message'}</button>` : ''}${S.draftedMsg ? `<div class="ai-result" style="margin-top:8px"><div class="ai-note" style="margin-bottom:6px">Paste into league chat:</div>${esc(S.draftedMsg)}<br/><button style="margin-top:6px" onclick="copyMsg()">Copy</button></div>` : ''}`
-    : `<span style="color:var(--muted)">No trade worth proposing right now. Run the Trades tab to refresh.</span>`;
-
-  const grabBody = grab
-    ? `<b>${esc(grab.name)}</b>${grab.pos?` <span style="color:var(--muted)">${esc(grab.pos)}</span>`:''}${grab.why?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(grab.why)}</div>`:''}`
-    : `<span style="color:var(--muted)">Nothing worth grabbing. Pool is thin.</span>`;
-
-  const dropBody = drop
-    ? `<b>${esc(drop.name)}</b>${drop.pos?` <span style="color:var(--muted)">${esc(drop.pos)}</span>`:''}${drop.why?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(drop.why)}</div>`:''}`
-    : `<span style="color:var(--muted)">Hold your roster. No clear drop.</span>`;
-
-
-  el.innerHTML = `<div class="call-box">
-    ${alertHtml}
-    <div class="call-label">The Call &mdash; today's three moves</div>
-    ${slot('Propose this trade', 'var(--line-bright)', tradeBody)}
-    ${slot('Grab this player', 'var(--green)', grabBody)}
-    ${slot('Drop this player', 'var(--rust)', dropBody)}
-    <div class="call-src">Refreshed from your latest trades and pickups runs. Rerun those tabs to update.</div>
-  </div>`;
-}
-
+  
 function tradeToLine(t) {
   const side = arr => (arr||[]).map(a => a.name + (a.pos ? ` (${a.pos})` : '')).join(' and ') || 'nothing';
   return `Trade with ${t.partner}. I send: ${side(t.iSend)}. I get: ${side(t.iGet)}.${t.verdict ? ' Rationale: ' + t.verdict : ''}`;
