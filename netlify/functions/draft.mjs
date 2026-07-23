@@ -9,10 +9,10 @@
 
 import {
   blobs, resolveLeague, getPlayersTrim, callClaude,
-  myRosterBlock, leagueStateBlock, MY_USER_ID,
+  myRosterBlock, leagueStateBlock, MY_USER_ID, normName,
 } from "./lib/ocho.mjs";
 
-const norm = s => (s || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+const norm = normName;
 
 export default async () => {
   const store = blobs();
