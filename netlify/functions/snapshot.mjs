@@ -28,7 +28,7 @@ export default async (req) => {
   const playersDB = await getPlayersTrim();
   const snapshot = computeSnapshot(core, playersDB);
   const playerValues = await store.get("player_values", { type: "json" });
-
+  const newsDigest = await store.get("news_digest", { type: "json" });
   const seen = (await store.get("seen_txn_ids", { type: "json" })) || [];
   const seenSet = new Set(seen);
   const newTxns = [];
@@ -47,7 +47,7 @@ export default async (req) => {
   if (!firstRun) {
     let graded = 0;
     for (const t of newTxns) {
-      const verdict = graded < 8 ? await gradeTransaction(t, snapshot, playersDB, playerValues) : null;
+      const verdict = graded < 8 ? await gradeTransaction(t, snapshot, playersDB, playerValues, newsDigest) : null;
       if (verdict) graded++;
       changelog.push({
         at: t.created || Date.now(),
