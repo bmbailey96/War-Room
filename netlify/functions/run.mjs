@@ -15,12 +15,16 @@ import snapshot from "./snapshot.mjs";
 import news from "./news.mjs";
 import stats from "./stats.mjs";
 import values from "./values.mjs";
+import context from "./context.mjs";
 import project from "./project.mjs";
+import calibrate from "./calibrate.mjs";
 
-const JOBS = { snapshot, news, stats, values, project };
+const JOBS = { snapshot, news, stats, values, context, project, calibrate };
 
-// Order matters: project reads the stats digest, stats reads the snapshot.
-const ALL = ["snapshot", "values", "news", "stats", "project"];
+// Order matters: project reads the stats digest, the game context and the
+// calibration weights; stats and context both read the snapshot; calibrate
+// reads the log project writes.
+const ALL = ["snapshot", "values", "news", "stats", "context", "calibrate", "project"];
 
 async function runJob(name) {
   const fn = JOBS[name];

@@ -7,7 +7,7 @@ export default async () => {
   const store = blobs();
   const [
     snapshot, changelog, trades, pickups, sitstart, teams, news, stats,
-    alerts, draftBoard, briefing, projection, projectionHistory, gamePlan, grading, trends, pregame,
+    alerts, draftBoard, briefing, projection, projectionHistory, gameContext, calibration, gamePlan, grading, trends, pregame,
     leagueMemory, playerValues, evaluation, valueHistory, tradeGrades,
   ] = await Promise.all([
     store.get("snapshot", { type: "json" }),
@@ -23,6 +23,8 @@ export default async () => {
     store.get("briefing", { type: "json" }),
     store.get("projection", { type: "json" }),
     store.get("projection_history", { type: "json" }),
+    store.get("game_context", { type: "json" }),
+    store.get("calibration", { type: "json" }),
     store.get("game_plan", { type: "json" }),
     store.get("grading_record", { type: "json" }),
     store.get("trends", { type: "json" }),
@@ -44,6 +46,8 @@ export default async () => {
     briefing: briefing || null,
     projection: projection || null,
     projectionHistory: projectionHistory || null,
+    gameContext: gameContext || null,
+    calibration: calibration || null,
     gamePlan: gamePlan || null,
     pregame: pregame || null,
     leagueMemory: leagueMemory || null,

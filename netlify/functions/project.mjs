@@ -14,6 +14,7 @@
 
 import {
   blobs, resolveLeague, projectPlayer, teamProjection, winProbability, scoreProjection,
+  winProbOptimalLineup, vacancyMap, DEFAULT_WEIGHTS,
 } from "./lib/ocho.mjs";
 
 const j = async (url, tries = 3) => {
@@ -61,6 +62,10 @@ export default async () => {
     return new Response(JSON.stringify({ error: "no snapshot yet" }), { status: 409 });
   }
   const statsDigest = await store.get("stats_digest", { type: "json" });
+  const gameContext = await store.get("game_context", { type: "json" });
+  const calibration = await store.get("calibration", { type: "json" });
+  const weights = { ...DEFAULT_WEIGHTS, ...((calibration && calibration.weights) || {}) };
+  const vacancies = vacancyMap(snapshot, statsDigest);
   const leagueId = snapshot.leagueId || await resolveLeague();
   const week = snapshot.week || (snapshot.nflState || {}).week || 1;
   const season = snapshot.season;
@@ -95,7 +100,9 @@ export default async () => {
   const opp = oppRow ? snapshot.teams.find(t => t.rosterId === oppRow.roster_id) : null;
 
   const projPlayer = (p, pr) => projectPlayer(p, {
-    baseProj: pr.pts || 0, oppTeam: pr.opp || null, statsDigest,
+    baseProj: pr.pts || 0, oppTeam: pr.opp || null, statsDigest, weights,
+    gameContext: (gameContext && gameContext.teams && p.team) ? gameContext.teams[p.team] : null,
+    vacancy: vacancies[p.pid] || null,
   });
   const rowsFor = (team, pids) => (pids || []).filter(x => x && x !== "0").map(pid => {
     const p = (team.players || []).find(x => x.pid === pid) || { name: pid, slot: "?" };
@@ -113,24 +120,87 @@ export default async () => {
     const pr = byPid[p.pid] || {};
     return { key: p.pid, onIR: p.onIR, ...projPlayer(p, pr) };
   }).filter(r => !r.onIR);
-  const best = optimalLineup(allMine, snapshot.rosterPositions || []);
+  const lineupSlots = (snapshot.rosterPositions || []).filter(x => x !== "BN" && x !== "IR");
   const startingKeys = new Set((myRow && myRow.starters) || []);
-  const bestKeys = new Set(best.map(b => b.player.key));
+  const best = optimalLineup(allMine, snapshot.rosterPositions || []);
 
-  // Pair the diff properly. The earlier version compared every promotion
-  // against the same single weakest starter, which produced two separate
-  // "start X over Tucker Kraft" lines for one bench spot. Best incoming is
-  // matched to worst outgoing, one for one.
-  const ins = best.filter(b => !startingKeys.has(b.player.key))
+  // Compare SLOT BY SLOT, not best-bench-against-worst-starter. The old
+  // pairing produced "start Burden over Kraft, worth +7.0" when the real
+  // change is Fannin into TE and Burden into the flex McConkey was holding,
+  // for +4.3 total. It named a swap that could not actually be made and
+  // overstated it by nearly three points.
+  const currentBySlot = ((myRow && myRow.starters) || []).map((pid, i) => ({
+    slot: lineupSlots[i] || "?",
+    player: starters.find(r => r.key === pid) || null,
+  }));
+  const bestBySlot = [];
+  const bestPool = [...best];
+  for (const slot of lineupSlots) {
+    const wanted = slot === "FLEX" ? "FLEX" : slot;
+    const idx = bestPool.findIndex(b => b.slot === wanted);
+    bestBySlot.push({ slot, player: idx >= 0 ? bestPool.splice(idx, 1)[0].player : null });
+  }
+
+  // What actually matters is WHICH PLAYERS start, not which slot they sit in.
+  // Moving McConkey from FLEX to WR while London goes the other way scores
+  // identically, so reporting it as a swap invented gains that do not exist:
+  // three "swaps" summing to 7.5 against a real total of 5.0. Compare the sets.
+  const bestKeys = new Set(bestBySlot.map(b => b.player && b.player.key).filter(Boolean));
+  const comingIn = bestBySlot
+    .filter(b => b.player && !startingKeys.has(b.player.key))
+    .map(b => ({ slot: b.slot, player: b.player }))
     .sort((a, b) => b.player.adjusted - a.player.adjusted);
-  const outs = starters.filter(s => s.adjusted != null && !bestKeys.has(s.key))
-    .sort((a, b) => a.adjusted - b.adjusted);
-  const benchSwaps = [];
-  for (let i = 0; i < Math.min(ins.length, outs.length); i++) {
-    const inn = ins[i].player, out = outs[i];
-    if (inn.adjusted > out.adjusted) {
-      benchSwaps.push({ slot: ins[i].slot, in: inn, out });
-    }
+  const goingOut = starters
+    .filter(r => r.adjusted != null && !bestKeys.has(r.key))
+    .sort((a, b) => b.adjusted - a.adjusted);
+
+  // Pair them purely for readability. The per-line number is the difference
+  // between the two named players; the honest figure is the total below.
+  const benchSwaps = comingIn.map((entry, i) => {
+    const out = goingOut[i] || null;
+    return {
+      slot: entry.slot,
+      in: entry.player,
+      out,
+      gain: out ? Math.round((entry.player.adjusted - out.adjusted) * 10) / 10 : null,
+    };
+  }).filter(x => x.out);
+
+  const optimalTotal = teamProjection(bestBySlot.map(b => b.player).filter(Boolean));
+  const totalGain = Math.round((optimalTotal.total - mine.total) * 10) / 10;
+
+  // And the lineup that wins the week most often, which is not always the one
+  // that scores the most.
+  let winFirst = null;
+  if (theirStarters.length) {
+    const seeded = bestBySlot.filter(b => b.player);
+    const res = winProbOptimalLineup(allMine, lineupSlots, seeded, theirs);
+    const seededKeys = new Set(seeded.map(x => x.player && x.player.key).filter(Boolean));
+    const changed = res.lineup
+      .filter(x => x.player && !seededKeys.has(x.player.key))
+      .map(x => ({ slot: x.slot, in: x.player }));
+    winFirst = {
+      total: res.total,
+      winProb: res.winProb,
+      differsFromPointsOptimal: changed.length > 0,
+      changes: changed,
+      stance: theirs.total > optimalTotal.total ? "underdog, variance helps" : "favoured, floor helps",
+    };
+  }
+
+  // Points are not the objective, winning the week is. Report what the change
+  // does to win probability so a 4-point gain in a game we already win by 20
+  // reads as what it is.
+  const optimalWinProb = theirStarters.length ? winProbability(optimalTotal, theirs) : null;
+
+  // What they are capable of if they fix their own lineup, which is their
+  // ceiling and the number worth planning against.
+  let opponentOptimal = null;
+  if (opp) {
+    const allTheirs = (opp.players || []).filter(p => !p.onIR)
+      .map(p => ({ key: p.pid, ...projPlayer(p, byPid[p.pid] || {}) }));
+    const theirBest = optimalLineup(allTheirs, snapshot.rosterPositions || []);
+    opponentOptimal = teamProjection(theirBest.map(b => b.player));
   }
 
   const dataNote = statsDigest
@@ -145,11 +215,20 @@ export default async () => {
     opponentOwner: opp ? opp.ownerName : null,
     starters, theirStarters, mine, theirs, winProb,
     benchSwaps, dataNote,
+    optimalTotal: optimalTotal.total, totalGain, optimalWinProb,
+    winFirst, weights, calibrated: !!(calibration && calibration.weights),
+    vacancyCount: Object.keys(vacancies).length,
+    contextAt: gameContext ? gameContext.at : null,
+    opponentOptimal: opponentOptimal ? opponentOptimal.total : null,
     bench: allMine.filter(r => !startingKeys.has(r.key)).sort((a, b) => (b.adjusted || 0) - (a.adjusted || 0)),
   };
   await store.setJSON("projection", projection);
 
   // Keep a history so projected can be scored against actual later.
+  // Per-player log: base, adjusted, and each factor's contribution, so the
+  // damping weights can be fitted against real results instead of guessed.
+  const playerLog = (await store.get("projection_player_log", { type: "json" })) || [];
+  const stamped = starters.filter(r => r.adjusted != null);
   const hist = (await store.get("projection_history", { type: "json" })) || [];
   const existing = hist.findIndex(h => h.week === week && h.season === season);
   const entry = {
@@ -175,10 +254,24 @@ export default async () => {
   }
   await store.setJSON("projection_history", hist.slice(-40));
 
+  const already = playerLog.some(e => e.season === season && e.week === week);
+  if (!already) {
+    playerLog.push({
+      season, week, at: Date.now(),
+      players: stamped.map(r => ({
+        key: r.key, name: r.name, slot: r.slot, team: r.team,
+        base: r.base, adjusted: r.adjusted, reasons: r.reasons, actual: null,
+      })),
+    });
+  }
+  await store.setJSON("projection_player_log", playerLog.slice(-20));
+
   return new Response(JSON.stringify({
     ok: true, week,
     projected: mine.total, opponent: projection.opponentName, opponentProjected: theirs.total,
-    winProb, swaps: benchSwaps.length, unprojected: mine.excluded,
+    winProb, swaps: benchSwaps.length, totalGain, optimalTotal: optimalTotal.total,
+    opponentOptimal: opponentOptimal ? opponentOptimal.total : null,
+    unprojected: mine.excluded,
   }), { headers: { "content-type": "application/json" } });
 };
 
