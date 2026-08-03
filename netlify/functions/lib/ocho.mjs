@@ -9,6 +9,18 @@ export const FALLBACK_LEAGUE_ID = "1205222463223365632";
 export const LEAGUE_NAME_PATTERN = /ocho|teenypetes/i;
 
 export const STARTER_NEEDS = { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1, DL_eligible: 1 };
+
+// Sleeper's `position` field is the NFL position (DE, OLB, CB...), which is
+// NOT always a slot that exists in this league. Myles Garrett is "DE" and
+// Micah Parsons is "LB"; both actually fill the single DL slot. Every prompt
+// used to read the raw position and conclude the DL slot was empty. Always
+// resolve a player to the slot they can actually occupy.
+export const SLOT_PRIORITY = ["QB", "RB", "WR", "TE", "K", "DEF", "DL", "LB", "DB"];
+export function slotPos(p) {
+  const fps = (p && p.fps) || [];
+  for (const s of SLOT_PRIORITY) if (fps.includes(s)) return s;
+  return (p && p.pos) || "UNK";
+}
 // Name normalizer used EVERYWHERE names are matched across data sources.
 // Strips generational suffixes (II, III, Jr, Sr...) because DynastyProcess
 // writes "Patrick Mahomes II" while Sleeper stores "Patrick Mahomes", and
@@ -88,7 +100,11 @@ export async function fetchLeagueCore(leagueId) {
       j(`https://api.sleeper.app/v1/league/${leagueId}/transactions/${i + 1}`).catch(() => [])
     )
   );
-  return { league, rosters, users, tradedPicks, nflState, trending, txnWeeks };
+  // This week's head-to-head. Without it every sit/start call is made blind
+  // to who we are actually playing.
+  const wk = Math.max(1, Math.min(18, +(nflState.week || 1) || 1));
+  const matchups = await j(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${wk}`).catch(() => []);
+  return { league, rosters, users, tradedPicks, nflState, trending, txnWeeks, matchups, matchupWeek: wk };
 }
 
 export function computeSnapshot(core, playersDB) {
@@ -173,7 +189,12 @@ export function computeSnapshot(core, playersDB) {
       benchLeakage: ppts ? Math.round((ppts - fpts) * 10) / 10 : null,
       waiverPosition: st.waiver_position || null,
       depth, holes, surplus, injured,
-      players: players.map(p => ({ name: p.name, pos: p.pos, team: p.team, age: p.age, inj: p.inj })),
+      players: players.map(p => ({
+        pid: p.pid, name: p.name, pos: p.pos, slot: slotPos(p), fps: p.fps || [],
+        team: p.team, age: p.age, inj: p.inj,
+        onIR: (r.reserve || []).includes(p.pid),
+      })),
+      reserve: (r.reserve || []).map(pid => pInfo(playersDB, pid).name),
       picks: ledger[r.roster_id].sort((a, b) => a.season.localeCompare(b.season) || a.round - b.round),
       stance,
       isMe: r.owner_id === MY_USER_ID,
@@ -213,7 +234,32 @@ export function computeSnapshot(core, playersDB) {
     nflState: {
       week: core.nflState.week, season_type: core.nflState.season_type, season: core.nflState.season,
     },
+    week: core.matchupWeek || core.nflState.week || null,
+    matchup: buildMatchup(core, teams),
     teams,
+  };
+}
+
+// Who I play this week, and what they will start.
+function buildMatchup(core, teams) {
+  const rows = core.matchups || [];
+  if (!rows.length) return null;
+  const me = teams.find(t => t.isMe);
+  if (!me) return null;
+  const mine = rows.find(r => r.roster_id === me.rosterId);
+  if (!mine || mine.matchup_id == null) return null;
+  const oppRow = rows.find(r => r.matchup_id === mine.matchup_id && r.roster_id !== me.rosterId);
+  if (!oppRow) return null;
+  const opp = teams.find(t => t.rosterId === oppRow.roster_id);
+  if (!opp) return null;
+  const nameOf = (team, pid) => (team.players.find(p => p.pid === pid) || {}).name || pid;
+  return {
+    week: core.matchupWeek,
+    opponentName: opp.name,
+    opponentOwner: (OWNER_HISTORY[opp.ownerId] || {}).display_name || "",
+    opponentRosterId: opp.rosterId,
+    opponentStarters: (oppRow.starters || []).filter(x => x && x !== "0").map(pid => nameOf(opp, pid)),
+    myStarters: (mine.starters || []).filter(x => x && x !== "0").map(pid => nameOf(me, pid)),
   };
 }
 
@@ -332,10 +378,80 @@ export function myRosterBlock(snapshot) {
   if (!me) return "My roster not found.";
   const byPos = {};
   for (const p of me.players) {
-    const k = p.pos || "UNK";
-    (byPos[k] = byPos[k] || []).push(`${p.name} (${p.team || "FA"}, age ${p.age || "?"}${p.inj ? ", INJ: " + p.inj : ""})`);
+    const k = p.slot || slotPos(p);
+    const tags = [
+      p.pos && p.pos !== k ? `listed ${p.pos}` : null,
+      p.inj ? `INJ: ${p.inj}` : null,
+      p.onIR ? "ON IR (does not count against roster limit)" : null,
+    ].filter(Boolean);
+    (byPos[k] = byPos[k] || []).push(
+      `${p.name} (${p.team || "FA"}, age ${p.age || "?"}${tags.length ? ", " + tags.join(", ") : ""})`
+    );
   }
-  return Object.entries(byPos).map(([pos, list]) => `${pos}: ${list.join("; ")}`).join("\n");
+  const lines = Object.entries(byPos).map(([pos, list]) => `${pos}: ${list.join("; ")}`).join("\n");
+  return `${lines}\n(Positions above are LEAGUE SLOTS, already resolved from fantasy eligibility. A player listed as DE or LB in the NFL fills the DL slot here.)`;
+}
+
+// ---- Evidence blocks: computed first, fed as conclusions, not raw rows ----
+
+export function matchupBlock(snapshot) {
+  const m = snapshot.matchup;
+  if (!m) return "";
+  return `\n\nTHIS WEEK'S HEAD-TO-HEAD (week ${m.week}): I play ${m.opponentName}${m.opponentOwner ? ` (${m.opponentOwner})` : ""}.
+Their current starters: ${m.opponentStarters.join(", ") || "not set yet"}.
+My current starters: ${m.myStarters.join(", ") || "not set yet"}.
+This is a head-to-head week. A high-floor start is worth more when I am favored; a high-variance start is worth more when I am the underdog.`;
+}
+
+export function formBlock(statsDigest) {
+  const f = statsDigest && statsDigest.form;
+  if (!f || !Object.keys(f).length) return "";
+  const rows = Object.entries(f)
+    .filter(([, v]) => v.recentPassRate != null && v.seasonPassRate != null)
+    .map(([team, v]) => ({ team, ...v, delta: Math.round((v.recentPassRate - v.seasonPassRate) * 10) / 10 }))
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    .slice(0, 12)
+    .map(r => `${r.team}: pass rate ${r.recentPassRate}% last 3 vs ${r.seasonPassRate}% season (${r.delta > 0 ? "+" : ""}${r.delta}), ${r.recentPlays} plays/gm recent`);
+  if (!rows.length) return "";
+  return `\n\nTEAM FORM SHIFTS (biggest recent changes in how a team plays, last 3 games vs season; a large swing usually means a coordinator change, a QB change, or game script, and it matters more than the season average):\n${rows.join("\n")}`;
+}
+
+export function defenseBlock(statsDigest, snapshot) {
+  const d = statsDigest && statsDigest.defense;
+  if (!d || !Object.keys(d).length) return "";
+  const m = snapshot && snapshot.matchup;
+  const mineTeams = new Set();
+  const me = snapshot && snapshot.teams.find(t => t.isMe);
+  if (me) for (const p of me.players) if (p.team) mineTeams.add(p.team);
+  const lines = [];
+  for (const pos of ["QB", "RB", "WR", "TE"]) {
+    const ranked = Object.entries(d)
+      .map(([team, v]) => ({ team, ppg: v[pos] }))
+      .filter(x => x.ppg != null)
+      .sort((a, b) => b.ppg - a.ppg);
+    if (!ranked.length) continue;
+    const soft = ranked.slice(0, 5).map(x => `${x.team} ${x.ppg}`).join(", ");
+    const tough = ranked.slice(-5).map(x => `${x.team} ${x.ppg}`).join(", ");
+    lines.push(`${pos}: softest ${soft} | toughest ${tough}`);
+  }
+  if (!lines.length) return "";
+  return `\n\nDEFENSE VS POSITION (PPR points allowed per game, ${statsDigest.season}${statsDigest.seasonIsCurrent ? "" : " — LAST SEASON, no current-season games played yet, treat as directional only"}):\n${lines.join("\n")}${m ? `\n(Check my starters' opponents against this before locking a lineup.)` : ""}`;
+}
+
+export function usageBlock(statsDigest) {
+  const u = (statsDigest && statsDigest.usage) || [];
+  if (!u.length) return "";
+  const moved = u
+    .filter(x => x.recentSnapPct != null && x.priorSnapPct != null)
+    .map(x => ({ ...x, delta: x.recentSnapPct - x.priorSnapPct }))
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    .slice(0, 18)
+    .map(x => `${x.player} (${x.team || "?"}${x.mine ? ", MINE" : x.rostered ? ", rostered in league" : ", FREE AGENT"}): snaps ${x.recentSnapPct}% last 3 vs ${x.priorSnapPct}% prior (${x.delta > 0 ? "+" : ""}${x.delta})${x.tgtShare != null ? `, target share ${x.tgtShare}%` : ""}${x.touches != null ? `, ${x.touches} touches/gm` : ""}`);
+  if (!moved.length) return "";
+  const stale = statsDigest.seasonIsCurrent
+    ? ""
+    : ` These are ${statsDigest.season} numbers and the "last 3 games" window lands on the END of that season, when starters rest and backups play. Treat a spike here as a lead to check, not as evidence.`;
+  return `\n\nUSAGE TRENDS (biggest snap-share movers, ${statsDigest.season}).${stale} Rising snap share on a free agent is the strongest pickup signal there is; falling snap share on my player is the strongest drop signal:\n${moved.join("\n")}`;
 }
 
 export function trendingBlock(core, snapshot, playersDB) {
