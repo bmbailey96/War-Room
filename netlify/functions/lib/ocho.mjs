@@ -486,6 +486,33 @@ export function scoreProjection(stats, scoringSettings) {
 // Per-position scoring volatility, as a fraction of the projection. Used for
 // the win probability, not for the point estimate.
 const POS_SIGMA = { QB: 0.34, RB: 0.55, WR: 0.60, TE: 0.65, K: 0.45, DEF: 0.70, DL: 0.60 };
+
+// How hard each adjustment is allowed to push. These start as damped guesses
+// and get replaced by calibrate.mjs once there are real results to fit
+// against. The damping exists because the base projection ALREADY knows who
+// the opponent is and roughly what Vegas thinks, so applying a full-strength
+// matchup adjustment on top double counts. Until the fit runs, treat every
+// adjusted number as a lean rather than a truth.
+export const DEFAULT_WEIGHTS = {
+  defense: 0.5,
+  form: 0.8,
+  usage: 0.5,
+  environment: 0.6,
+  wind: 1.0,
+  vacancy: 1.0,
+  calibrated: false,
+};
+
+// Same-team players score together: a quarterback's good day is his receivers'
+// good day. Assuming independence understates how wide a team's outcome can
+// swing, which makes the win probability overconfident in both directions.
+const PASS_GAME = new Set(["QB", "WR", "TE"]);
+function correlation(a, b) {
+  if (!a.team || !b.team || a.team !== b.team) return 0;
+  if (PASS_GAME.has(a.slot) && PASS_GAME.has(b.slot)) return 0.35;
+  if (a.slot === "RB" && b.slot === "RB") return -0.25;   // same backfield, they eat each other
+  return 0.08;
+}
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // Normal CDF, Abramowitz-Stegun 7.1.26.
@@ -508,6 +535,9 @@ export function leagueAvgAllowed(defense) {
 // One player's adjusted projection plus the reasons, in order of size.
 export function projectPlayer(player, opts) {
   const { baseProj, oppTeam, statsDigest } = opts;
+  const W = { ...DEFAULT_WEIGHTS, ...(opts.weights || {}) };
+  const game = opts.gameContext || null;
+  const vacancy = opts.vacancy || null;
   const slot = player.slot || player.pos;
   const scorePos = ["QB", "RB", "WR", "TE"].includes(slot) ? slot : null;
   const reasons = [];
@@ -518,7 +548,7 @@ export function projectPlayer(player, opts) {
   const avg = leagueAvgAllowed(defense);
   if (scorePos && oppTeam && defense[oppTeam] && defense[oppTeam][scorePos] != null && avg[scorePos]) {
     const ratio = defense[oppTeam][scorePos] / avg[scorePos];
-    const m = 1 + 0.5 * (ratio - 1);
+    const m = 1 + W.defense * (ratio - 1);
     mult *= m;
     if (Math.abs(m - 1) >= 0.04) {
       reasons.push({
@@ -534,7 +564,7 @@ export function projectPlayer(player, opts) {
   if (form && scorePos) {
     const passDelta = (form.recentPassRate - form.seasonPassRate) / 100;
     const lean = scorePos === "RB" ? -0.8 : (scorePos === "K" ? 0 : 0.8);
-    const m = clamp(1 + lean * passDelta, 0.92, 1.08);
+    const m = clamp(1 + W.form * lean * passDelta, 0.90, 1.10);
     mult *= m;
     if (Math.abs(m - 1) >= 0.02) {
       reasons.push({
@@ -554,7 +584,7 @@ export function projectPlayer(player, opts) {
     : null;
   if (usage && usage.recentSnapPct != null && usage.priorSnapPct != null) {
     const snapDelta = (usage.recentSnapPct - usage.priorSnapPct) / 100;
-    const m = clamp(1 + 0.5 * snapDelta, 0.90, 1.10);
+    const m = clamp(1 + W.usage * snapDelta, 0.90, 1.10);
     mult *= m;
     if (Math.abs(m - 1) >= 0.02) {
       reasons.push({
@@ -565,8 +595,52 @@ export function projectPlayer(player, opts) {
     }
   }
 
+  // 4. Game environment. Vegas's implied team total is the best public
+  // estimate of how many points this offense will actually score, and it
+  // moves an offense far more than any single defensive ranking does.
+  if (game && game.implied != null && game.avgTeamTotal) {
+    const ratio = game.implied / game.avgTeamTotal;
+    const m = clamp(1 + W.environment * (ratio - 1), 0.82, 1.18);
+    mult *= m;
+    if (Math.abs(m - 1) >= 0.02) {
+      reasons.push({
+        size: Math.abs(m - 1),
+        short: "Vegas total", pct: Math.round((m - 1) * 100),
+        text: `Vegas implies ${game.implied} points for ${player.team} vs a ${game.avgTeamTotal} league average (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
+      });
+    }
+  }
+
+  // 5. Wind. The only weather variable that reliably moves fantasy scoring,
+  // and the one a Tuesday projection cannot possibly know about. Passing and
+  // kicking suffer; running gains a little because the game script tilts.
+  if (game && game.wind != null && !game.indoors && game.wind >= 13) {
+    const excess = game.wind - 13;
+    const hit = Math.min(0.16, excess * 0.012) * W.wind;
+    const affected = ["QB", "WR", "TE", "K"].includes(slot);
+    const m = affected ? 1 - hit : 1 + hit * 0.4;
+    mult *= m;
+    reasons.push({
+      size: Math.abs(m - 1),
+      short: `${game.wind} mph wind`, pct: Math.round((m - 1) * 100),
+      text: `${game.wind} mph wind at kickoff, outdoors at ${game.stadium || "the venue"} (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
+    });
+  }
+
+  // 6. Opportunity vacated by a teammate who is out. Target share does not sit
+  // still when the man above someone on the depth chart is inactive.
+  if (vacancy && vacancy.multiplier && vacancy.multiplier !== 1) {
+    const m = clamp(1 + (vacancy.multiplier - 1) * W.vacancy, 0.9, 1.35);
+    mult *= m;
+    reasons.push({
+      size: Math.abs(m - 1),
+      short: `${vacancy.outName} out`, pct: Math.round((m - 1) * 100),
+      text: `${vacancy.outName} is ${vacancy.status}, vacating ${vacancy.share}% target share (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
+    });
+  }
+
   // Nothing above is allowed to run away on its own.
-  mult = clamp(mult, 0.75, 1.30);
+  mult = clamp(mult, 0.70, 1.35);
 
   // 4. Availability is a gate, not an adjustment.
   const inj = (player.inj || "").toLowerCase();
@@ -601,10 +675,16 @@ export function projectPlayer(player, opts) {
 export function teamProjection(rows) {
   const scored = rows.filter(r => !r.unprojected && r.adjusted != null);
   const total = scored.reduce((a, r) => a + r.adjusted, 0);
-  const variance = scored.reduce((a, r) => {
-    const sigma = (POS_SIGMA[r.slot] ?? 0.55) * r.adjusted;
-    return a + sigma * sigma;
-  }, 0);
+  const sig = scored.map(r => (POS_SIGMA[r.slot] ?? 0.55) * r.adjusted);
+  // Full covariance, not a sum of independent variances. Stacked teammates
+  // widen the distribution; two backs in one backfield narrow it.
+  let variance = 0;
+  for (let i = 0; i < scored.length; i++) {
+    for (let k = 0; k < scored.length; k++) {
+      variance += i === k ? sig[i] * sig[i] : correlation(scored[i], scored[k]) * sig[i] * sig[k];
+    }
+  }
+  variance = Math.max(variance, 1);
   return {
     total: Math.round(total * 10) / 10,
     baseTotal: Math.round(scored.reduce((a, r) => a + r.base, 0) * 10) / 10,
@@ -617,6 +697,100 @@ export function winProbability(mine, theirs) {
   const sd = Math.sqrt(mine.variance + theirs.variance);
   if (!sd) return 0.5;
   return normCdf((mine.total - theirs.total) / sd);
+}
+
+// Points are not the objective. Winning the week is.
+//
+// When we are a heavy favourite the safest lineup wins more often than the
+// highest-scoring one, because variance can only cost us. When we are the
+// underdog it inverts: the boom-bust player is worth starting even at fewer
+// projected points, because we need the tail. Maximising expected points
+// silently gets both cases wrong.
+//
+// Hill climb from the points-optimal lineup, swapping one player at a time,
+// keeping whatever raises the probability of outscoring them.
+export function winProbOptimalLineup(pool, lineupSlots, startingLineup, theirs) {
+  const FLEXABLE = ["RB", "WR", "TE"];
+  const eligible = (player, slot) => slot === "FLEX" ? FLEXABLE.includes(player.slot) : player.slot === slot;
+  let current = startingLineup.map(x => ({ ...x }));
+  const scoreOf = lineup => {
+    const mine = teamProjection(lineup.map(x => x.player).filter(Boolean));
+    return { wp: winProbability(mine, theirs), total: mine.total };
+  };
+  let bestScore = scoreOf(current);
+
+  for (let pass = 0; pass < 8; pass++) {
+    let improved = null;
+    const used = new Set(current.map(x => x.player && x.player.key));
+    for (let i = 0; i < current.length; i++) {
+      const slot = current[i].slot;
+      for (const cand of pool) {
+        if (cand.adjusted == null || used.has(cand.key)) continue;
+        if (!eligible(cand, slot)) continue;
+        const trial = current.map(x => ({ ...x }));
+        trial[i] = { slot, player: cand };
+        const sc = scoreOf(trial);
+        if (sc.wp > bestScore.wp + 0.0005 && (!improved || sc.wp > improved.sc.wp)) {
+          improved = { trial, sc, i, cand, out: current[i].player };
+        }
+      }
+    }
+    if (!improved) break;
+    current = improved.trial;
+    bestScore = improved.sc;
+  }
+  return { lineup: current, winProb: bestScore.wp, total: bestScore.total };
+}
+
+// Who is out, and who inherits their work. Target share does not evaporate
+// when a receiver is inactive, it moves to the players behind him.
+export function vacancyMap(snapshot, statsDigest) {
+  const OUT = ["out", "ir", "pup", "sus", "doubtful", "dnr", "cov"];
+  const usage = (statsDigest && statsDigest.usage) || [];
+  const shareOf = name => {
+    const u = usage.find(x => normName(x.player) === normName(name));
+    return u && u.tgtShare != null ? u.tgtShare : null;
+  };
+  const byTeam = {};
+  for (const t of snapshot.teams || []) {
+    for (const p of t.players || []) {
+      if (!p.team) continue;
+      (byTeam[p.team] = byTeam[p.team] || []).push(p);
+    }
+  }
+  const out = {};
+  for (const [team, players] of Object.entries(byTeam)) {
+    const missing = players.filter(p => {
+      const inj = (p.inj || "").toLowerCase();
+      return inj && OUT.some(k => inj.includes(k));
+    });
+    if (!missing.length) continue;
+    for (const gone of missing) {
+      const share = shareOf(gone.name);
+      if (!share || share < 8) continue;   // not enough work to matter
+      const heirs = players.filter(p =>
+        p.pid !== gone.pid &&
+        ["WR", "TE", "RB"].includes(p.slot) &&
+        !((p.inj || "").toLowerCase() && OUT.some(k => (p.inj || "").toLowerCase().includes(k)))
+      );
+      if (!heirs.length) continue;
+      // Split the vacated share, weighted toward same-position heirs.
+      const weights = heirs.map(h => (h.slot === gone.slot ? 2 : 1));
+      const sum = weights.reduce((a, b) => a + b, 0);
+      heirs.forEach((h, i) => {
+        const got = share * (weights[i] / sum);
+        const bump = 1 + Math.min(0.30, got / 100 * 1.6);
+        const prev = out[h.pid];
+        if (!prev || bump > prev.multiplier) {
+          out[h.pid] = {
+            multiplier: bump, outName: gone.name,
+            status: gone.inj || "out", share: Math.round(share),
+          };
+        }
+      });
+    }
+  }
+  return out;
 }
 
 export function projectionBlock(projection) {
