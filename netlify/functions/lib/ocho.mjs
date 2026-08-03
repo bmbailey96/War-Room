@@ -223,6 +223,10 @@ export function computeSnapshot(core, playersDB) {
     leagueId: league.league_id,
     leagueName: league.name,
     rosterPositions: league.roster_positions,
+    // Needed to score projections the way THIS league scores them. Standard
+    // PPR is wrong here: pass_yd is 0.05 not 0.04, interceptions are -1 not
+    // -2, there are long-TD bonuses, and IDP scoring exists at all.
+    scoringSettings: league.scoring_settings || null,
     settings: {
       num_teams: (league.settings || {}).num_teams,
       draft_rounds: draftRounds,
@@ -462,6 +466,23 @@ export function usageBlock(statsDigest) {
 // already compute, deterministically, in JS. No model involved, so the number
 // cannot be hallucinated and the reasons are always auditable.
 
+// Turn a projected stat line into points using the league's own scoring
+// settings. Sleeper's published `pts_ppr` is generic PPR and does not match
+// this league: it was reading Myles Garrett as 1.01 instead of 13.91 because
+// generic PPR has no IDP scoring, and it was a third to two thirds of a point
+// low on every skill player. Scoring the raw stats reproduces the number on
+// Sleeper's own matchup screen exactly.
+export function scoreProjection(stats, scoringSettings) {
+  if (!stats || !scoringSettings) return null;
+  let pts = 0;
+  for (const [key, value] of Object.entries(stats)) {
+    const weight = scoringSettings[key];
+    if (typeof weight !== "number" || typeof value !== "number") continue;
+    pts += weight * value;
+  }
+  return Math.round(pts * 100) / 100;
+}
+
 // Per-position scoring volatility, as a fraction of the projection. Used for
 // the win probability, not for the point estimate.
 const POS_SIGMA = { QB: 0.34, RB: 0.55, WR: 0.60, TE: 0.65, K: 0.45, DEF: 0.70, DL: 0.60 };
@@ -502,6 +523,7 @@ export function projectPlayer(player, opts) {
     if (Math.abs(m - 1) >= 0.04) {
       reasons.push({
         size: Math.abs(m - 1),
+        short: `${oppTeam} D`, pct: Math.round((m - 1) * 100),
         text: `${oppTeam} allows ${defense[oppTeam][scorePos]} to ${scorePos}s per game vs ${Math.round(avg[scorePos] * 10) / 10} league average (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
     }
@@ -517,6 +539,7 @@ export function projectPlayer(player, opts) {
     if (Math.abs(m - 1) >= 0.02) {
       reasons.push({
         size: Math.abs(m - 1),
+        short: `${player.team} pass rate`, pct: Math.round((m - 1) * 100),
         text: `${player.team} pass rate ${form.recentPassRate}% last 3 vs ${form.seasonPassRate}% season (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
     }
@@ -536,6 +559,7 @@ export function projectPlayer(player, opts) {
     if (Math.abs(m - 1) >= 0.02) {
       reasons.push({
         size: Math.abs(m - 1),
+        short: "snap share", pct: Math.round((m - 1) * 100),
         text: `snaps ${usage.priorSnapPct}% to ${usage.recentSnapPct}% (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
     }
@@ -550,14 +574,16 @@ export function projectPlayer(player, opts) {
   if (["out", "ir", "pup", "sus", "doubtful", "dnr", "cov"].some(k => inj.includes(k))) availability = inj.includes("doubtful") ? 0.25 : 0;
   else if (inj.includes("questionable")) availability = 0.92;
   if (availability < 1) {
-    reasons.push({ size: 1 - availability, text: `listed ${player.inj}${availability === 0 ? ", projected zero" : ""}` });
+    reasons.push({
+      size: 1 - availability, short: player.inj, pct: null,
+      text: `listed ${player.inj}${availability === 0 ? ", projected zero" : ""}`,
+    });
   }
 
-  // Rotowire's pts_ppr does not cover IDP scoring, so a defensive player comes
-  // back as a fraction of a point. Better to mark it unprojected than to put a
-  // fake 0.9 next to Myles Garrett and quietly deflate the team total.
-  const idp = ["DL", "LB", "DB"].includes(slot);
-  const unprojected = idp || !baseProj;
+  // With league scoring applied, IDP players project properly, so they count
+  // toward the total. There is no defense-vs-position table for defenders, so
+  // they simply carry no matchup adjustment.
+  const unprojected = !baseProj;
   const adjusted = Math.round(baseProj * mult * availability * 10) / 10;
   reasons.sort((a, b) => b.size - a.size);
   return {
@@ -566,8 +592,9 @@ export function projectPlayer(player, opts) {
     adjusted: unprojected ? null : adjusted,
     delta: unprojected ? null : Math.round((adjusted - baseProj) * 10) / 10,
     unprojected,
-    unprojectedNote: unprojected ? (idp ? "IDP, no PPR projection published" : "no projection published") : null,
+    unprojectedNote: unprojected ? "no projection published" : null,
     reasons: reasons.slice(0, 3).map(r => r.text),
+    chips: reasons.slice(0, 3).map(r => ({ label: r.short || r.text, pct: r.pct ?? null })),
   };
 }
 
@@ -580,6 +607,7 @@ export function teamProjection(rows) {
   }, 0);
   return {
     total: Math.round(total * 10) / 10,
+    baseTotal: Math.round(scored.reduce((a, r) => a + r.base, 0) * 10) / 10,
     variance,
     excluded: rows.length - scored.length,
   };
@@ -598,7 +626,7 @@ export function projectionBlock(projection) {
     : `  ${r.name} (${r.slot}, ${r.team || "?"}${r.opp ? " vs " + r.opp : ""}): ${r.base} base -> ${r.adjusted}${r.reasons.length ? ` [${r.reasons.join("; ")}]` : ""}`;
   const bench = (projection.benchSwaps || []).map(s => `  START ${s.in.name} (${s.in.adjusted}) OVER ${s.out.name} (${s.out.adjusted}) at ${s.slot}, worth +${Math.round((s.in.adjusted - s.out.adjusted) * 10) / 10}`);
   return `\n\nWEEK ${projection.week} PROJECTION (computed, not guessed. Base is Sleeper's Rotowire number; adjusted applies opponent defense vs position, the team's last-3-game pass rate vs season, snap-share direction, and injury status. ${projection.dataNote}):
-My projected total ${projection.mine.total} vs ${projection.opponentName} ${projection.theirs.total}. Win probability ${Math.round(projection.winProb * 100)}%.
+My adjusted total ${projection.mine.total} vs ${projection.opponentName} ${projection.theirs.total}. Sleeper's own numbers, unadjusted, are ${projection.mine.baseTotal} to ${projection.theirs.baseTotal}. Win probability ${Math.round(projection.winProb * 100)}%.
 My starters:
 ${projection.starters.map(line).join("\n")}
 ${bench.length ? `Lineup upgrades available:\n${bench.join("\n")}` : "No bench player out-projects a current starter."}`;
