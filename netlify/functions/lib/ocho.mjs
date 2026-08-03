@@ -553,7 +553,8 @@ export function projectPlayer(player, opts) {
     if (Math.abs(m - 1) >= 0.04) {
       reasons.push({
         size: Math.abs(m - 1),
-        short: `${oppTeam} D`, pct: Math.round((m - 1) * 100),
+        short: `${oppTeam} ${m > 1 ? "is soft against" : "is tough on"} ${scorePos}s`,
+        pct: Math.round((m - 1) * 100),
         text: `${oppTeam} allows ${defense[oppTeam][scorePos]} to ${scorePos}s per game vs ${Math.round(avg[scorePos] * 10) / 10} league average (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
     }
@@ -569,7 +570,8 @@ export function projectPlayer(player, opts) {
     if (Math.abs(m - 1) >= 0.02) {
       reasons.push({
         size: Math.abs(m - 1),
-        short: `${player.team} pass rate`, pct: Math.round((m - 1) * 100),
+        short: `${player.team} has been ${passDelta > 0 ? "throwing" : "running"} more lately`,
+        pct: Math.round((m - 1) * 100),
         text: `${player.team} pass rate ${form.recentPassRate}% last 3 vs ${form.seasonPassRate}% season (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
     }
@@ -589,7 +591,8 @@ export function projectPlayer(player, opts) {
     if (Math.abs(m - 1) >= 0.02) {
       reasons.push({
         size: Math.abs(m - 1),
-        short: "snap share", pct: Math.round((m - 1) * 100),
+        short: `snaps trending ${snapDelta > 0 ? "up" : "down"}`,
+        pct: Math.round((m - 1) * 100),
         text: `snaps ${usage.priorSnapPct}% to ${usage.recentSnapPct}% (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
     }
@@ -605,7 +608,8 @@ export function projectPlayer(player, opts) {
     if (Math.abs(m - 1) >= 0.02) {
       reasons.push({
         size: Math.abs(m - 1),
-        short: "Vegas total", pct: Math.round((m - 1) * 100),
+        short: `Vegas sees ${player.team} scoring ${game.implied}`,
+        pct: Math.round((m - 1) * 100),
         text: `Vegas implies ${game.implied} points for ${player.team} vs a ${game.avgTeamTotal} league average (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
     }
@@ -622,7 +626,7 @@ export function projectPlayer(player, opts) {
     mult *= m;
     reasons.push({
       size: Math.abs(m - 1),
-      short: `${game.wind} mph wind`, pct: Math.round((m - 1) * 100),
+      short: `${game.wind} mph wind, outdoors`, pct: Math.round((m - 1) * 100),
       text: `${game.wind} mph wind at kickoff, outdoors at ${game.stadium || "the venue"} (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
     });
   }
@@ -634,7 +638,8 @@ export function projectPlayer(player, opts) {
     mult *= m;
     reasons.push({
       size: Math.abs(m - 1),
-      short: `${vacancy.outName} out`, pct: Math.round((m - 1) * 100),
+      short: `${vacancy.outName} out, work to spread around`,
+      pct: Math.round((m - 1) * 100),
       text: `${vacancy.outName} is ${vacancy.status}, vacating ${vacancy.share}% target share (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
     });
   }
@@ -649,7 +654,7 @@ export function projectPlayer(player, opts) {
   else if (inj.includes("questionable")) availability = 0.92;
   if (availability < 1) {
     reasons.push({
-      size: 1 - availability, short: player.inj, pct: null,
+      size: 1 - availability, short: `listed ${player.inj}`, pct: null,
       text: `listed ${player.inj}${availability === 0 ? ", projected zero" : ""}`,
     });
   }
