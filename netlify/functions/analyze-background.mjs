@@ -4,6 +4,7 @@
 
 import {
   blobs, OWNER_HISTORY, leagueContextBlock, myRosterBlock,
+  matchupBlock, defenseBlock, usageBlock, formBlock,
   callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock, leagueStateBlock,
   validateTrades, draftClassBlock, valueTrendBlock, tradeGradeBlock,
 } from "./lib/ocho.mjs";
@@ -45,7 +46,10 @@ function digestBlocks(newsDigest, statsDigest, snapshot) {
             ...(i.matched?.league || []).slice(0, 2),
             ...(i.matched?.teams || []).slice(0, 2),
           ].join(", ");
-          return `- [${i.source}] ${i.title}${tags ? ` (${tags})` : ""}`;
+          // Include the description, not just the headline. A headline says a
+          // beat writer wrote about the depth chart; the description says what
+          // it actually said.
+          return `- [${i.source}] ${i.title}${tags ? ` (${tags})` : ""}${i.desc ? `\n    ${i.desc.slice(0, 260)}` : ""}`;
         }).join("\n");
     }
   }
@@ -64,10 +68,7 @@ function digestBlocks(newsDigest, statsDigest, snapshot) {
       statsBlock += "\n\nOFFICIAL INJURY REPORT ENTRIES (league-rostered players):\n" +
         statsDigest.injuries.map(i => `- ${i.player} (${i.team}) ${i.status || "listed"}: ${i.injury}${i.mine ? " <-- MY PLAYER" : ""}`).join("\n");
     }
-    if (statsDigest.usage && statsDigest.usage.length) {
-      statsBlock += "\n\nMY PLAYERS' SNAP TRENDS (recent 3 wks vs prior 3):\n" +
-        statsDigest.usage.map(u => `- ${u.player}: ${u.priorSnapPct ?? "?"}% -> ${u.recentSnapPct ?? "?"}%`).join("\n");
-    }
+
   }
   return { newsBlock, statsBlock };
 }
@@ -83,9 +84,16 @@ function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, player
   const stateData = leagueStateBlock(snapshot, playerValues);
   const draftData = draftClassBlock(draftBoard, snapshot);
   const moversData = valueTrendBlock(snapshot, valueHistory);
+  // Evidence blocks are COMPUTED first and fed as conclusions, never as raw
+  // rows. The model reasons over ranked deltas, not spreadsheets.
+  const matchupData = matchupBlock(snapshot);
+  const defenseData = defenseBlock(statsDigest, snapshot);
+  const usageData = usageBlock(statsDigest);
+  const formData = formBlock(statsDigest);
   const groundNote = (groundData
     ? `\n\nGROUND DATA COLLECTED BY MY SYSTEM (verify anything surprising with your own web search; recency beats this data):\n${groundData}`
-    : "") + stateData + trendData + valueData + memoryData + draftData + moversData;
+    : "") + matchupData + defenseData + usageData + formData
+    + stateData + trendData + valueData + memoryData + draftData + moversData;
   const wk = snapshot.nflState || {};
   const inSeason = wk.season_type === "regular" && wk.week >= 1;
   const MOVE = `\n\nREASONING STANDARD, apply to every recommendation: (a) Show the value math explicitly using the market-value anchors above, for example "I send 58 (Player 40 + 2026 1st 18), I get 62, and the position I gain is scarcer for me than the one I give up." Do not assert a deal is fair without the numbers. (b) Steelman the other manager: state what THEY get and why a rational owner would say yes, not just why it helps me. A trade only happens if both sides win something. (c) Tag confidence High/Medium/Low, and add a one-line "Case against:" naming the strongest reason you could be wrong. Never present a call as risk-free. (d) If the market value and my roster need point in different directions, say so and pick a side with a reason, do not split the difference vaguely.\n\nMANDATORY FINAL SECTION: end with a heading exactly "## THE MOVE" followed by ONE single directive: the one specific action I should take right now, imperative voice, 1-3 sentences, chosen to serve winning now AND in the future. Not a menu. Not "consider". One move. If the genuinely right move is to do nothing, say "Hold" and why in one sentence.`;
