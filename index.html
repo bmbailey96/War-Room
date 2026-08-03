@@ -2451,12 +2451,19 @@ function renderProjection() {
     ${wp == null ? '' : `<div class="wp-track"><div class="wp-fill ${wp < 50 ? 'low' : ''}" style="width:${wp}%"></div></div>
     <div class="wp-label"><span>${wp}% win probability</span><span>${(my - th >= 0 ? '+' : '') + (my - th).toFixed(1)} margin</span></div>`}
     <div class="base-strip"><span>Sleeper says ${P.mine.baseTotal != null ? P.mine.baseTotal.toFixed(1) : '?'}</span><span>adjusted both sides</span><span>Sleeper says ${P.theirs.baseTotal != null ? P.theirs.baseTotal.toFixed(1) : '?'}</span></div>
-    <div class="proj-note">${P.dataNote}.</div>
+    ${P.opponentOptimal != null ? `<div class="base-strip"><span>My ceiling ${P.optimalTotal != null ? P.optimalTotal.toFixed(1) : '?'}</span><span>if both set their best lineup</span><span>Their ceiling ${P.opponentOptimal.toFixed(1)}</span></div>` : ''}
+    <div class="proj-note">${P.dataNote}.${P.calibrated === false ? ' Adjustment strength is still a damped guess, not a fit. Sleeper already knows the opponent, so part of the matchup adjustment is double counted until calibration has three completed weeks to measure against.' : (P.weights && P.weights.calibrated ? ' Adjustment strength fitted against completed weeks.' : '')}</div>
   </div>`;
 
+  // Every line here is a change you can actually make, and the total is the
+  // real total, not the sum of overlapping pairwise comparisons.
   const swaps = (P.benchSwaps || []).length ? `<div class="swap-banner">
-    <div class="hd">LINEUP UPGRADE${P.benchSwaps.length > 1 ? 'S' : ''} AVAILABLE</div>
-    ${P.benchSwaps.map(sw => `<div>Start <b>${sw.in.name}</b> (${sw.in.adjusted}) over <b>${sw.out.name}</b> (${sw.out.adjusted}) at ${sw.slot}. Worth <b>+${(sw.in.adjusted - sw.out.adjusted).toFixed(1)}</b>.</div>`).join('')}
+    <div class="hd">LINEUP CHANGE${P.benchSwaps.length > 1 ? 'S' : ''}: ${P.totalGain != null ? '+' + P.totalGain.toFixed(1) : ''} TOTAL</div>
+    ${P.benchSwaps.map(sw => `<div>At <b>${sw.slot}</b>: start <b>${sw.in.name}</b> (${sw.in.adjusted}) instead of <b>${sw.out.name}</b> (${sw.out.adjusted}), +${sw.gain != null ? sw.gain.toFixed(1) : (sw.in.adjusted - sw.out.adjusted).toFixed(1)}</div>`).join('')}
+    ${P.optimalWinProb != null && P.winProb != null ? `<div style="margin-top:7px;color:var(--muted)">Win probability ${Math.round(P.winProb * 100)}% now, ${Math.round(P.optimalWinProb * 100)}% with the changes. Optimal total ${P.optimalTotal != null ? P.optimalTotal.toFixed(1) : ''}.</div>` : ''}
+    ${P.winFirst ? (P.winFirst.differsFromPointsOptimal
+      ? `<div style="margin-top:7px;color:var(--amber)">Winning the week and scoring the most are different lineups here (${P.winFirst.stance}). Starting ${P.winFirst.changes.map(c => c.in.name).join(', ')} scores ${P.winFirst.total.toFixed(1)} instead of ${P.optimalTotal.toFixed(1)} but wins ${Math.round(P.winFirst.winProb * 100)}% of the time instead of ${Math.round(P.optimalWinProb * 100)}%.</div>`
+      : `<div style="margin-top:7px;color:var(--muted)">Highest-scoring and highest-win-probability lineups agree this week (${P.winFirst.stance}).</div>`) : ''}
   </div>` : '';
 
   const flagged = new Set((P.benchSwaps || []).flatMap(sw => [sw.out.name, sw.in.name]));
