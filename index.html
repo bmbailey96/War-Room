@@ -317,6 +317,8 @@
   .why-pct.down { color: var(--rust); }
   .why-mean { font-size: 12.5px; line-height: 1.6; color: var(--paper); opacity: 0.92; }
   .why-what { font-size: 11.5px; line-height: 1.6; color: var(--muted); margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--line); }
+  .why-what-toggle { font-family: var(--mono); font-size: 10px; color: var(--line-bright); cursor: pointer; margin-top: 6px; display: inline-block; }
+  .why-what-toggle:hover { color: var(--paper); }
   /* Phone. A chip like "Vegas sees LAC scoring 29 +17%" cannot shrink, so its
      column's min-content width was pushing the number column off the screen.
      Let chip text wrap and tighten the outer columns. */
@@ -2574,6 +2576,7 @@ function renderProjection() {
 
   const flagged = new Set((P.benchSwaps || []).flatMap(sw => [sw.out.name, sw.in.name]));
 
+  const explained = new Set();
   const POS_TINT = {
     QB: '#c78bde', RB: '#6fbf8b', WR: '#7fc4e0', TE: '#e8a33d',
     K: '#8fa8bc', DEF: '#8fa8bc', DL: '#d9694f',
@@ -2602,16 +2605,29 @@ function renderProjection() {
       ? `<span class="rchip more">+${extra} more</span>` : '');
     const rid = 'why-' + (r.key || r.name.replace(/[^a-z]/gi, ''));
     const ex = r.explain || [];
+    // The "what is this factor" paragraph is identical every time it appears.
+    // Show it in full the first time it turns up on this screen; after that it
+    // is one tappable line, because reading the same Vegas explanation six
+    // times is noise, not teaching.
+    const whatFor = (e, idx) => {
+      if (!e.what) return '';
+      const key = e.kind || e.label;
+      const seen = explained.has(key);
+      if (!seen) { explained.add(key); return `<div class="why-what">${e.what}</div>`; }
+      const wid = `${rid}-w${idx}`;
+      return `<span class="why-what-toggle" onclick="event.stopPropagation();var w=document.getElementById('${wid}');w.style.display=w.style.display==='none'?'':'none'">what is this?</span>
+        <div class="why-what" id="${wid}" style="display:none">${e.what}</div>`;
+    };
     const panel = `<div class="why" id="${rid}" style="display:none">
       ${r.summary ? `<div class="why-sum">${r.summary}</div>` : (!(r.explain || []).length ? `<div class="why-sum" style="color:var(--muted)">This projection was built before the explanations existed. Rerun the projection to fill this in.</div>` : '')}
-      <div class="why-math">Sleeper had him at <b>${r.base.toFixed(1)}</b>. After this week's adjustments: <b>${r.adjusted.toFixed(1)}</b>.</div>
-      ${ex.map(e => `<div class="why-item">
+      ${r.summary ? '' : `<div class="why-math">Sleeper had him at <b>${r.base.toFixed(1)}</b>. Adjusted: <b>${r.adjusted.toFixed(1)}</b>.</div>`}
+      ${ex.map((e, i) => `<div class="why-item">
         <div class="why-head">
           <span class="why-label">${e.label}</span>
           ${e.pct == null ? '' : `<span class="why-pct ${e.pct > 0 ? 'up' : 'down'}">${e.pct > 0 ? '+' : ''}${e.pct}%</span>`}
         </div>
         <div class="why-mean">${e.meaning || ''}</div>
-        ${e.what ? `<div class="why-what">${e.what}</div>` : ''}
+        ${whatFor(e, i)}
       </div>`).join('')}
     </div>`;
     return `<div class="lu2 ${flagged.has(r.name) ? 'flag' : dir}" onclick="toggleWhy('${rid}', this)">${slotChip}
@@ -2638,6 +2654,12 @@ function renderProjection() {
   const section = (title, note, rows, legend) => `<div class="side-head"><h4>${title}</h4><span>${note}</span></div>
     ${legend ? LEGEND : ''}<div class="lineup-table">${rows.map(row).join('')}</div>`;
 
+  // Build the starters table FIRST. The explainer dedupe marks a factor as
+  // seen on its first render, and bench/opponent rows were being built above
+  // this point, so they were consuming the full explanations and leaving the
+  // starters with nothing but "what is this?" links.
+  const startersHtml = section('My starters', `${P.mine.baseTotal != null ? P.mine.baseTotal.toFixed(1) : '?'} to ${my.toFixed(1)} after adjustment`, P.starters || [], true);
+
   // Bench: five names, then a toggle. Twelve rows of bodies buried the four
   // that actually matter.
   const bench = (P.bench || []).filter(r => !r.unprojected);
@@ -2662,8 +2684,7 @@ function renderProjection() {
   }
 
   return scoreboard + swaps
-    + section('My starters', `${P.mine.baseTotal != null ? P.mine.baseTotal.toFixed(1) : '?'} to ${my.toFixed(1)} after adjustment`, P.starters || [], true)
-    + benchHtml + theirs + accuracy
+    + startersHtml + benchHtml + theirs + accuracy
     + `<div style="margin-top:16px"><button class="btn" onclick="runProjection()">Rebuild projection</button></div>`;
 }
 
