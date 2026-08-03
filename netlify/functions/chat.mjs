@@ -6,6 +6,7 @@
 import {
   blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock,
   valuesBlock, leagueStateBlock, leagueMemoryBlock, OWNER_HISTORY,
+  matchupBlock, defenseBlock, usageBlock, formBlock,
 } from "./lib/ocho.mjs";
 
 export default async (req) => {
@@ -35,11 +36,15 @@ export default async (req) => {
   ]);
 
   const newsLine = (newsDigest?.items || []).filter(i => i.score >= 35).slice(0, 15)
-    .map(i => `- ${i.title}`).join("\n");
+    .map(i => `- ${i.title}${i.desc ? `\n    ${i.desc.slice(0, 260)}` : ""}`).join("\n");
   const trendLine = trendBlock(trends);
   const stateLine = leagueStateBlock(snapshot, playerValues);
   const valueLine = valuesBlock(snapshot, playerValues);
   const memoryLine = leagueMemoryBlock(leagueMemory);
+  const matchupLine = matchupBlock(snapshot);
+  const defenseLine = defenseBlock(statsDigest, snapshot);
+  const usageLine = usageBlock(statsDigest);
+  const formLine = formBlock(statsDigest);
   const trackLine = grading && grading.total >= 3
     ? `\nMy recommendation track record so far: ${grading.hits}/${grading.total} graded calls hit.` : "";
 
@@ -52,7 +57,7 @@ When your answer involves a real judgment call (should I add/drop/start/trade so
 ${leagueContextBlock(snapshot)}
 
 MY FULL ROSTER (The Nightmen):
-${myRosterBlock(snapshot)}${stateLine}${valueLine}${memoryLine}
+${myRosterBlock(snapshot)}${matchupLine}${stateLine}${valueLine}${memoryLine}${defenseLine}${usageLine}${formLine}
 ${newsLine ? `\nRECENT HEADLINES:\n${newsLine}` : ""}${trendLine}${trackLine}
 ${convo ? `\nCONVERSATION SO FAR:\n${convo}\n` : ""}
 MY QUESTION: ${question}`;
