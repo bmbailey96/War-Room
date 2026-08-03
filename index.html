@@ -302,6 +302,37 @@
   .dbar-fill { position: absolute; top: 0; height: 7px; }
   .dbar-fill.up { left: 50%; background: var(--green); }
   .dbar-fill.down { right: 50%; background: var(--rust); }
+  .lu2.open { background: rgba(127,196,224,0.05); }
+  .lu2-tap { font-family: var(--mono); font-size: 9px; color: var(--line-bright); letter-spacing: 0.06em; margin-top: 7px; }
+  .why { border-bottom: 1px solid rgba(63,107,138,0.45); padding: 0 13px 16px 14px; background: rgba(0,0,0,0.16); }
+  .why-sum { font-size: 13px; line-height: 1.65; color: var(--paper); padding: 14px 0 4px; }
+  .why-math { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 9px 0 12px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .why-math b { color: var(--paper); font-weight: 500; }
+  .why-item { padding: 12px 0 2px; border-bottom: 1px solid rgba(63,107,138,0.28); }
+  .why-item:last-child { border-bottom: none; }
+  .why-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .why-label { font-size: 13px; }
+  .why-pct { font-family: var(--mono); font-size: 12px; }
+  .why-pct.up { color: var(--green); }
+  .why-pct.down { color: var(--rust); }
+  .why-mean { font-size: 12.5px; line-height: 1.6; color: var(--paper); opacity: 0.92; }
+  .why-what { font-size: 11.5px; line-height: 1.6; color: var(--muted); margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--line); }
+  /* Phone. A chip like "Vegas sees LAC scoring 29 +17%" cannot shrink, so its
+     column's min-content width was pushing the number column off the screen.
+     Let chip text wrap and tighten the outer columns. */
+  @media (max-width: 560px) {
+    .lu2 { grid-template-columns: 30px 1fr 80px; gap: 9px; padding: 11px 9px 11px 8px; }
+    .lu2 > div:nth-child(2) { min-width: 0; }
+    .lu2-name { font-size: 15px; }
+    .lu2-big { font-size: 19px; }
+    .lu2-delta { font-size: 10.5px; }
+    .lu2-from { font-size: 9px; }
+    .rchip { white-space: normal; }
+    .why { padding: 0 11px 14px 11px; }
+    .why-sum { font-size: 12.5px; }
+    .score-num { font-size: 36px; }
+    .base-strip { font-size: 9.5px; }
+  }
   .legend { font-size: 10.5px; color: var(--muted); line-height: 1.6; border: 1px solid var(--line); border-bottom: none; padding: 10px 12px; background: rgba(0,0,0,0.14); }
   .legend b { color: var(--paper); font-weight: 500; }
   .side-head { display: flex; align-items: baseline; justify-content: space-between; margin: 26px 0 9px; padding-bottom: 6px; border-bottom: 1px solid rgba(63,107,138,0.4); }
@@ -2503,14 +2534,29 @@ function renderProjection() {
     const chips = shown.map((c, i) => {
       const cd = c.pct == null ? '' : (c.pct > 0 ? 'up' : (c.pct < 0 ? 'down' : ''));
       const full = (r.reasons || [])[i] || '';
-      return `<span class="rchip ${cd}" title="${full.replace(/"/g, '&quot;')}">${c.label}${c.pct == null ? '' : `<b>${c.pct > 0 ? '+' : ''}${c.pct}%</b>`}</span>`;
+      return `<span class="rchip ${cd}">${c.label}${c.pct == null ? '' : `<b>${c.pct > 0 ? '+' : ''}${c.pct}%</b>`}</span>`;
     }).join('') + (extra > 0
-      ? `<span class="rchip more" title="${((r.reasons || [])[2] || '').replace(/"/g, '&quot;')}">+${extra} more</span>` : '');
-    return `<div class="lu2 ${flagged.has(r.name) ? 'flag' : dir}">${slotChip}
+      ? `<span class="rchip more">+${extra} more</span>` : '');
+    const rid = 'why-' + (r.key || r.name.replace(/[^a-z]/gi, ''));
+    const ex = r.explain || [];
+    const panel = `<div class="why" id="${rid}" style="display:none">
+      ${r.summary ? `<div class="why-sum">${r.summary}</div>` : ''}
+      <div class="why-math">Sleeper had him at <b>${r.base.toFixed(1)}</b>. After this week's adjustments: <b>${r.adjusted.toFixed(1)}</b>.</div>
+      ${ex.map(e => `<div class="why-item">
+        <div class="why-head">
+          <span class="why-label">${e.label}</span>
+          ${e.pct == null ? '' : `<span class="why-pct ${e.pct > 0 ? 'up' : 'down'}">${e.pct > 0 ? '+' : ''}${e.pct}%</span>`}
+        </div>
+        <div class="why-mean">${e.meaning || ''}</div>
+        ${e.what ? `<div class="why-what">${e.what}</div>` : ''}
+      </div>`).join('')}
+    </div>`;
+    return `<div class="lu2 ${flagged.has(r.name) ? 'flag' : dir}" onclick="toggleWhy('${rid}', this)">${slotChip}
       <div>
         <div class="lu2-name">${r.name}</div>
         <div class="lu2-sub">${sub}</div>
         ${chips ? `<div class="chips">${chips}</div>` : ''}
+        ${ex.length ? `<div class="lu2-tap">TAP FOR WHY</div>` : ''}
       </div>
       <div class="lu2-nums">
         <div class="lu2-big">${r.adjusted.toFixed(1)}</div>
@@ -2518,12 +2564,13 @@ function renderProjection() {
         <div class="dbar"><div class="dbar-axis"></div>${dir ? `<div class="dbar-fill ${dir}" style="width:${Math.round((Math.abs(d) / maxDelta) * 50)}%"></div>` : ''}</div>
         <div class="lu2-from">Sleeper ${r.base.toFixed(1)}</div>
       </div>
-    </div>`;
+    </div>${panel}`;
   };
 
   const LEGEND = `<div class="legend">
     The big number is this week's projection after adjusting for the matchup. <b>Sleeper</b> underneath is their published number before any of that.<br>
-    Each tag is one reason it moved, biggest first. Green pushed the number up, red pulled it down. The bar under each number shows the size of the move against the biggest one on the board. Hover any tag for the numbers behind it.
+    Each tag is one reason it moved, biggest first. Green pushed the number up, red pulled it down. The bar under each number shows the size of the move against the biggest one on the board.<br>
+    <b>Tap any player</b> for the full reasoning: what to expect from him, and what each tag actually means.
   </div>`;
   const section = (title, note, rows, legend) => `<div class="side-head"><h4>${title}</h4><span>${note}</span></div>
     ${legend ? LEGEND : ''}<div class="lineup-table">${rows.map(row).join('')}</div>`;
@@ -2555,6 +2602,14 @@ function renderProjection() {
     + section('My starters', `${P.mine.baseTotal != null ? P.mine.baseTotal.toFixed(1) : '?'} to ${my.toFixed(1)} after adjustment`, P.starters || [], true)
     + benchHtml + theirs + accuracy
     + `<div style="margin-top:16px"><button class="btn" onclick="runProjection()">Rebuild projection</button></div>`;
+}
+
+function toggleWhy(id, row) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : '';
+  if (row) row.classList.toggle('open', !open);
 }
 
 async function runProjection() {
