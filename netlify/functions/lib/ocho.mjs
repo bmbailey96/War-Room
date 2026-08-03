@@ -508,6 +508,7 @@ export const DEFAULT_WEIGHTS = {
   defense: 0.5,
   form: 0.8,
   usage: 0.5,
+  opportunity: 0.6,
   environment: 0.6,
   wind: 1.0,
   vacancy: 1.0,
@@ -550,20 +551,15 @@ function summarise(player, base, adjusted, reasons) {
   const d = adjusted - base;
   const name = (player.name || "He").split(" ").slice(-1)[0];
   if (!reasons.length || Math.abs(d) < 0.3) {
-    return `Nothing about this week moves the needle much. Expect roughly what Sleeper says, around ${adjusted.toFixed(1)} points.`;
+    return `Nothing about this week moves the needle much for ${name}. Expect roughly what Sleeper says, around ${adjusted.toFixed(1)}.`;
   }
-  const up = reasons.filter(r => r.pct > 0);
-  const down = reasons.filter(r => r.pct < 0 || r.pct == null);
-  const dir = d > 0 ? "better" : "worse";
-  const parts = [];
-  parts.push(`This is a ${dir} spot than Sleeper's number suggests.`);
-  if (up.length && down.length) {
-    parts.push(`${up.length === 1 ? "One thing helps" : `${up.length} things help`} and ${down.length === 1 ? "one hurts" : `${down.length} hurt`}, and on balance it comes out ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}.`);
-  } else {
-    parts.push(`Everything points the same way, ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}.`);
-  }
-  parts.push(`Expect around ${adjusted.toFixed(1)} from ${name} rather than ${base.toFixed(1)}.`);
-  return parts.join(" ");
+  const word = n => ["no", "one", "two", "three", "four", "five"][n] || String(n);
+  const up = reasons.filter(r => r.pct > 0).length;
+  const down = reasons.length - up;
+  const mixed = up && down
+    ? `${word(up)} ${up === 1 ? "thing helps" : "things help"} and ${word(down)} ${down === 1 ? "hurts" : "hurt"}`
+    : `everything points the same way`;
+  return `${name} is in a ${d > 0 ? "better" : "worse"} spot than Sleeper's ${base.toFixed(1)} suggests: ${mixed}, netting out at about ${adjusted.toFixed(1)}.`;
 }
 
 export function projectPlayer(player, opts) {
@@ -588,9 +584,10 @@ export function projectPlayer(player, opts) {
       reasons.push({
         size: Math.abs(m - 1),
         short: `${oppTeam} ${m > 1 ? "is soft against" : "is tough on"} ${scorePos}s`,
+        kind: "defense",
         pct: Math.round((m - 1) * 100),
-        what: `How many fantasy points this defense gave up to ${scorePos}s per game, compared to what an average defense gave up.`,
-        meaning: `${oppTeam} allowed ${defense[oppTeam][scorePos]} points a game to ${scorePos}s against a league average of ${Math.round(avg[scorePos] * 10) / 10}. That makes this ${m > 1 ? "one of the easier matchups on the board" : "a harder matchup than usual"}.`,
+        what: `Total fantasy points this defense gave up per game to every ${scorePos} they faced, not to any one player, measured against what an average defense gave up.`,
+        meaning: `${oppTeam} gave up ${defense[oppTeam][scorePos]} fantasy points a game to opposing ${scorePos}s as a group, against a league average of ${Math.round(avg[scorePos] * 10) / 10}. That makes this ${m > 1 ? "one of the easier matchups on the board" : "a harder matchup than usual"}.`,
         text: `${oppTeam} allows ${defense[oppTeam][scorePos]} to ${scorePos}s per game vs ${Math.round(avg[scorePos] * 10) / 10} league average (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
     }
@@ -607,6 +604,7 @@ export function projectPlayer(player, opts) {
       reasons.push({
         size: Math.abs(m - 1),
         short: `${player.team} has been ${passDelta > 0 ? "throwing" : "running"} more lately`,
+        kind: "form",
         pct: Math.round((m - 1) * 100),
         what: "How pass-heavy the offense has been over its last three games versus its season average. A season number hides a coordinator change or a new quarterback; this catches it.",
         meaning: `${player.team} threw on ${form.recentPassRate}% of plays in their last three games against ${form.seasonPassRate}% across the season. ${passDelta > 0 ? "More passing" : "More running"} means ${
@@ -633,11 +631,44 @@ export function projectPlayer(player, opts) {
       reasons.push({
         size: Math.abs(m - 1),
         short: `snaps trending ${snapDelta > 0 ? "up" : "down"}`,
+        kind: "usage",
         pct: Math.round((m - 1) * 100),
         what: "Snap share is the percentage of his offense's plays he was actually on the field for. Rising snaps usually mean a bigger role is coming; falling snaps usually mean the opposite.",
         meaning: `He was on the field for ${usage.recentSnapPct}% of snaps over the last three games, against ${usage.priorSnapPct}% in the three before that.`,
         text: `snaps ${usage.priorSnapPct}% to ${usage.recentSnapPct}% (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
       });
+    }
+  }
+
+  // 3b. Opportunity, which is not the same thing as playing time. Targets for
+  // pass catchers, touches for backs. The LEVEL of a player's target share is
+  // already inside the base projection, so what carries new information is the
+  // CHANGE: a receiver whose share went from 14% to 22% is being used
+  // differently than the number Rotowire published on Tuesday assumes.
+  if (usage && ["WR", "TE", "RB"].includes(slot)) {
+    const isBack = slot === "RB";
+    const now = isBack ? usage.touches : usage.tgtShare;
+    const before = isBack ? usage.priorTouches : usage.priorTgtShare;
+    if (now != null && before != null && before > 0) {
+      const rel = clamp((now - before) / before, -0.6, 0.6);
+      const m = clamp(1 + W.opportunity * rel * 0.5, 0.88, 1.14);
+      mult *= m;
+      if (Math.abs(m - 1) >= 0.02) {
+        reasons.push({
+          size: Math.abs(m - 1),
+          short: isBack
+            ? `touches ${now > before ? "up" : "down"} to ${now}/gm`
+            : `target share ${now > before ? "up" : "down"} to ${now}%`,
+          pct: Math.round((m - 1) * 100),
+          kind: "opportunity",
+          what: isBack
+            ? "Touches are carries plus catches per game. Snap count tells you he was on the field; touches tell you the offense actually gave him the ball."
+            : "Target share is the percentage of his team's throws aimed at him. A receiver can play every snap and see four targets, so this is the better measure of what the offense intends for him.",
+          meaning: isBack
+            ? `He is getting ${now} touches a game over the last three, against ${before} in the three before that.`
+            : `He is drawing ${now}% of his team's targets over the last three games, against ${before}% in the three before that.`,
+        });
+      }
     }
   }
 
@@ -652,6 +683,7 @@ export function projectPlayer(player, opts) {
       reasons.push({
         size: Math.abs(m - 1),
         short: `Vegas sees ${player.team} scoring ${game.implied}`,
+        kind: "vegas",
         pct: Math.round((m - 1) * 100),
         what: "Yes, this is betting. Sportsbooks post a total for how many points a game will have and a spread for who wins by how much. Together those imply how many points each team is expected to score. It is the sharpest public estimate of how much offense there will be, because real money moves it.",
         meaning: `The books expect ${player.team} to score about ${game.implied} points ${game.home ? "at home against" : "on the road against"} ${game.opponent}, against a ${game.avgTeamTotal} average across the league this week. ${m > 1 ? "A team expected to score a lot gives everyone in that offense more chances at the end zone." : "A team expected to score less has fewer scoring chances to hand out."}`,
@@ -671,7 +703,7 @@ export function projectPlayer(player, opts) {
     mult *= m;
     reasons.push({
       size: Math.abs(m - 1),
-      short: `${game.wind} mph wind, outdoors`, pct: Math.round((m - 1) * 100),
+      short: `${game.wind} mph wind, outdoors`, pct: Math.round((m - 1) * 100), kind: "wind",
       what: "Wind speed forecast at kickoff, applied only to outdoor stadiums. Past roughly 13 mph it starts wrecking deep passing and field goals; running is barely affected and often picks up the slack.",
       meaning: `${game.wind} mph forecast at ${game.stadium || "kickoff"}. ${affected ? "That works against him." : "That tilts the game plan toward the run, which works in his favour."}`,
       text: `${game.wind} mph wind at kickoff, outdoors at ${game.stadium || "the venue"} (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
@@ -685,7 +717,7 @@ export function projectPlayer(player, opts) {
     mult *= m;
     reasons.push({
       size: Math.abs(m - 1),
-      short: `${vacancy.outName} out, work to spread around`,
+      short: `${vacancy.outName} out, work to spread around`, kind: "vacancy",
       pct: Math.round((m - 1) * 100),
       what: "When a teammate is ruled out, the targets and carries he would have taken do not disappear. They move to whoever is left.",
       meaning: `${vacancy.outName} is ${vacancy.status} and was seeing about ${vacancy.share}% of that offense's targets. Some of that lands here.`,
@@ -703,7 +735,7 @@ export function projectPlayer(player, opts) {
   else if (inj.includes("questionable")) availability = 0.92;
   if (availability < 1) {
     reasons.push({
-      size: 1 - availability, short: `listed ${player.inj}`, pct: null,
+      size: 1 - availability, short: `listed ${player.inj}`, pct: null, kind: "injury",
       what: "His status on the official injury report.",
       meaning: `He is listed ${player.inj}. ${availability === 0 ? "He is projected at zero: do not start him." : availability < 0.5 ? "That is a real risk of him not playing at all." : "He is expected to play, but the projection is shaded down a little for the risk."}`,
       text: `listed ${player.inj}${availability === 0 ? ", projected zero" : ""}`,
@@ -728,6 +760,7 @@ export function projectPlayer(player, opts) {
     explain: reasons.map(r => ({
       label: r.short || r.text,
       pct: r.pct ?? null,
+      kind: r.kind || null,
       what: r.what || null,
       meaning: r.meaning || r.text,
     })),
