@@ -270,7 +270,7 @@
   /* Row: slot | name + reasons | numbers. The delta lives in the number stack
      and as a left edge accent whose opacity tracks its size, so direction is
      visible in peripheral vision without a whole column spent restating it. */
-  .lu2 { display: grid; grid-template-columns: 38px 1fr 118px; gap: 13px; align-items: center; padding: 12px 13px 12px 11px; border-bottom: 1px solid rgba(63,107,138,0.45); position: relative; }
+  .lu2 { display: grid; grid-template-columns: 38px 1fr 118px; gap: 13px; align-items: center; padding: 12px 13px 12px 11px; border-bottom: 1px solid rgba(63,107,138,0.45); position: relative; cursor: pointer; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   .lu2:last-child { border-bottom: none; }
   .lu2::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
   .lu2.up::before { background: var(--green); }
@@ -304,7 +304,7 @@
   .dbar-fill.down { right: 50%; background: var(--rust); }
   .lu2.open { background: rgba(127,196,224,0.05); }
   .lu2-tap { font-family: var(--mono); font-size: 9px; color: var(--line-bright); letter-spacing: 0.06em; margin-top: 7px; }
-  .why { border-bottom: 1px solid rgba(63,107,138,0.45); padding: 0 13px 16px 14px; background: rgba(0,0,0,0.16); }
+  .why { border-bottom: 1px solid rgba(63,107,138,0.45); padding: 0 13px 16px 14px; background: rgba(0,0,0,0.16); -webkit-user-select: text; user-select: text; }
   .why-sum { font-size: 13px; line-height: 1.65; color: var(--paper); padding: 14px 0 4px; }
   .why-math { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 9px 0 12px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
   .why-math b { color: var(--paper); font-weight: 500; }
@@ -1207,29 +1207,59 @@ function renderTheCall() {
     drop = null;
   }
 
-  if (!tradeMove && !grab && !drop && !grabNote && !dropNote && !waiversLocked) { el.innerHTML = ''; return; }
+  // ONE move, costed out, or nothing at all.
+  //
+  // The old version always drew three slots even when two of them said
+  // "nothing right now", and it recommended a grab without ever checking what
+  // you would have to drop to make room. With a full 24-man roster that is the
+  // only question that matters: is the guy coming in worth more than the guy
+  // going out? Now it does the subtraction and shows it.
+  const pv = (S.server && S.server.playerValues && S.server.playerValues.players) || {};
+  const valOf = name => {
+    const v = (pv[normName(name || '')] || {}).v;
+    return typeof v === 'number' ? v : null;
+  };
 
-  const slot = (label, color, body) => `<div class="call-slot">
-    <div class="call-slot-label" style="color:${color}">${label}</div>
-    <div class="call-slot-body">${body}</div>
-  </div>`;
+  const mine = (S.teams || []).find(t => t.isMe);
+  const rosterSize = mine ? (mine.players || []).length : 0;
+  const capacity = (S.rosterPositions || []).filter(x => x !== 'IR').length || 24;
+  const full = rosterSize >= capacity;
 
-  const tradeBody = tradeMove
-    ? `${tradeStale ? `<div style="color:var(--amber);font-size:11px;margin-bottom:4px">⚠ This trade names a player no longer on your roster — it predates your recent moves. Rerun Trades for a current recommendation.</div>` : ''}${renderMd(tradeMove)}${S.callTrade && !tradeStale ? `<button style="margin-top:8px" onclick="draftMessage()" ${S.draftingMsg?'disabled':''}>${S.draftingMsg?'Writing...':'Draft the message'}</button>` : ''}${S.draftedMsg ? `<div class="ai-result" style="margin-top:8px"><div class="ai-note" style="margin-bottom:6px">Paste into league chat:</div>${esc(S.draftedMsg)}<br/><button style="margin-top:6px" onclick="copyMsg()">Copy</button></div>` : ''}`
-    : `<span style="color:var(--muted)">No trade worth proposing right now. Run the Trades tab to refresh.</span>`;
-
-  let grabBody, dropBody;
-  if (waiversLocked) {
-    grabBody = `<span style="color:var(--muted)">Waivers are locked until after the draft. The Draft tab is where the action is right now${grab ? ` — but keep <b style="color:var(--paper)">${esc(grab.name)}</b> on your post-draft radar` : ''}.</span>`;
-    dropBody = `<span style="color:var(--muted)">Locked until after the draft. Nothing to do here yet.</span>`;
-  } else {
-    grabBody = grab
-      ? `<b>${esc(grab.name)}</b>${grab.pos?` <span style="color:var(--muted)">${esc(grab.pos)}</span>`:''}${grab.why?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(grab.why)}</div>`:''}`
-      : `<span style="color:var(--muted)">${grabNote ? esc(grabNote) : 'Nothing worth grabbing. Pool is thin.'}</span>`;
-    dropBody = drop
-      ? `<b>${esc(drop.name)}</b>${drop.pos?` <span style="color:var(--muted)">${esc(drop.pos)}</span>`:''}${drop.why?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(drop.why)}</div>`:''}`
-      : `<span style="color:var(--muted)">${dropNote ? esc(dropNote) : 'Hold your roster. No clear drop.'}</span>`;
+  // Cheapest thing on my roster, as the real cost of any add.
+  let cheapest = null;
+  if (mine) {
+    for (const p of mine.players || []) {
+      if (p.onIR) continue;
+      const v = valOf(p.name);
+      if (v == null) continue;
+      if (!cheapest || v < cheapest.v) cheapest = { name: p.name, pos: p.slot || p.pos, v };
+    }
   }
+
+  const grabVal = grab ? valOf(grab.name) : null;
+  const namedDropVal = drop ? valOf(drop.name) : null;
+  // Prefer the drop the analysis named, but only if it is not worth more than
+  // the cheapest player on the roster.
+  const cost = (drop && namedDropVal != null && cheapest && namedDropVal <= cheapest.v + 3)
+    ? { name: drop.name, pos: drop.pos, v: namedDropVal }
+    : cheapest;
+  const net = (grabVal != null && cost && cost.v != null) ? Math.round(grabVal - cost.v) : null;
+
+  const candidates = [];
+  if (tradeMove && !tradeStale) {
+    candidates.push({ kind: 'trade', rank: 3, body: tradeMove });
+  }
+  if (grab && !waiversLocked) {
+    // A swap only counts as a move if the incoming player is actually worth
+    // more than what leaves. Otherwise it is churn.
+    const worth = net == null ? null : net > 0;
+    candidates.push({ kind: 'grab', rank: worth === false ? 0 : 2, grab, cost, net, worth });
+  }
+  if (!waiversLocked && !grab && drop && cheapest && drop.name === cheapest.name) {
+    candidates.push({ kind: 'drop', rank: 1, drop });
+  }
+  candidates.sort((a, b) => b.rank - a.rank);
+  const best = candidates.find(c => c.rank > 0) || null;
 
   const pg = (S.server || {}).pregame;
   let alertHtml = '';
@@ -1241,16 +1271,49 @@ function renderTheCall() {
     </div>`;
   }
 
+  if (!best && !alertHtml) { el.innerHTML = ''; return; }
+
+  let moveHtml = '';
+  if (best && best.kind === 'trade') {
+    moveHtml = `<div class="call-label" style="color:var(--line-bright)">Propose this trade</div>
+      <div class="call-slot-body">${renderMd(best.body)}
+      ${S.callTrade ? `<button style="margin-top:8px" onclick="draftMessage()" ${S.draftingMsg?'disabled':''}>${S.draftingMsg?'Writing...':'Draft the message'}</button>` : ''}
+      ${S.draftedMsg ? `<div class="ai-result" style="margin-top:8px"><div class="ai-note" style="margin-bottom:6px">Paste into league chat:</div>${esc(S.draftedMsg)}<br/><button style="margin-top:6px" onclick="copyMsg()">Copy</button></div>` : ''}</div>`;
+  } else if (best && best.kind === 'grab') {
+    const c = best.cost;
+    const math = (best.net != null && c)
+      ? `<div style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:7px;padding-top:7px;border-top:1px dashed rgba(232,163,61,0.3)">
+           ${full ? 'Your roster is full, so this costs a spot. ' : ''}Drop <b style="color:var(--paper)">${esc(c.name)}</b> (market value ${c.v}) to add <b style="color:var(--paper)">${esc(best.grab.name)}</b> (${grabVal}). Net <b style="color:${best.net > 0 ? 'var(--green)' : 'var(--rust)'}">${best.net > 0 ? '+' : ''}${best.net}</b>.
+         </div>`
+      : `<div style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:7px">No market value on file for one of these, so I cannot tell you whether the swap is worth the roster spot.</div>`;
+    moveHtml = `<div class="call-label" style="color:var(--green)">Grab this player</div>
+      <div class="call-slot-body"><b style="font-size:15px">${esc(best.grab.name)}</b>${best.grab.pos?` <span style="color:var(--muted)">${esc(best.grab.pos)}</span>`:''}
+      ${best.grab.why?`<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.55">${esc(best.grab.why)}</div>`:''}
+      ${math}</div>`;
+  } else if (best && best.kind === 'drop') {
+    moveHtml = `<div class="call-label" style="color:var(--rust)">Drop this player</div>
+      <div class="call-slot-body"><b style="font-size:15px">${esc(best.drop.name)}</b>${best.drop.pos?` <span style="color:var(--muted)">${esc(best.drop.pos)}</span>`:''}
+      ${best.drop.why?`<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.55">${esc(best.drop.why)}</div>`:''}</div>`;
+  }
+
+  // Everything that was considered and rejected, one line, behind a toggle.
+  const rejected = [];
+  if (!tradeMove) rejected.push('No trade worth proposing from the last Trades run.');
+  if (grab && best && best.kind !== 'grab' && net != null && net <= 0) {
+    rejected.push(`${grab.name} is on the wire but is worth ${grabVal} against ${cost ? cost.v : '?'} for the cheapest player you would drop, so the swap loses value.`);
+  }
+  if (waiversLocked) rejected.push('Waivers are locked.');
+  if (grabNote) rejected.push(grabNote);
+  if (dropNote) rejected.push(dropNote);
+
   el.innerHTML = `<div class="call-box">
     ${alertHtml}
-    <div class="call-label">The Call &mdash; today's three moves</div>
-    ${slot('Propose this trade', 'var(--line-bright)', tradeBody)}
-    ${slot('Grab this player', 'var(--green)', grabBody)}
-    ${slot('Drop this player', 'var(--rust)', dropBody)}
-    <div class="call-src">Refreshed from your latest trades and pickups runs. Rerun those tabs to update.</div>
+    ${moveHtml ? `<div class="call-label">The Call</div>${moveHtml}` : `<div class="call-label">The Call</div><div class="call-slot-body" style="color:var(--muted)">Nothing worth doing today. Hold what you have.</div>`}
+    ${rejected.length ? `<details class="prose-toggle" style="margin-top:10px"><summary>What else was considered</summary>
+      <div style="font-size:11.5px;color:var(--muted);line-height:1.6;margin-top:6px">${rejected.map(r => esc(r)).join('<br>')}</div></details>` : ''}
   </div>`;
 }
-  
+
 function tradeToLine(t) {
   const side = arr => (arr||[]).map(a => a.name + (a.pos ? ` (${a.pos})` : '')).join(' and ') || 'nothing';
   return `Trade with ${t.partner}. I send: ${side(t.iSend)}. I get: ${side(t.iGet)}.${t.verdict ? ' Rationale: ' + t.verdict : ''}`;
@@ -2540,7 +2603,7 @@ function renderProjection() {
     const rid = 'why-' + (r.key || r.name.replace(/[^a-z]/gi, ''));
     const ex = r.explain || [];
     const panel = `<div class="why" id="${rid}" style="display:none">
-      ${r.summary ? `<div class="why-sum">${r.summary}</div>` : ''}
+      ${r.summary ? `<div class="why-sum">${r.summary}</div>` : (!(r.explain || []).length ? `<div class="why-sum" style="color:var(--muted)">This projection was built before the explanations existed. Rerun the projection to fill this in.</div>` : '')}
       <div class="why-math">Sleeper had him at <b>${r.base.toFixed(1)}</b>. After this week's adjustments: <b>${r.adjusted.toFixed(1)}</b>.</div>
       ${ex.map(e => `<div class="why-item">
         <div class="why-head">
