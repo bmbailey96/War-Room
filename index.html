@@ -245,54 +245,58 @@
   .pos-label { flex: none; width: 38px; font-family: var(--display); color: var(--line-bright); font-size: 12px; }
   .player-chip { font-size: 10.5px; padding: 2px 7px; background: var(--panel); border: 1px solid var(--line); color: var(--paper); }
   /* ---- Projection scoreboard ---- */
-  .score-card { background: var(--panel-2); border: 1px solid var(--line); padding: 18px 16px 14px; margin-bottom: 14px; }
+  .score-card { background: linear-gradient(180deg, var(--panel-2) 0%, rgba(21,48,74,0.95) 100%); border: 1px solid var(--line); padding: 20px 18px 15px; margin-bottom: 14px; }
   .score-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
   .score-side { flex: 1; min-width: 0; }
   .score-side.right { text-align: right; }
   .score-team { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .score-num { font-family: var(--display); font-size: 40px; line-height: 1; letter-spacing: 0.01em; }
+  .score-num { font-family: var(--display); font-size: 46px; line-height: 1; letter-spacing: -0.005em; font-weight: 500; }
   .score-num.win { color: var(--green); }
   .score-num.lose { color: var(--rust); }
   .score-vs { font-family: var(--mono); font-size: 11px; color: var(--muted); padding-bottom: 6px; }
-  .wp-track { height: 8px; background: var(--panel); border: 1px solid var(--line); margin-top: 14px; display: flex; }
+  .wp-track { height: 6px; background: rgba(0,0,0,0.3); border: 1px solid var(--line); margin-top: 16px; display: flex; }
   .wp-fill { background: var(--green); height: 100%; }
   .wp-fill.low { background: var(--rust); }
   .wp-label { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 6px; }
   .proj-note { font-size: 10.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; border-top: 1px solid var(--line); padding-top: 9px; }
-  .base-strip { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 9px; }
+  .base-strip { display: grid; grid-template-columns: 1fr auto 1fr; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 9px; }
+  .base-strip span:last-child { text-align: right; }
 
   /* ---- Starter rows ---- */
   .lineup-table { border: 1px solid var(--line); }
   /* Row: slot | name + reason chips | both numbers | centered delta bar.
      The delta bar is the point of the whole screen, so it gets its own column
      instead of being a 10px afterthought. */
-  .lu2 { display: grid; grid-template-columns: 34px 1fr 104px 108px; gap: 12px; align-items: center; padding: 11px; border-bottom: 1px solid var(--line); }
+  /* Row: slot | name + reasons | numbers. The delta lives in the number stack
+     and as a left edge accent whose opacity tracks its size, so direction is
+     visible in peripheral vision without a whole column spent restating it. */
+  .lu2 { display: grid; grid-template-columns: 38px 1fr 118px; gap: 13px; align-items: center; padding: 12px 13px 12px 11px; border-bottom: 1px solid rgba(63,107,138,0.45); position: relative; }
   .lu2:last-child { border-bottom: none; }
-  .lu2.flag { background: rgba(232,163,61,0.09); box-shadow: inset 3px 0 0 var(--amber); }
-  .lu2-slot { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em; color: var(--muted); text-align: center; border: 1px solid var(--line); padding: 3px 0; }
-  .lu2-name { font-family: var(--display); font-size: 16px; letter-spacing: 0.02em; line-height: 1.1; }
-  .lu2-sub { font-family: var(--mono); font-size: 9.5px; color: var(--muted); margin-top: 3px; letter-spacing: 0.04em; }
-  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-  .rchip { font-family: var(--mono); font-size: 9.5px; padding: 2px 6px; border: 1px solid var(--line); color: var(--muted); cursor: help; white-space: nowrap; }
-  .rchip.up { border-color: rgba(111,191,139,0.55); color: var(--green); }
-  .rchip.down { border-color: rgba(217,105,79,0.55); color: var(--rust); }
-  .lu2-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; text-align: right; font-family: var(--mono); }
-  .lu2-lab { font-size: 8px; letter-spacing: 0.09em; color: var(--muted); text-transform: uppercase; }
-  .lu2-v { font-size: 15px; line-height: 1.2; margin-top: 1px; }
-  .lu2-v.dim { color: var(--muted); font-size: 13px; }
-  /* Centered zero line, green pushes right, rust pushes left. Scaled to the
-     biggest swing on the board so bars are comparable across both rosters. */
-  .dbar { font-family: var(--mono); }
-  .dbar-val { font-size: 11.5px; margin-bottom: 4px; height: 14px; }
-  .dbar-val.up { text-align: right; color: var(--green); }
-  .dbar-val.down { text-align: left; color: var(--rust); }
-  .dbar-val.flat { text-align: center; color: var(--muted); font-size: 9.5px; }
-  .dbar-track { position: relative; height: 9px; background: rgba(0,0,0,0.18); }
-  .dbar-axis { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
-  .dbar-fill { position: absolute; top: 0; height: 9px; }
-  .dbar-fill.up { left: 50%; background: var(--green); }
-  .dbar-fill.down { right: 50%; background: var(--rust); }
-  .side-head { display: flex; align-items: baseline; justify-content: space-between; margin: 22px 0 8px; }
+  .lu2::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
+  .lu2.up::before { background: var(--green); }
+  .lu2.down::before { background: var(--rust); }
+  .lu2.flag { background: rgba(232,163,61,0.10); }
+  .lu2.flag::before { background: var(--amber); }
+  .lu2-slot { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.07em; text-align: center; border: 1px solid; padding: 4px 0; opacity: 0.9; }
+  .lu2-name { font-family: var(--display); font-size: 16.5px; letter-spacing: 0.02em; line-height: 1.1; }
+  .lu2-sub { font-family: var(--mono); font-size: 9.5px; color: var(--muted); margin-top: 3px; letter-spacing: 0.05em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .rchip { font-family: var(--mono); font-size: 9.5px; padding: 2.5px 7px; border: 1px solid var(--line); color: var(--muted); cursor: help; white-space: nowrap; border-radius: 1px; }
+  .rchip b { font-weight: 500; margin-left: 5px; }
+  .rchip.up { border-color: rgba(111,191,139,0.5); color: var(--green); background: rgba(111,191,139,0.06); }
+  .rchip.down { border-color: rgba(217,105,79,0.5); color: var(--rust); background: rgba(217,105,79,0.06); }
+  .rchip.more { border-style: dashed; }
+  /* Number stack: the adjusted number leads, Sleeper's sits under it quietly. */
+  .lu2-nums { text-align: right; font-family: var(--mono); line-height: 1.15; }
+  .lu2-big { font-size: 23px; letter-spacing: -0.01em; }
+  .lu2-delta { font-size: 11px; margin-top: 3px; }
+  .lu2-delta.up { color: var(--green); }
+  .lu2-delta.down { color: var(--rust); }
+  .lu2-delta.flat { color: var(--muted); }
+  .lu2-from { font-size: 9.5px; color: var(--muted); margin-top: 5px; letter-spacing: 0.04em; }
+  .legend { font-size: 10.5px; color: var(--muted); line-height: 1.6; border: 1px solid var(--line); border-bottom: none; padding: 10px 12px; background: rgba(0,0,0,0.14); }
+  .legend b { color: var(--paper); font-weight: 500; }
+  .side-head { display: flex; align-items: baseline; justify-content: space-between; margin: 26px 0 9px; padding-bottom: 6px; border-bottom: 1px solid rgba(63,107,138,0.4); }
   .side-head h4 { font-family: var(--display); font-size: 13px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--paper); margin: 0; font-weight: 500; }
   .side-head span { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
   .more-toggle { font-family: var(--mono); font-size: 10.5px; color: var(--line-bright); cursor: pointer; padding: 9px 11px; border: 1px solid var(--line); border-top: none; text-align: center; }
@@ -317,7 +321,7 @@
   .lu-delta.down { color: var(--rust); }
   .lu-bar { height: 3px; background: var(--panel); margin-top: 5px; }
   .lu-bar-fill { height: 100%; background: var(--line-bright); }
-  .swap-banner { border: 1px solid var(--amber); background: rgba(232,163,61,0.12); padding: 11px 13px; margin-bottom: 12px; }
+  .swap-banner { border: 1px solid var(--amber); background: rgba(232,163,61,0.10); padding: 13px 15px; margin-bottom: 12px; line-height: 1.7; }
   .swap-banner .hd { font-family: var(--display); font-size: 13px; letter-spacing: 0.04em; color: var(--amber); margin-bottom: 5px; }
   .acc-row { display: flex; gap: 14px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--muted); }
   .acc-row b { color: var(--paper); font-weight: 400; }
@@ -2468,45 +2472,52 @@ function renderProjection() {
 
   const flagged = new Set((P.benchSwaps || []).flatMap(sw => [sw.out.name, sw.in.name]));
 
+  const POS_TINT = {
+    QB: '#c78bde', RB: '#6fbf8b', WR: '#7fc4e0', TE: '#e8a33d',
+    K: '#8fa8bc', DEF: '#8fa8bc', DL: '#d9694f',
+  };
   const row = r => {
+    const tint = POS_TINT[r.slot] || 'var(--muted)';
+    const slotChip = `<div class="lu2-slot" style="color:${tint};border-color:${tint}66">${r.slot}</div>`;
     const sub = `${r.team || '?'}${r.opp ? ' vs ' + r.opp : ''}`;
     if (r.unprojected) {
-      return `<div class="lu2">
-        <div class="lu2-slot">${r.slot}</div>
+      return `<div class="lu2">${slotChip}
         <div><div class="lu2-name">${r.name}</div><div class="lu2-sub">${sub} &middot; ${r.unprojectedNote}</div></div>
-        <div class="lu2-nums"><div></div><div><div class="lu2-lab">War Room</div><div class="lu2-v dim">n/a</div></div></div>
-        <div class="dbar"><div class="dbar-val flat">no projection</div><div class="dbar-track"><div class="dbar-axis"></div></div></div>
+        <div class="lu2-nums"><div class="lu2-big" style="color:var(--muted)">n/a</div></div>
       </div>`;
     }
     const d = r.delta || 0;
-    const chips = (r.chips || []).map((c, i) => {
-      const dir = c.pct == null ? '' : (c.pct > 0 ? 'up' : (c.pct < 0 ? 'down' : ''));
+    const dir = d > 0.05 ? 'up' : (d < -0.05 ? 'down' : '');
+    // Two reasons, not three. The third is always the smallest factor and it
+    // was the only thing pushing rows onto a second line.
+    const shown = (r.chips || []).slice(0, 2);
+    const extra = (r.chips || []).length - shown.length;
+    const chips = shown.map((c, i) => {
+      const cd = c.pct == null ? '' : (c.pct > 0 ? 'up' : (c.pct < 0 ? 'down' : ''));
       const full = (r.reasons || [])[i] || '';
-      return `<span class="rchip ${dir}" title="${full.replace(/"/g, '&quot;')}">${c.label}${c.pct == null ? '' : ' ' + (c.pct > 0 ? '+' : '') + c.pct + '%'}</span>`;
-    }).join('');
-    const w = Math.round((Math.abs(d) / maxDelta) * 50);
-    const flat = Math.abs(d) < 0.05;
-    const bar = `<div class="dbar">
-      <div class="dbar-val ${flat ? 'flat' : (d > 0 ? 'up' : 'down')}">${flat ? 'no change' : (d > 0 ? '+' : '') + d.toFixed(1)}</div>
-      <div class="dbar-track"><div class="dbar-axis"></div>${flat ? '' : `<div class="dbar-fill ${d > 0 ? 'up' : 'down'}" style="width:${w}%"></div>`}</div>
-    </div>`;
-    return `<div class="lu2 ${flagged.has(r.name) ? 'flag' : ''}">
-      <div class="lu2-slot">${r.slot}</div>
+      return `<span class="rchip ${cd}" title="${full.replace(/"/g, '&quot;')}">${c.label}${c.pct == null ? '' : `<b>${c.pct > 0 ? '+' : ''}${c.pct}%</b>`}</span>`;
+    }).join('') + (extra > 0
+      ? `<span class="rchip more" title="${((r.reasons || [])[2] || '').replace(/"/g, '&quot;')}">+${extra} more</span>` : '');
+    return `<div class="lu2 ${flagged.has(r.name) ? 'flag' : dir}">${slotChip}
       <div>
         <div class="lu2-name">${r.name}</div>
         <div class="lu2-sub">${sub}</div>
         ${chips ? `<div class="chips">${chips}</div>` : ''}
       </div>
       <div class="lu2-nums">
-        <div><div class="lu2-lab">Sleeper</div><div class="lu2-v dim">${r.base.toFixed(1)}</div></div>
-        <div><div class="lu2-lab">War Room</div><div class="lu2-v">${r.adjusted.toFixed(1)}</div></div>
+        <div class="lu2-big">${r.adjusted.toFixed(1)}</div>
+        <div class="lu2-delta ${dir || 'flat'}">${dir ? (d > 0 ? '+' : '') + d.toFixed(1) : 'unchanged'}</div>
+        <div class="lu2-from">Sleeper ${r.base.toFixed(1)}</div>
       </div>
-      ${bar}
     </div>`;
   };
 
-  const section = (title, note, rows) => `<div class="side-head"><h4>${title}</h4><span>${note}</span></div>
-    <div class="lineup-table">${rows.map(row).join('')}</div>`;
+  const LEGEND = `<div class="legend">
+    The big number is this week's projection after adjusting for the matchup. <b>Sleeper</b> underneath is their published number before any of that.<br>
+    Each tag is one reason it moved, biggest first. Green pushed the number up, red pulled it down. Hover any tag for the numbers behind it.
+  </div>`;
+  const section = (title, note, rows, legend) => `<div class="side-head"><h4>${title}</h4><span>${note}</span></div>
+    ${legend ? LEGEND : ''}<div class="lineup-table">${rows.map(row).join('')}</div>`;
 
   // Bench: five names, then a toggle. Twelve rows of bodies buried the four
   // that actually matter.
@@ -2532,16 +2543,16 @@ function renderProjection() {
   }
 
   return scoreboard + swaps
-    + section('My starters', `${P.mine.baseTotal != null ? P.mine.baseTotal.toFixed(1) : '?'} to ${my.toFixed(1)} after adjustment`, P.starters || [])
+    + section('My starters', `${P.mine.baseTotal != null ? P.mine.baseTotal.toFixed(1) : '?'} to ${my.toFixed(1)} after adjustment`, P.starters || [], true)
     + benchHtml + theirs + accuracy
     + `<div style="margin-top:16px"><button class="btn" onclick="runProjection()">Rebuild projection</button></div>`;
 }
 
 async function runProjection() {
   if (!S.isDeployed) { alert('The projection runs server-side. It works on the deployed site.'); return; }
-  setStatus('Building projection...', 'stale');
+  setStatus('Pulling roster, lines and projections...', 'stale');
   try {
-    await fetch('/.netlify/functions/run?job=stats,project');
+    await fetch('/.netlify/functions/run?job=snapshot,context,project');
     await loadServerData();
     setStatus('Live', '');
   } catch (e) { setStatus('Projection failed', 'stale'); }
