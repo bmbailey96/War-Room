@@ -263,6 +263,7 @@ export default async () => {
       if (!recent.length) continue;
       const agg = playerAgg[key];
       const rec = agg && agg.recent.g ? agg.recent : null;
+      const pri = agg && agg.prior.g ? agg.prior : null;
       usage.push({
         player: p.name,
         team: p.team,
@@ -272,6 +273,12 @@ export default async () => {
         lastWeekSeen: p.weeks.at(-1).week,
         tgtShare: rec ? r1(rec.tgtShare / rec.g) : null,
         touches: rec ? r1(rec.touches / rec.g) : null,
+        // The prior window too. Snap share was the only usage signal reaching
+        // the projection math; target share and touches were computed, printed
+        // into the AI's text, and then ignored by the arithmetic. A receiver
+        // can play every snap and see four targets.
+        priorTgtShare: pri ? r1(pri.tgtShare / pri.g) : null,
+        priorTouches: pri ? r1(pri.touches / pri.g) : null,
         mine: myNames.has(key),
         rostered: rosteredNames.has(key),
       });
