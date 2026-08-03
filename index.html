@@ -293,7 +293,15 @@
   .lu2-delta.up { color: var(--green); }
   .lu2-delta.down { color: var(--rust); }
   .lu2-delta.flat { color: var(--muted); }
-  .lu2-from { font-size: 9.5px; color: var(--muted); margin-top: 5px; letter-spacing: 0.04em; }
+  .lu2-from { font-size: 9.5px; color: var(--muted); margin-top: 6px; letter-spacing: 0.04em; }
+  /* Centered zero line, green pushes right, rust pushes left, scaled to the
+     biggest swing on the board. Lives under the numbers instead of taking a
+     column of its own. */
+  .dbar { position: relative; height: 7px; margin-top: 6px; background: rgba(0,0,0,0.22); }
+  .dbar-axis { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
+  .dbar-fill { position: absolute; top: 0; height: 7px; }
+  .dbar-fill.up { left: 50%; background: var(--green); }
+  .dbar-fill.down { right: 50%; background: var(--rust); }
   .legend { font-size: 10.5px; color: var(--muted); line-height: 1.6; border: 1px solid var(--line); border-bottom: none; padding: 10px 12px; background: rgba(0,0,0,0.14); }
   .legend b { color: var(--paper); font-weight: 500; }
   .side-head { display: flex; align-items: baseline; justify-content: space-between; margin: 26px 0 9px; padding-bottom: 6px; border-bottom: 1px solid rgba(63,107,138,0.4); }
@@ -2507,6 +2515,7 @@ function renderProjection() {
       <div class="lu2-nums">
         <div class="lu2-big">${r.adjusted.toFixed(1)}</div>
         <div class="lu2-delta ${dir || 'flat'}">${dir ? (d > 0 ? '+' : '') + d.toFixed(1) : 'unchanged'}</div>
+        <div class="dbar"><div class="dbar-axis"></div>${dir ? `<div class="dbar-fill ${dir}" style="width:${Math.round((Math.abs(d) / maxDelta) * 50)}%"></div>` : ''}</div>
         <div class="lu2-from">Sleeper ${r.base.toFixed(1)}</div>
       </div>
     </div>`;
@@ -2514,7 +2523,7 @@ function renderProjection() {
 
   const LEGEND = `<div class="legend">
     The big number is this week's projection after adjusting for the matchup. <b>Sleeper</b> underneath is their published number before any of that.<br>
-    Each tag is one reason it moved, biggest first. Green pushed the number up, red pulled it down. Hover any tag for the numbers behind it.
+    Each tag is one reason it moved, biggest first. Green pushed the number up, red pulled it down. The bar under each number shows the size of the move against the biggest one on the board. Hover any tag for the numbers behind it.
   </div>`;
   const section = (title, note, rows, legend) => `<div class="side-head"><h4>${title}</h4><span>${note}</span></div>
     ${legend ? LEGEND : ''}<div class="lineup-table">${rows.map(row).join('')}</div>`;
