@@ -16,7 +16,7 @@
 // consumes this labels itself stale rather than passing last year's numbers
 // off as this week's.
 
-import { blobs, normName } from "./lib/ocho.mjs";
+import { blobs, normName, normTeam } from "./lib/ocho.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
 
@@ -108,7 +108,7 @@ export default async () => {
     const att = n(r.attempts), car = n(r.carries);
     const plays = att + car;
     if (!plays || !r.team) continue;
-    tendencies[r.team] = {
+    tendencies[normTeam(r.team)] = {
       passRate: r1(att / plays * 100),
       playsPerGame: r1(plays / Math.max(n(r.games), 1)),
       passEpa: r1(n(r.passing_epa)),
@@ -126,7 +126,8 @@ export default async () => {
     for (const r of parseCsvCols(teamWeekCsv, ["team", "week", "attempts", "carries", "season_type"])) {
       if (!r.team) continue;
       if (r.season_type && r.season_type !== "REG") continue;
-      (byTeam[r.team] = byTeam[r.team] || []).push({ week: n(r.week), att: n(r.attempts), car: n(r.carries) });
+      const tm = normTeam(r.team);
+      (byTeam[tm] = byTeam[tm] || []).push({ week: n(r.week), att: n(r.attempts), car: n(r.carries) });
     }
     for (const [team, weeks] of Object.entries(byTeam)) {
       weeks.sort((a, b) => a.week - b.week);
@@ -135,7 +136,7 @@ export default async () => {
       const rs = sum(recent), ss = sum(weeks);
       const rp = rs.att + rs.car, sp = ss.att + ss.car;
       if (!rp || !sp) continue;
-      form[team] = {
+      form[normTeam(team)] = {
         recentPassRate: r1(rs.att / rp * 100),
         seasonPassRate: r1(ss.att / sp * 100),
         recentPlays: r1(rp / recent.length),
@@ -205,7 +206,8 @@ export default async () => {
       const pos = r.position;
       const def = r.opponent_team;
       if (def && (pos === "QB" || pos === "RB" || pos === "WR" || pos === "TE")) {
-        const d = (allowed[def] = allowed[def] || {});
+        const key = normTeam(def);
+        const d = (allowed[key] = allowed[key] || {});
         const slot = (d[pos] = d[pos] || { pts: 0, weeks: new Set() });
         slot.pts += pprPoints(r);
         slot.weeks.add(n(r.week));

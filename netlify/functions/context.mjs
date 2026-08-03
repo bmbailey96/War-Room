@@ -12,7 +12,7 @@
 // Schedule, roof and betting lines come from nflverse/nfldata games.csv.
 // Wind comes from Open-Meteo, which is free and needs no key.
 
-import { blobs } from "./lib/ocho.mjs";
+import { blobs, normTeam } from "./lib/ocho.mjs";
 
 const GAMES_CSV = "https://github.com/nflverse/nfldata/raw/master/data/games.csv";
 
@@ -80,7 +80,7 @@ export default async () => {
     if (c[col.season] !== season || c[col.week] !== week) continue;
     if (c[col.game_type] && c[col.game_type] !== "REG") continue;
     games.push({
-      away: c[col.away_team], home: c[col.home_team],
+      away: normTeam(c[col.away_team]), home: normTeam(c[col.home_team]),
       gameday: c[col.gameday], gametime: c[col.gametime],
       roof: (c[col.roof] || "").toLowerCase(),
       spread: num(c[col.spread_line]),   // positive means the HOME team is favoured
