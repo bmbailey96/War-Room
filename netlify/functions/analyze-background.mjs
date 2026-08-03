@@ -4,7 +4,7 @@
 
 import {
   blobs, OWNER_HISTORY, leagueContextBlock, myRosterBlock,
-  matchupBlock, defenseBlock, usageBlock, formBlock,
+  matchupBlock, defenseBlock, usageBlock, formBlock, projectionBlock,
   callClaude, pInfo, getPlayersTrim, trendBlock, valuesBlock, leagueMemoryBlock, leagueStateBlock,
   validateTrades, draftClassBlock, valueTrendBlock, tradeGradeBlock,
 } from "./lib/ocho.mjs";
@@ -73,7 +73,7 @@ function digestBlocks(newsDigest, statsDigest, snapshot) {
   return { newsBlock, statsBlock };
 }
 
-function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory, draftBoard, valueHistory) {
+function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory, draftBoard, valueHistory, projection) {
   const ctx = leagueContextBlock(snapshot);
   const mine = myRosterBlock(snapshot);
   const { newsBlock, statsBlock } = digestBlocks(newsDigest, statsDigest, snapshot);
@@ -86,7 +86,7 @@ function prompts(snapshot, trendingText, newsDigest, statsDigest, trends, player
   const moversData = valueTrendBlock(snapshot, valueHistory);
   // Evidence blocks are COMPUTED first and fed as conclusions, never as raw
   // rows. The model reasons over ranked deltas, not spreadsheets.
-  const matchupData = matchupBlock(snapshot);
+  const matchupData = matchupBlock(snapshot) + projectionBlock(projection);
   const defenseData = defenseBlock(statsDigest, snapshot);
   const usageData = usageBlock(statsDigest);
   const formData = formBlock(statsDigest);
@@ -206,7 +206,8 @@ export default async (req) => {
   const valueHistory = await store.get("value_history", { type: "json" });
   const tradeGrades = await store.get("trade_grades", { type: "json" });
   const trendingText = buildTrendingBlock(trendingRaw, rostersRaw, playersDB);
-  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory, draftBoard, valueHistory);
+  const projection = await store.get("projection", { type: "json" });
+  const P = prompts(snapshot, trendingText, newsDigest, statsDigest, trends, playerValues, leagueMemory, draftBoard, valueHistory, projection);
 
   // Track-record block: shows the model its own calibrated hit rate
   let trackBlock = "";

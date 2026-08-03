@@ -6,7 +6,7 @@
 import {
   blobs, leagueContextBlock, myRosterBlock, callClaude, trendBlock,
   valuesBlock, leagueStateBlock, leagueMemoryBlock, OWNER_HISTORY,
-  matchupBlock, defenseBlock, usageBlock, formBlock,
+  matchupBlock, defenseBlock, usageBlock, formBlock, projectionBlock,
 } from "./lib/ocho.mjs";
 
 export default async (req) => {
@@ -26,13 +26,14 @@ export default async (req) => {
   const store = blobs();
   const snapshot = await store.get("snapshot", { type: "json" });
   if (!snapshot) return new Response(JSON.stringify({ error: "no snapshot yet" }), { status: 409 });
-  const [newsDigest, statsDigest, trends, grading, playerValues, leagueMemory] = await Promise.all([
+  const [newsDigest, statsDigest, trends, grading, playerValues, leagueMemory, projection] = await Promise.all([
     store.get("news_digest", { type: "json" }),
     store.get("stats_digest", { type: "json" }),
     store.get("trends", { type: "json" }),
     store.get("grading_record", { type: "json" }),
     store.get("player_values", { type: "json" }),
     store.get("league_memory", { type: "json" }),
+    store.get("projection", { type: "json" }),
   ]);
 
   const newsLine = (newsDigest?.items || []).filter(i => i.score >= 35).slice(0, 15)
@@ -41,7 +42,7 @@ export default async (req) => {
   const stateLine = leagueStateBlock(snapshot, playerValues);
   const valueLine = valuesBlock(snapshot, playerValues);
   const memoryLine = leagueMemoryBlock(leagueMemory);
-  const matchupLine = matchupBlock(snapshot);
+  const matchupLine = matchupBlock(snapshot) + projectionBlock(projection);
   const defenseLine = defenseBlock(statsDigest, snapshot);
   const usageLine = usageBlock(statsDigest);
   const formLine = formBlock(statsDigest);
