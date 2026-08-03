@@ -244,6 +244,45 @@
   .pos-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; padding: 4px 0; border-top: 1px solid rgba(127,196,224,0.1); }
   .pos-label { flex: none; width: 38px; font-family: var(--display); color: var(--line-bright); font-size: 12px; }
   .player-chip { font-size: 10.5px; padding: 2px 7px; background: var(--panel); border: 1px solid var(--line); color: var(--paper); }
+  /* ---- Projection scoreboard ---- */
+  .score-card { background: var(--panel-2); border: 1px solid var(--line); padding: 18px 16px 14px; margin-bottom: 14px; }
+  .score-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+  .score-side { flex: 1; min-width: 0; }
+  .score-side.right { text-align: right; }
+  .score-team { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .score-num { font-family: var(--display); font-size: 40px; line-height: 1; letter-spacing: 0.01em; }
+  .score-num.win { color: var(--green); }
+  .score-num.lose { color: var(--rust); }
+  .score-vs { font-family: var(--mono); font-size: 11px; color: var(--muted); padding-bottom: 6px; }
+  .wp-track { height: 8px; background: var(--panel); border: 1px solid var(--line); margin-top: 14px; display: flex; }
+  .wp-fill { background: var(--green); height: 100%; }
+  .wp-fill.low { background: var(--rust); }
+  .wp-label { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 6px; }
+  .proj-note { font-size: 10.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; border-top: 1px solid var(--line); padding-top: 9px; }
+
+  /* ---- Starter rows ---- */
+  .lineup-table { border: 1px solid var(--line); }
+  .lu-row { display: grid; grid-template-columns: 42px 1fr 96px; gap: 10px; align-items: center; padding: 9px 11px; border-bottom: 1px solid var(--line); }
+  .lu-row:last-child { border-bottom: none; }
+  .lu-row.swap { background: rgba(232,163,61,0.10); }
+  .lu-slot { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; color: var(--muted); text-align: center; border: 1px solid var(--line); padding: 3px 0; }
+  .lu-name { font-size: 13.5px; }
+  .lu-meta { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .lu-why { font-size: 10.5px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+  .lu-why b { color: var(--paper); font-weight: 500; }
+  .lu-pts { text-align: right; font-family: var(--mono); }
+  .lu-adj { font-size: 17px; }
+  .lu-base { font-size: 10.5px; color: var(--muted); }
+  .lu-delta { font-size: 10.5px; }
+  .lu-delta.up { color: var(--green); }
+  .lu-delta.down { color: var(--rust); }
+  .lu-bar { height: 3px; background: var(--panel); margin-top: 5px; }
+  .lu-bar-fill { height: 100%; background: var(--line-bright); }
+  .swap-banner { border: 1px solid var(--amber); background: rgba(232,163,61,0.12); padding: 11px 13px; margin-bottom: 12px; }
+  .swap-banner .hd { font-family: var(--display); font-size: 13px; letter-spacing: 0.04em; color: var(--amber); margin-bottom: 5px; }
+  .acc-row { display: flex; gap: 14px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .acc-row b { color: var(--paper); font-weight: 400; }
+  .sec-head { font-family: var(--display); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); margin: 18px 0 8px; }
   .player-chip .meta { color: var(--muted); }
   .player-chip.old { border-color: var(--rust); }
   .player-chip.young { border-color: var(--green); }
@@ -2339,6 +2378,102 @@ function renderMatchupHeader() {
     <div style="display:flex;flex-wrap:wrap;gap:5px">${m.myStarters.map(chip).join('') || none}</div>
   </div>`;
 }
+// The Lineup tab's centrepiece. Everything here is arithmetic done server-side
+// in project.mjs: Sleeper's Rotowire base, adjusted by opponent defense vs
+// position, the offense's last-3-game pass rate, snap direction, and injury
+// status. Reasons are shown next to every number that moved.
+function renderProjection() {
+  const P = (S.server || {}).projection;
+  if (!P) {
+    return `<div class="empty-msg">No projection stored yet. It builds Thursday, Saturday and Sunday, or press Run projection.</div>
+      <div style="margin-top:10px"><button class="btn" onclick="runProjection()">Run projection</button></div>`;
+  }
+  const my = P.mine.total, th = P.theirs.total;
+  const wp = P.winProb == null ? null : Math.round(P.winProb * 100);
+  const favored = my >= th;
+
+  const scoreboard = `<div class="score-card">
+    <div class="score-row">
+      <div class="score-side">
+        <div class="score-team">The Nightmen</div>
+        <div class="score-num ${favored ? 'win' : 'lose'}">${my.toFixed(1)}</div>
+      </div>
+      <div class="score-vs">PROJ</div>
+      <div class="score-side right">
+        <div class="score-team">${P.opponentName || 'Opponent'}</div>
+        <div class="score-num ${favored ? 'lose' : 'win'}">${th.toFixed(1)}</div>
+      </div>
+    </div>
+    ${wp == null ? '' : `<div class="wp-track"><div class="wp-fill ${wp < 50 ? 'low' : ''}" style="width:${wp}%"></div></div>
+    <div class="wp-label"><span>${wp}% win probability</span><span>${(my - th >= 0 ? '+' : '') + (my - th).toFixed(1)} margin</span></div>`}
+    <div class="proj-note">${P.dataNote}. ${P.mine.excluded ? P.mine.excluded + ' starter(s) excluded from the total: no published PPR projection.' : ''}</div>
+  </div>`;
+
+  const swaps = (P.benchSwaps || []).length ? `<div class="swap-banner">
+    <div class="hd">LINEUP UPGRADE${P.benchSwaps.length > 1 ? 'S' : ''} AVAILABLE</div>
+    ${P.benchSwaps.map(sw => `<div>Start <b>${sw.in.name}</b> (${sw.in.adjusted}) over <b>${sw.out.name}</b> (${sw.out.adjusted}) at ${sw.slot}. Worth <b>+${(sw.in.adjusted - sw.out.adjusted).toFixed(1)}</b>.</div>`).join('')}
+  </div>` : '';
+
+  const swapNames = new Set((P.benchSwaps || []).map(sw => sw.out.name));
+  const maxAdj = Math.max(1, ...(P.starters || []).map(r => r.adjusted || 0));
+  const row = r => {
+    if (r.unprojected) {
+      return `<div class="lu-row">
+        <div class="lu-slot">${r.slot}</div>
+        <div><div class="lu-name">${r.name}</div><div class="lu-meta">${r.team || '?'} &middot; ${r.unprojectedNote}</div></div>
+        <div class="lu-pts"><div class="lu-adj" style="color:var(--muted)">n/a</div></div>
+      </div>`;
+    }
+    const d = r.delta || 0;
+    const dir = d > 0.05 ? 'up' : (d < -0.05 ? 'down' : '');
+    const why = (r.reasons || []).map(x => x.replace(/\(([+-]?\d+%)\)/, '(<b>$1</b>)')).join(' &middot; ');
+    return `<div class="lu-row ${swapNames.has(r.name) ? 'swap' : ''}">
+      <div class="lu-slot">${r.slot}</div>
+      <div>
+        <div class="lu-name">${r.name}</div>
+        <div class="lu-meta">${r.team || '?'}${r.opp ? ' vs ' + r.opp : ''}</div>
+        ${why ? `<div class="lu-why">${why}</div>` : ''}
+      </div>
+      <div class="lu-pts">
+        <div class="lu-adj">${(r.adjusted).toFixed(1)}</div>
+        <div class="lu-base">from ${r.base.toFixed(1)}</div>
+        ${dir ? `<div class="lu-delta ${dir}">${d > 0 ? '+' : ''}${d.toFixed(1)}</div>` : ''}
+        <div class="lu-bar"><div class="lu-bar-fill" style="width:${Math.round((r.adjusted / maxAdj) * 100)}%"></div></div>
+      </div>
+    </div>`;
+  };
+
+  const bench = (P.bench || []).filter(r => !r.unprojected).slice(0, 10);
+  const benchHtml = bench.length ? `<div class="sec-head">Bench</div><div class="lineup-table">${bench.map(row).join('')}</div>` : '';
+
+  const hist = ((S.server || {}).projectionHistory || []).filter(h => h.actual != null);
+  let accuracy = '';
+  if (hist.length) {
+    const errs = hist.map(h => Math.abs(h.error || 0));
+    const mean = errs.reduce((a, b) => a + b, 0) / errs.length;
+    accuracy = `<div class="sec-head">Projected vs actual</div><div class="acc-row">
+      ${hist.slice(-6).map(h => `<span>Wk ${h.week}: <b>${h.projected}</b> proj / <b>${h.actual}</b> real (${h.error > 0 ? '+' : ''}${h.error})</span>`).join('')}
+      <span>Average miss <b>${mean.toFixed(1)}</b> pts</span>
+    </div>`;
+  }
+
+  return scoreboard + swaps
+    + `<div class="sec-head">My starters</div><div class="lineup-table">${(P.starters || []).map(row).join('')}</div>`
+    + benchHtml + accuracy
+    + `<div style="margin-top:14px"><button class="btn" onclick="runProjection()">Rebuild projection</button></div>`;
+}
+
+async function runProjection() {
+  if (!S.isDeployed) { alert('The projection runs server-side. It works on the deployed site.'); return; }
+  setStatus('Building projection...', 'stale');
+  try {
+    await fetch('/.netlify/functions/project');
+    await loadServerData();
+    setStatus('Live', '');
+  } catch (e) { setStatus('Projection failed', 'stale'); }
+  renderTab();
+}
+
 function renderTab() {
   const body = document.getElementById('tab-body');
   const status = (S.server && S.server.snapshot && S.server.snapshot.leagueStatus) || (S.league && S.league.status);
@@ -2352,7 +2487,12 @@ function renderTab() {
   };
 
   if (S.activeTab === 'lineup') {
-    body.innerHTML = renderMatchupHeader() + renderAITab('sitstart');
+    // Numbers first. The written analysis is a second opinion, not the answer,
+    // so it sits behind a toggle instead of being a wall of text on open.
+    body.innerHTML = renderMatchupHeader() + renderProjection()
+      + `<details class="prose-toggle"><summary>Written sit / start analysis</summary>
+           <div style="margin-top:10px">${renderAITab('sitstart')}</div>
+         </details>`;
   } else if (S.activeTab === 'ask') {
     body.innerHTML = renderAsk();
   } else if (S.activeTab === 'deep') {
