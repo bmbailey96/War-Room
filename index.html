@@ -259,10 +259,45 @@
   .wp-fill.low { background: var(--rust); }
   .wp-label { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 6px; }
   .proj-note { font-size: 10.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; border-top: 1px solid var(--line); padding-top: 9px; }
+  .base-strip { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 9px; }
 
   /* ---- Starter rows ---- */
   .lineup-table { border: 1px solid var(--line); }
-  .lu-row { display: grid; grid-template-columns: 42px 1fr 96px; gap: 10px; align-items: center; padding: 9px 11px; border-bottom: 1px solid var(--line); }
+  /* Row: slot | name + reason chips | both numbers | centered delta bar.
+     The delta bar is the point of the whole screen, so it gets its own column
+     instead of being a 10px afterthought. */
+  .lu2 { display: grid; grid-template-columns: 34px 1fr 104px 108px; gap: 12px; align-items: center; padding: 11px; border-bottom: 1px solid var(--line); }
+  .lu2:last-child { border-bottom: none; }
+  .lu2.flag { background: rgba(232,163,61,0.09); box-shadow: inset 3px 0 0 var(--amber); }
+  .lu2-slot { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em; color: var(--muted); text-align: center; border: 1px solid var(--line); padding: 3px 0; }
+  .lu2-name { font-family: var(--display); font-size: 16px; letter-spacing: 0.02em; line-height: 1.1; }
+  .lu2-sub { font-family: var(--mono); font-size: 9.5px; color: var(--muted); margin-top: 3px; letter-spacing: 0.04em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .rchip { font-family: var(--mono); font-size: 9.5px; padding: 2px 6px; border: 1px solid var(--line); color: var(--muted); cursor: help; white-space: nowrap; }
+  .rchip.up { border-color: rgba(111,191,139,0.55); color: var(--green); }
+  .rchip.down { border-color: rgba(217,105,79,0.55); color: var(--rust); }
+  .lu2-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; text-align: right; font-family: var(--mono); }
+  .lu2-lab { font-size: 8px; letter-spacing: 0.09em; color: var(--muted); text-transform: uppercase; }
+  .lu2-v { font-size: 15px; line-height: 1.2; margin-top: 1px; }
+  .lu2-v.dim { color: var(--muted); font-size: 13px; }
+  /* Centered zero line, green pushes right, rust pushes left. Scaled to the
+     biggest swing on the board so bars are comparable across both rosters. */
+  .dbar { font-family: var(--mono); }
+  .dbar-val { font-size: 11.5px; margin-bottom: 4px; height: 14px; }
+  .dbar-val.up { text-align: right; color: var(--green); }
+  .dbar-val.down { text-align: left; color: var(--rust); }
+  .dbar-val.flat { text-align: center; color: var(--muted); font-size: 9.5px; }
+  .dbar-track { position: relative; height: 9px; background: rgba(0,0,0,0.18); }
+  .dbar-axis { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
+  .dbar-fill { position: absolute; top: 0; height: 9px; }
+  .dbar-fill.up { left: 50%; background: var(--green); }
+  .dbar-fill.down { right: 50%; background: var(--rust); }
+  .side-head { display: flex; align-items: baseline; justify-content: space-between; margin: 22px 0 8px; }
+  .side-head h4 { font-family: var(--display); font-size: 13px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--paper); margin: 0; font-weight: 500; }
+  .side-head span { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .more-toggle { font-family: var(--mono); font-size: 10.5px; color: var(--line-bright); cursor: pointer; padding: 9px 11px; border: 1px solid var(--line); border-top: none; text-align: center; }
+  .more-toggle:hover { color: var(--paper); }
+  .lu-row { display: grid; grid-template-columns: 42px 1fr 132px; gap: 10px; align-items: center; padding: 10px 11px; border-bottom: 1px solid var(--line); }
   .lu-row:last-child { border-bottom: none; }
   .lu-row.swap { background: rgba(232,163,61,0.10); }
   .lu-slot { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; color: var(--muted); text-align: center; border: 1px solid var(--line); padding: 3px 0; }
@@ -270,10 +305,14 @@
   .lu-meta { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
   .lu-why { font-size: 10.5px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
   .lu-why b { color: var(--paper); font-weight: 500; }
-  .lu-pts { text-align: right; font-family: var(--mono); }
+  .lu-pts { font-family: var(--mono); }
+  .lu-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; text-align: right; }
+  .lu-cell-label { font-size: 8.5px; letter-spacing: 0.08em; color: var(--muted); text-transform: uppercase; }
+  .lu-cell-val { font-size: 16px; line-height: 1.15; }
+  .lu-cell-val.dim { color: var(--muted); font-size: 14px; }
   .lu-adj { font-size: 17px; }
   .lu-base { font-size: 10.5px; color: var(--muted); }
-  .lu-delta { font-size: 10.5px; }
+  .lu-delta { font-size: 10.5px; text-align: right; margin-top: 3px; }
   .lu-delta.up { color: var(--green); }
   .lu-delta.down { color: var(--rust); }
   .lu-bar { height: 3px; background: var(--panel); margin-top: 5px; }
@@ -2392,6 +2431,11 @@ function renderProjection() {
   const wp = P.winProb == null ? null : Math.round(P.winProb * 100);
   const favored = my >= th;
 
+  // The biggest swing anywhere on the board sets the scale for every delta bar,
+  // so the bars are comparable across both rosters.
+  const allRows = [].concat(P.starters || [], P.bench || [], P.theirStarters || []);
+  const maxDelta = Math.max(1, ...allRows.map(r => Math.abs(r.delta || 0)));
+
   const scoreboard = `<div class="score-card">
     <div class="score-row">
       <div class="score-side">
@@ -2406,7 +2450,8 @@ function renderProjection() {
     </div>
     ${wp == null ? '' : `<div class="wp-track"><div class="wp-fill ${wp < 50 ? 'low' : ''}" style="width:${wp}%"></div></div>
     <div class="wp-label"><span>${wp}% win probability</span><span>${(my - th >= 0 ? '+' : '') + (my - th).toFixed(1)} margin</span></div>`}
-    <div class="proj-note">${P.dataNote}. ${P.mine.excluded ? P.mine.excluded + ' starter(s) excluded from the total: no published PPR projection.' : ''}</div>
+    <div class="base-strip"><span>Sleeper says ${P.mine.baseTotal != null ? P.mine.baseTotal.toFixed(1) : '?'}</span><span>adjusted both sides</span><span>Sleeper says ${P.theirs.baseTotal != null ? P.theirs.baseTotal.toFixed(1) : '?'}</span></div>
+    <div class="proj-note">${P.dataNote}.</div>
   </div>`;
 
   const swaps = (P.benchSwaps || []).length ? `<div class="swap-banner">
@@ -2414,53 +2459,75 @@ function renderProjection() {
     ${P.benchSwaps.map(sw => `<div>Start <b>${sw.in.name}</b> (${sw.in.adjusted}) over <b>${sw.out.name}</b> (${sw.out.adjusted}) at ${sw.slot}. Worth <b>+${(sw.in.adjusted - sw.out.adjusted).toFixed(1)}</b>.</div>`).join('')}
   </div>` : '';
 
-  const swapNames = new Set((P.benchSwaps || []).map(sw => sw.out.name));
-  const maxAdj = Math.max(1, ...(P.starters || []).map(r => r.adjusted || 0));
+  const flagged = new Set((P.benchSwaps || []).flatMap(sw => [sw.out.name, sw.in.name]));
+
   const row = r => {
+    const sub = `${r.team || '?'}${r.opp ? ' vs ' + r.opp : ''}`;
     if (r.unprojected) {
-      return `<div class="lu-row">
-        <div class="lu-slot">${r.slot}</div>
-        <div><div class="lu-name">${r.name}</div><div class="lu-meta">${r.team || '?'} &middot; ${r.unprojectedNote}</div></div>
-        <div class="lu-pts"><div class="lu-adj" style="color:var(--muted)">n/a</div></div>
+      return `<div class="lu2">
+        <div class="lu2-slot">${r.slot}</div>
+        <div><div class="lu2-name">${r.name}</div><div class="lu2-sub">${sub} &middot; ${r.unprojectedNote}</div></div>
+        <div class="lu2-nums"><div></div><div><div class="lu2-lab">War Room</div><div class="lu2-v dim">n/a</div></div></div>
+        <div class="dbar"><div class="dbar-val flat">no projection</div><div class="dbar-track"><div class="dbar-axis"></div></div></div>
       </div>`;
     }
     const d = r.delta || 0;
-    const dir = d > 0.05 ? 'up' : (d < -0.05 ? 'down' : '');
-    const why = (r.reasons || []).map(x => x.replace(/\(([+-]?\d+%)\)/, '(<b>$1</b>)')).join(' &middot; ');
-    return `<div class="lu-row ${swapNames.has(r.name) ? 'swap' : ''}">
-      <div class="lu-slot">${r.slot}</div>
+    const chips = (r.chips || []).map((c, i) => {
+      const dir = c.pct == null ? '' : (c.pct > 0 ? 'up' : (c.pct < 0 ? 'down' : ''));
+      const full = (r.reasons || [])[i] || '';
+      return `<span class="rchip ${dir}" title="${full.replace(/"/g, '&quot;')}">${c.label}${c.pct == null ? '' : ' ' + (c.pct > 0 ? '+' : '') + c.pct + '%'}</span>`;
+    }).join('');
+    const w = Math.round((Math.abs(d) / maxDelta) * 50);
+    const flat = Math.abs(d) < 0.05;
+    const bar = `<div class="dbar">
+      <div class="dbar-val ${flat ? 'flat' : (d > 0 ? 'up' : 'down')}">${flat ? 'no change' : (d > 0 ? '+' : '') + d.toFixed(1)}</div>
+      <div class="dbar-track"><div class="dbar-axis"></div>${flat ? '' : `<div class="dbar-fill ${d > 0 ? 'up' : 'down'}" style="width:${w}%"></div>`}</div>
+    </div>`;
+    return `<div class="lu2 ${flagged.has(r.name) ? 'flag' : ''}">
+      <div class="lu2-slot">${r.slot}</div>
       <div>
-        <div class="lu-name">${r.name}</div>
-        <div class="lu-meta">${r.team || '?'}${r.opp ? ' vs ' + r.opp : ''}</div>
-        ${why ? `<div class="lu-why">${why}</div>` : ''}
+        <div class="lu2-name">${r.name}</div>
+        <div class="lu2-sub">${sub}</div>
+        ${chips ? `<div class="chips">${chips}</div>` : ''}
       </div>
-      <div class="lu-pts">
-        <div class="lu-adj">${(r.adjusted).toFixed(1)}</div>
-        <div class="lu-base">from ${r.base.toFixed(1)}</div>
-        ${dir ? `<div class="lu-delta ${dir}">${d > 0 ? '+' : ''}${d.toFixed(1)}</div>` : ''}
-        <div class="lu-bar"><div class="lu-bar-fill" style="width:${Math.round((r.adjusted / maxAdj) * 100)}%"></div></div>
+      <div class="lu2-nums">
+        <div><div class="lu2-lab">Sleeper</div><div class="lu2-v dim">${r.base.toFixed(1)}</div></div>
+        <div><div class="lu2-lab">War Room</div><div class="lu2-v">${r.adjusted.toFixed(1)}</div></div>
       </div>
+      ${bar}
     </div>`;
   };
 
-  const bench = (P.bench || []).filter(r => !r.unprojected).slice(0, 10);
-  const benchHtml = bench.length ? `<div class="sec-head">Bench</div><div class="lineup-table">${bench.map(row).join('')}</div>` : '';
+  const section = (title, note, rows) => `<div class="side-head"><h4>${title}</h4><span>${note}</span></div>
+    <div class="lineup-table">${rows.map(row).join('')}</div>`;
+
+  // Bench: five names, then a toggle. Twelve rows of bodies buried the four
+  // that actually matter.
+  const bench = (P.bench || []).filter(r => !r.unprojected);
+  const benchTop = bench.slice(0, 5), benchRest = bench.slice(5);
+  const benchHtml = bench.length ? `<div class="side-head"><h4>Bench</h4><span>${bench.length} available</span></div>
+    <div class="lineup-table">${benchTop.map(row).join('')}</div>
+    ${benchRest.length ? `<div class="more-toggle" onclick="this.nextElementSibling.style.display='';this.style.display='none'">Show ${benchRest.length} more</div>
+    <div class="lineup-table" style="display:none;border-top:none">${benchRest.map(row).join('')}</div>` : ''}` : '';
+
+  const theirs = (P.theirStarters || []).length
+    ? section(P.opponentName || 'Opponent', `${P.theirs.baseTotal != null ? P.theirs.baseTotal.toFixed(1) : '?'} to ${th.toFixed(1)} after adjustment`, P.theirStarters)
+    : '';
 
   const hist = ((S.server || {}).projectionHistory || []).filter(h => h.actual != null);
   let accuracy = '';
   if (hist.length) {
     const errs = hist.map(h => Math.abs(h.error || 0));
     const mean = errs.reduce((a, b) => a + b, 0) / errs.length;
-    accuracy = `<div class="sec-head">Projected vs actual</div><div class="acc-row">
+    accuracy = `<div class="side-head"><h4>Projected vs actual</h4><span>average miss ${mean.toFixed(1)} pts</span></div><div class="acc-row">
       ${hist.slice(-6).map(h => `<span>Wk ${h.week}: <b>${h.projected}</b> proj / <b>${h.actual}</b> real (${h.error > 0 ? '+' : ''}${h.error})</span>`).join('')}
-      <span>Average miss <b>${mean.toFixed(1)}</b> pts</span>
     </div>`;
   }
 
   return scoreboard + swaps
-    + `<div class="sec-head">My starters</div><div class="lineup-table">${(P.starters || []).map(row).join('')}</div>`
-    + benchHtml + accuracy
-    + `<div style="margin-top:14px"><button class="btn" onclick="runProjection()">Rebuild projection</button></div>`;
+    + section('My starters', `${P.mine.baseTotal != null ? P.mine.baseTotal.toFixed(1) : '?'} to ${my.toFixed(1)} after adjustment`, P.starters || [])
+    + benchHtml + theirs + accuracy
+    + `<div style="margin-top:16px"><button class="btn" onclick="runProjection()">Rebuild projection</button></div>`;
 }
 
 async function runProjection() {
