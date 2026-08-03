@@ -13,7 +13,7 @@
 // scored against reality later.
 
 import {
-  blobs, resolveLeague, projectPlayer, teamProjection, winProbability,
+  blobs, resolveLeague, projectPlayer, teamProjection, winProbability, scoreProjection,
 } from "./lib/ocho.mjs";
 
 const j = async (url, tries = 3) => {
@@ -76,11 +76,17 @@ export default async () => {
   const projRows = await j(
     `https://api.sleeper.app/projections/nfl/${season}/${week}?season_type=regular&${positions}&order_by=ppr`
   ) || [];
+  // Score every projection under THIS league's rules rather than trusting the
+  // generic pts_ppr field. Verified to reproduce Sleeper's own matchup screen
+  // to the cent, including IDP.
+  const scoring = snapshot.scoringSettings;
   const byPid = {};
   for (const r of projRows) {
-    const pts = (r.stats || {}).pts_ppr;
+    const stats = r.stats || {};
+    const league = scoring ? scoreProjection(stats, scoring) : null;
+    const pts = league != null ? league : stats.pts_ppr;
     if (pts == null) continue;
-    byPid[r.player_id] = { pts, opp: r.opponent, team: r.team };
+    byPid[r.player_id] = { pts, sleeper: pts, opp: r.opponent, team: r.team };
   }
 
   const myRow = matchups.find(r => r.roster_id === me.rosterId);
@@ -109,16 +115,21 @@ export default async () => {
   }).filter(r => !r.onIR);
   const best = optimalLineup(allMine, snapshot.rosterPositions || []);
   const startingKeys = new Set((myRow && myRow.starters) || []);
+  const bestKeys = new Set(best.map(b => b.player.key));
+
+  // Pair the diff properly. The earlier version compared every promotion
+  // against the same single weakest starter, which produced two separate
+  // "start X over Tucker Kraft" lines for one bench spot. Best incoming is
+  // matched to worst outgoing, one for one.
+  const ins = best.filter(b => !startingKeys.has(b.player.key))
+    .sort((a, b) => b.player.adjusted - a.player.adjusted);
+  const outs = starters.filter(s => s.adjusted != null && !bestKeys.has(s.key))
+    .sort((a, b) => a.adjusted - b.adjusted);
   const benchSwaps = [];
-  for (const { slot, player } of best) {
-    if (startingKeys.has(player.key)) continue;
-    // Who is currently in that slot and is the weakest thing this beats.
-    const weakest = starters
-      .filter(s => s.adjusted != null)
-      .sort((a, b) => a.adjusted - b.adjusted)
-      .find(s => !best.some(b => b.player.key === s.key));
-    if (weakest && player.adjusted > weakest.adjusted) {
-      benchSwaps.push({ slot, in: player, out: weakest });
+  for (let i = 0; i < Math.min(ins.length, outs.length); i++) {
+    const inn = ins[i].player, out = outs[i];
+    if (inn.adjusted > out.adjusted) {
+      benchSwaps.push({ slot: ins[i].slot, in: inn, out });
     }
   }
 
