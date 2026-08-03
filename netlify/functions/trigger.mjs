@@ -12,11 +12,11 @@ export default async (req) => {
     if (body.task) task = body.task;
   } catch (e) { /* default */ }
 
-  // Fresh snapshot + news harvest so the analysis sees the league and the wire as of right now
-  await Promise.all([
-    fetch(`${base}/.netlify/functions/snapshot`).catch(() => {}),
-    fetch(`${base}/.netlify/functions/news`).catch(() => {}),
-  ]);
+  // Fresh snapshot + news harvest so the analysis sees the league and the wire
+  // as of right now. These go through run.mjs: snapshot.mjs and news.mjs are
+  // scheduled functions, and Netlify answers 403 to a direct HTTP call, so the
+  // old direct fetches here never actually refreshed anything.
+  await fetch(`${base}/.netlify/functions/run?job=snapshot,news`).catch(() => {});
 
   // Queue the long-running work
   await fetch(`${base}/.netlify/functions/analyze-background`, {
