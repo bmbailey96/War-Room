@@ -454,6 +454,156 @@ export function usageBlock(statsDigest) {
   return `\n\nUSAGE TRENDS (biggest snap-share movers, ${statsDigest.season}).${stale} Rising snap share on a free agent is the strongest pickup signal there is; falling snap share on my player is the strongest drop signal:\n${moved.join("\n")}`;
 }
 
+// ---- PROJECTION ENGINE ----------------------------------------------------
+// Sleeper ships a Rotowire projection per player per week. That number knows
+// nothing about who the defense is, whether the offense has changed shape in
+// the last three games, or whether the player's snap share is moving. This
+// takes the Rotowire number as the base and adjusts it with the evidence we
+// already compute, deterministically, in JS. No model involved, so the number
+// cannot be hallucinated and the reasons are always auditable.
+
+// Per-position scoring volatility, as a fraction of the projection. Used for
+// the win probability, not for the point estimate.
+const POS_SIGMA = { QB: 0.34, RB: 0.55, WR: 0.60, TE: 0.65, K: 0.45, DEF: 0.70, DL: 0.60 };
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// Normal CDF, Abramowitz-Stegun 7.1.26.
+function normCdf(z) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989422804014327 * Math.exp(-z * z / 2);
+  let p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  return z > 0 ? 1 - p : p;
+}
+
+export function leagueAvgAllowed(defense) {
+  const out = {};
+  for (const pos of ["QB", "RB", "WR", "TE"]) {
+    const vals = Object.values(defense || {}).map(d => d[pos]).filter(v => v != null);
+    if (vals.length) out[pos] = vals.reduce((a, b) => a + b, 0) / vals.length;
+  }
+  return out;
+}
+
+// One player's adjusted projection plus the reasons, in order of size.
+export function projectPlayer(player, opts) {
+  const { baseProj, oppTeam, statsDigest } = opts;
+  const slot = player.slot || player.pos;
+  const scorePos = ["QB", "RB", "WR", "TE"].includes(slot) ? slot : null;
+  const reasons = [];
+  let mult = 1;
+
+  // 1. Opponent defense vs this position.
+  const defense = (statsDigest || {}).defense || {};
+  const avg = leagueAvgAllowed(defense);
+  if (scorePos && oppTeam && defense[oppTeam] && defense[oppTeam][scorePos] != null && avg[scorePos]) {
+    const ratio = defense[oppTeam][scorePos] / avg[scorePos];
+    const m = 1 + 0.5 * (ratio - 1);
+    mult *= m;
+    if (Math.abs(m - 1) >= 0.04) {
+      reasons.push({
+        size: Math.abs(m - 1),
+        text: `${oppTeam} allows ${defense[oppTeam][scorePos]} to ${scorePos}s per game vs ${Math.round(avg[scorePos] * 10) / 10} league average (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
+      });
+    }
+  }
+
+  // 2. How his offense has been playing lately, not all season.
+  const form = ((statsDigest || {}).form || {})[player.team];
+  if (form && scorePos) {
+    const passDelta = (form.recentPassRate - form.seasonPassRate) / 100;
+    const lean = scorePos === "RB" ? -0.8 : (scorePos === "K" ? 0 : 0.8);
+    const m = clamp(1 + lean * passDelta, 0.92, 1.08);
+    mult *= m;
+    if (Math.abs(m - 1) >= 0.02) {
+      reasons.push({
+        size: Math.abs(m - 1),
+        text: `${player.team} pass rate ${form.recentPassRate}% last 3 vs ${form.seasonPassRate}% season (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
+      });
+    }
+  }
+
+  // 3. Snap share direction.
+  // Only trust snap direction when the data is from the season being played.
+  // Out of season the "last 3 games" window sits on week 18, when starters
+  // rest, and it was docking healthy stars for a scheduled day off.
+  const usage = (statsDigest || {}).seasonIsCurrent
+    ? ((statsDigest || {}).usage || []).find(u => normName(u.player) === normName(player.name))
+    : null;
+  if (usage && usage.recentSnapPct != null && usage.priorSnapPct != null) {
+    const snapDelta = (usage.recentSnapPct - usage.priorSnapPct) / 100;
+    const m = clamp(1 + 0.5 * snapDelta, 0.90, 1.10);
+    mult *= m;
+    if (Math.abs(m - 1) >= 0.02) {
+      reasons.push({
+        size: Math.abs(m - 1),
+        text: `snaps ${usage.priorSnapPct}% to ${usage.recentSnapPct}% (${m > 1 ? "+" : ""}${Math.round((m - 1) * 100)}%)`,
+      });
+    }
+  }
+
+  // Nothing above is allowed to run away on its own.
+  mult = clamp(mult, 0.75, 1.30);
+
+  // 4. Availability is a gate, not an adjustment.
+  const inj = (player.inj || "").toLowerCase();
+  let availability = 1;
+  if (["out", "ir", "pup", "sus", "doubtful", "dnr", "cov"].some(k => inj.includes(k))) availability = inj.includes("doubtful") ? 0.25 : 0;
+  else if (inj.includes("questionable")) availability = 0.92;
+  if (availability < 1) {
+    reasons.push({ size: 1 - availability, text: `listed ${player.inj}${availability === 0 ? ", projected zero" : ""}` });
+  }
+
+  // Rotowire's pts_ppr does not cover IDP scoring, so a defensive player comes
+  // back as a fraction of a point. Better to mark it unprojected than to put a
+  // fake 0.9 next to Myles Garrett and quietly deflate the team total.
+  const idp = ["DL", "LB", "DB"].includes(slot);
+  const unprojected = idp || !baseProj;
+  const adjusted = Math.round(baseProj * mult * availability * 10) / 10;
+  reasons.sort((a, b) => b.size - a.size);
+  return {
+    name: player.name, slot, team: player.team, opp: oppTeam || null,
+    base: Math.round(baseProj * 10) / 10,
+    adjusted: unprojected ? null : adjusted,
+    delta: unprojected ? null : Math.round((adjusted - baseProj) * 10) / 10,
+    unprojected,
+    unprojectedNote: unprojected ? (idp ? "IDP, no PPR projection published" : "no projection published") : null,
+    reasons: reasons.slice(0, 3).map(r => r.text),
+  };
+}
+
+export function teamProjection(rows) {
+  const scored = rows.filter(r => !r.unprojected && r.adjusted != null);
+  const total = scored.reduce((a, r) => a + r.adjusted, 0);
+  const variance = scored.reduce((a, r) => {
+    const sigma = (POS_SIGMA[r.slot] ?? 0.55) * r.adjusted;
+    return a + sigma * sigma;
+  }, 0);
+  return {
+    total: Math.round(total * 10) / 10,
+    variance,
+    excluded: rows.length - scored.length,
+  };
+}
+
+export function winProbability(mine, theirs) {
+  const sd = Math.sqrt(mine.variance + theirs.variance);
+  if (!sd) return 0.5;
+  return normCdf((mine.total - theirs.total) / sd);
+}
+
+export function projectionBlock(projection) {
+  if (!projection || !projection.mine) return "";
+  const line = r => r.unprojected
+    ? `  ${r.name} (${r.slot}, ${r.team || "?"}): ${r.unprojectedNote}, excluded from the total`
+    : `  ${r.name} (${r.slot}, ${r.team || "?"}${r.opp ? " vs " + r.opp : ""}): ${r.base} base -> ${r.adjusted}${r.reasons.length ? ` [${r.reasons.join("; ")}]` : ""}`;
+  const bench = (projection.benchSwaps || []).map(s => `  START ${s.in.name} (${s.in.adjusted}) OVER ${s.out.name} (${s.out.adjusted}) at ${s.slot}, worth +${Math.round((s.in.adjusted - s.out.adjusted) * 10) / 10}`);
+  return `\n\nWEEK ${projection.week} PROJECTION (computed, not guessed. Base is Sleeper's Rotowire number; adjusted applies opponent defense vs position, the team's last-3-game pass rate vs season, snap-share direction, and injury status. ${projection.dataNote}):
+My projected total ${projection.mine.total} vs ${projection.opponentName} ${projection.theirs.total}. Win probability ${Math.round(projection.winProb * 100)}%.
+My starters:
+${projection.starters.map(line).join("\n")}
+${bench.length ? `Lineup upgrades available:\n${bench.join("\n")}` : "No bench player out-projects a current starter."}`;
+}
+
 export function trendingBlock(core, snapshot, playersDB) {
   const rostered = new Set();
   for (const r of core.rosters) for (const pid of r.players || []) rostered.add(pid);
