@@ -225,7 +225,7 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
 
 export default async req=>{
   try{
-    const url=new URL(req.url),force=url.searchParams.get("refresh")==="1";
+    const url=new URL(req.url),force=url.searchParams.get("refresh")==="1",coreOnly=url.searchParams.get("core")==="1";
     const leagues=await getMyLeagues();
     const requested=url.searchParams.get("league");
     const chosen=leagues.find(l=>l.id===requested)||leagues[0];
@@ -607,11 +607,13 @@ Return ONLY valid JSON:
 }`;
 
     let parsed=null,error=null;
-    try{
-      const raw=await callClaude(prompt,{maxTokens:3000,useSearch:true});
-      parsed=parseJson(raw);
-      if(!parsed)throw new Error("invalid roster-actions JSON");
-    }catch(e){error=e.message;}
+    if(!coreOnly){
+      try{
+        const raw=await callClaude(prompt,{maxTokens:3000,useSearch:true});
+        parsed=parseJson(raw);
+        if(!parsed)throw new Error("invalid roster-actions JSON");
+      }catch(e){error=e.message;}
+    }
     if(!parsed)parsed=deterministicRosterFallback({
       waivers:bestWaiverPairs,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
     });
@@ -709,8 +711,8 @@ Return ONLY valid JSON:
         forecastModel:"provider + recent league-scored production + workload trend",
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
       },
-      reasoningMode:error?"deterministic":"live_news",
-      reasoningAvailable:!error,
+      reasoningMode:(coreOnly||error)?"deterministic":"live_news",
+      reasoningAvailable:!coreOnly&&!error,
       reasoningError:error||null,
       error:null
     };
