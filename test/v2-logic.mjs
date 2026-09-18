@@ -6,6 +6,7 @@ import {
   mergeProjectionSnapshot, mergeReasoningSnapshot
 } from "../netlify/functions/lib/freeze-v2.mjs";
 import { isReasoningWindow } from "../netlify/functions/lineup-refresh.mjs";
+import { sanitizeAnalysis } from "../netlify/functions/lineup-analysis.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
 assert.equal(eligibility("FLEX",flexPlayer),true);
@@ -101,5 +102,28 @@ const now=Date.parse("2026-09-19T12:00:00Z");
 assert.equal(isReasoningWindow({players:[{locked:false,kickoffAt:"2026-09-19T15:00:00Z"}]},now),true);
 assert.equal(isReasoningWindow({players:[{locked:false,kickoffAt:"2026-09-20T12:00:00Z"}]},now),false);
 assert.equal(isReasoningWindow({players:[{locked:true,kickoffAt:"2026-09-19T13:00:00Z"}]},now),false);
+
+const liveData={
+  players:[
+    {pid:"s",name:"Current Starter",slot:"TE",eligibleSlots:["TE"],locked:false},
+    {pid:"b",name:"Bench Option",slot:"TE",eligibleSlots:["TE"],locked:false},
+    {pid:"l",name:"Sam LaPorta",slot:"TE",eligibleSlots:["TE"],locked:true},
+  ],
+  current:[{slot:"TE",player:{pid:"s",name:"Current Starter",slot:"TE",eligibleSlots:["TE"],locked:false}}],
+  calls:[{start:{pid:"b"},sit:{pid:"s"}}],
+};
+const safe=sanitizeAnalysis({
+  summary:"Start LaPorta",
+  confidence:"HIGH",
+  calls:[
+    {start:"Sam LaPorta",sit:"Current Starter",slot:"TE",verdict:"OVERRIDE",confidence:"HIGH",why:"old cached advice",drivers:["role"]},
+    {start:"Bench Option",sit:"Current Starter",slot:"TE",verdict:"OVERRIDE",confidence:"HIGH",why:"fresh legal advice",drivers:["injury"]},
+  ],
+  watch:["one","two","three","four"],
+},liveData);
+assert.equal(safe.calls.length,1);
+assert.equal(safe.calls[0].start,"Bench Option");
+assert.equal(safe.calls[0].sit,"Current Starter");
+assert.equal(safe.watch.length,3);
 
 console.log("War Room V2 logic checks passed");
