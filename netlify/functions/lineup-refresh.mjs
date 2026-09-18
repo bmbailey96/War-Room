@@ -4,6 +4,7 @@
 
 import analyze from "./lineup-analysis.mjs";
 import { getMyLeagues } from "./leagues.mjs";
+import { freezePregame } from "./lib/freeze-v2.mjs";
 
 export default async () => {
   const leagues=await getMyLeagues();
@@ -16,7 +17,20 @@ export default async () => {
       const res=await analyze(req);
       let body=null;
       try{body=await res.json();}catch(e){}
-      results.push({league:league.name,id:league.id,ok:res.ok,status:res.status,summary:body?.analysis?.summary||body?.error||null});
+
+      // Freeze whatever deterministic projection we successfully built even
+      // when the live-news reasoning layer fails. Reasoning is attached only
+      // when it also completed successfully.
+      let frozen=null;
+      if(body?.projection){
+        frozen=await freezePregame(body.projection,body.analysis||null);
+      }
+
+      results.push({
+        league:league.name,id:league.id,ok:res.ok,status:res.status,
+        summary:body?.analysis?.summary||body?.error||null,
+        frozen,
+      });
     }catch(e){
       results.push({league:league.name,id:league.id,ok:false,error:e.message});
     }
