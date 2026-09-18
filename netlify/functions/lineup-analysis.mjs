@@ -2,8 +2,8 @@
 // Arithmetic comes from lineup.mjs. This call only decides whether current
 // reporting gives us a concrete reason to distrust or override that number.
 
-import lineup from "./lineup.mjs";
-import { store, callClaude } from "./lib/war-v2.mjs";
+import lineup, { eligibility } from "./lineup.mjs";
+import { store, callClaude, normName } from "./lib/war-v2.mjs";
 
 function parseJson(text) {
   if (!text) return null;
@@ -11,6 +11,62 @@ function parseJson(text) {
   const a=s.indexOf("{"), b=s.lastIndexOf("}");
   if(a<0 || b<a) return null;
   try { return JSON.parse(s.slice(a,b+1)); } catch(e) { return null; }
+}
+
+const DRIVER_KEYS=new Set(["injury","role","depth_chart","scheme","weather","matchup","projection_only"]);
+const CONFIDENCE=new Set(["HIGH","MEDIUM","LOW"]);
+
+export function sanitizeAnalysis(analysis,data){
+  if(!analysis || !data) return {summary:null,confidence:"LOW",calls:[],watch:[]};
+
+  const byName=new Map((data.players||[]).map(p=>[normName(p.name),p]));
+  const current=(data.current||[]).filter(x=>x.player);
+  const starterByPid=new Map(current.map(x=>[x.player.pid,x]));
+  const starterIds=new Set(starterByPid.keys());
+  const calls=[];
+
+  for(const raw of analysis.calls||[]){
+    const start=byName.get(normName(raw.start));
+    const sit=byName.get(normName(raw.sit));
+    if(!start || !sit) continue;
+    if(start.pid===sit.pid || start.locked || sit.locked) continue;
+
+    // A live-news override must still describe a move that can be made right
+    // now: bench -> current starter, in the starter's currently occupied slot.
+    if(starterIds.has(start.pid) || !starterIds.has(sit.pid)) continue;
+    const occupied=starterByPid.get(sit.pid);
+    if(!occupied || !eligibility(occupied.slot,start)) continue;
+
+    const drivers=[...new Set((raw.drivers||[]).filter(d=>DRIVER_KEYS.has(d)))];
+    calls.push({
+      start:start.name,
+      sit:sit.name,
+      slot:occupied.slot,
+      verdict:raw.verdict==="OVERRIDE"?"OVERRIDE":"START",
+      confidence:CONFIDENCE.has(raw.confidence)?raw.confidence:"LOW",
+      why:String(raw.why||"").slice(0,600),
+      sourceDate:/^\d{4}-\d{2}-\d{2}$/.test(raw.sourceDate||"")?raw.sourceDate:null,
+      drivers:drivers.length?drivers:["projection_only"],
+    });
+  }
+
+  const watch=(analysis.watch||[])
+    .filter(x=>typeof x==="string" && x.trim())
+    .slice(0,3)
+    .map(x=>x.trim().slice(0,240));
+
+  const summary=calls.length
+    ? String(analysis.summary||"Current news supports a lineup change.").slice(0,300)
+    : (data.calls?.length
+        ? "No current news invalidates the computed lineup changes."
+        : "Keep the lineup.");
+
+  return {
+    summary,
+    confidence:CONFIDENCE.has(analysis.confidence)?analysis.confidence:"LOW",
+    calls,
+    watch,
+  };
 }
 
 export default async req => {
@@ -31,7 +87,8 @@ export default async req => {
     const cacheKey=`live_analysis_${data.league.id}_${data.week}`;
     const cached=await stateStore.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force && cached && Date.now()-cached.at < 4*60*60*1000) {
-      return new Response(JSON.stringify({...cached,projection:data}),{
+      const safeAnalysis=sanitizeAnalysis(cached.analysis,data);
+      return new Response(JSON.stringify({...cached,analysis:safeAnalysis,projection:data}),{
         headers:{"content-type":"application/json","cache-control":"no-store"}
       });
     }
@@ -41,6 +98,7 @@ export default async req => {
       opp:x.player.opp,injury:x.player.injury,confidence:x.player.confidence,fallback:x.player.fallback,reasons:x.player.reasons
     }));
     const bench=(data.players||[])
+      .filter(p=>!p.locked)
       .filter(p=>!(data.current||[]).some(x=>x.player?.pid===p.pid))
       .sort((a,b)=>(b.projection||0)-(a.projection||0))
       .slice(0,12)
@@ -97,8 +155,9 @@ Return ONLY valid JSON:
 }`;
 
     const raw=await callClaude(prompt,{maxTokens:1500,useSearch:true});
-    const analysis=parseJson(raw);
-    if(!analysis) throw new Error("lineup reasoning returned invalid JSON");
+    const parsed=parseJson(raw);
+    if(!parsed) throw new Error("lineup reasoning returned invalid JSON");
+    const analysis=sanitizeAnalysis(parsed,data);
     const saved={at:Date.now(),leagueId:data.league.id,week:data.week,analysis};
     await stateStore.setJSON(cacheKey,saved);
     return new Response(JSON.stringify({...saved,projection:data}),{
