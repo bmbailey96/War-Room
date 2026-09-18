@@ -38,7 +38,20 @@ export function deterministicAnalysis(data) {
 
   const watch=[];
   const seen=new Set();
+
+  for(const x of data.flexMoves||[]){
+    if(!x?.message)continue;
+    watch.push(`FLEX // ${x.message.replace(/^FLEX\s*\/\/\s*/i,"")}`);
+    if(watch.length>=4)break;
+  }
+  for(const x of data.contingencies||[]){
+    if(watch.length>=4)break;
+    if(!x?.message)continue;
+    watch.push(x.message);
+    if(x.starter)seen.add(String(x.starter).toLowerCase());
+  }
   for(const p of data.players||[]){
+    if(watch.length>=4)break;
     const status=String(p.injury||"");
     if(!status || !/question|doubt|out|ir|pup|sus/i.test(status))continue;
     const key=(p.name||"").toLowerCase();
@@ -46,7 +59,6 @@ export function deterministicAnalysis(data) {
     seen.add(key);
     const practice=p.practiceStatus?` // ${p.practiceStatus}`:"";
     watch.push(`${p.name}: ${status}${practice}`);
-    if(watch.length>=3)break;
   }
 
   const top=calls[0];
@@ -144,6 +156,12 @@ ${JSON.stringify(lockedBench,null,2)}
 PLAYERS UNAVAILABLE THIS WEEK:
 ${JSON.stringify(unavailable,null,2)}
 
+DETERMINISTIC LATE-SWAP CONTINGENCIES:
+${JSON.stringify(data.contingencies||[],null,2)}
+
+ZERO-POINT FLEX PRESERVATION MOVES:
+${JSON.stringify(data.flexMoves||[],null,2)}
+
 YOUR GRADED REASONING TRACK RECORD IN THIS LEAGUE:
 ${JSON.stringify(learnedDrivers,null,2)}
 
@@ -151,17 +169,18 @@ Rules:
 1. Start from the computed lineup. Do not override it for generic matchup talk, reputation, consensus rankings, or vibes.
 2. NEVER recommend moving a player whose game has started. A player listed under PLAYERS ALREADY LOCKED ON THE BENCH is history, not an option.
 3. NEVER recommend START/HOLD/OVERRIDE in favor of anyone listed under PLAYERS UNAVAILABLE THIS WEEK, even if old projections or reputation favor him.
-4. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, credible inactive news, or a confirmed shadow/slot coverage assignment.
-5. Respect the engine's uncertainty. A LOW decision-confidence call or beat probability near 50% is genuinely close even if the raw point gap looks noticeable. A HIGH-confidence mathematical edge should require strong concrete news to override.
-6. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
-7. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
-8. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
-9. COVERAGE MATCHUP is an inferred likely assignment from current depth charts plus actual defender coverage results. Its assignmentConfidence is deliberately modest. Treat it as a tiebreaker unless current reporting explicitly confirms a shadow/slot assignment.
-10. MATCHUP EXPOSURE scales team/coverage matchup effects by actual target or workload ownership. A low-volume player should not receive the same boost from a soft defense as an alpha player.
-11. PASS RUSH is a small opponent pressure edge derived from actual defender pressure production and is already partially reflected in the projection. Do not double-count it.
-12. Never claim a defender will shadow a receiver unless current reporting actually says so.
-13. Never claim you found news you did not actually find.
-14. Keep this brutally scannable.
+4. Preserve the deterministic late-swap and FLEX guidance unless current news changes the player's availability. Never tell me to wait on a questionable late player if the listed fallback locks earlier.
+5. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, credible inactive news, or a confirmed shadow/slot coverage assignment.
+6. Respect the engine's uncertainty. A LOW decision-confidence call or beat probability near 50% is genuinely close even if the raw point gap looks noticeable. A HIGH-confidence mathematical edge should require strong concrete news to override.
+7. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
+8. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
+9. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
+10. COVERAGE MATCHUP is an inferred likely assignment from current depth charts plus actual defender coverage results. Its assignmentConfidence is deliberately modest. Treat it as a tiebreaker unless current reporting explicitly confirms a shadow/slot assignment.
+11. MATCHUP EXPOSURE scales team/coverage matchup effects by actual target or workload ownership. A low-volume player should not receive the same boost from a soft defense as an alpha player.
+12. PASS RUSH is a small opponent pressure edge derived from actual defender pressure production and is already partially reflected in the projection. Do not double-count it.
+13. Never claim a defender will shadow a receiver unless current reporting actually says so.
+14. Never claim you found news you did not actually find.
+15. Keep this brutally scannable.
 
 Return ONLY valid JSON:
 {
