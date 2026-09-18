@@ -81,17 +81,51 @@ function rosterAfter(roster,{removeNames=[],addPlayers=[]}={}){
 }
 function assetName(x){return x?.name||String(x||"");}
 
-function fallbackAction(free,drops){
-  if(!free.length)return {summary:"No urgent roster move.",actions:[{type:"HOLD",priority:1,confidence:"LOW",headline:"Hold",why:"No available player cleared the deterministic screen."}],watch:[]};
+function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"}={}) {
+  const actions=[];
+  for(const [i,w] of waivers.slice(0,3).entries()){
+    const impact=Math.max(Number(w.weeklyDelta||0),mode==="DYNASTY"?Number(w.marketDelta||0)/8:0);
+    const confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
+    const faabBase=mode==="DYNASTY"
+      ? Math.min(22,Math.max(2,Math.round((w.marketDelta||0)*.7+(w.weeklyDelta||0)*4)))
+      : Math.min(28,Math.max(2,Math.round((w.weeklyDelta||0)*6+Math.log10(1+(w.trending||0))*3)));
+    actions.push({
+      type:"ADD_DROP",priority:i+1,confidence,
+      headline:`Add ${w.add}, drop ${w.drop}`,
+      why:mode==="DYNASTY"
+        ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
+        : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
+      window:"BEFORE WAIVERS",
+      add:{name:w.add},drop:{name:w.drop},faabPct:faabBase,
+      drivers:["depth","schedule",...(mode==="DYNASTY"?["market"]:[])],
+      weeklyDelta:w.weeklyDelta,marketDelta:w.marketDelta??null,
+    });
+  }
+  for(const [i,t] of trades.slice(0,Math.max(0,3-actions.length)).entries()){
+    actions.push({
+      type:"TRADE_FOR",priority:actions.length+1,
+      confidence:t.confidence||"MEDIUM",
+      headline:`Offer for ${t.target}`,
+      why:t.why,
+      window:"THIS WEEK",partner:t.partner,
+      send:t.send,receive:[{type:"player",name:t.target}],
+      faabPct:null,drivers:["consolidation",...(mode==="DYNASTY"?["market","pick_value"]:[])],
+      weeklyDelta:t.weeklyDelta,partnerWeeklyDelta:t.partnerWeeklyDelta,
+      sendValue:t.sendValue??null,receiveValue:t.receiveValue??null,
+      marketDelta:t.marketDelta??null,
+    });
+  }
+  if(!actions.length){
+    actions.push({
+      type:"HOLD",priority:1,confidence:"MEDIUM",headline:"Hold the roster",
+      why:"No deterministic waiver swap or trade package cleared the improvement and plausibility screens.",
+      window:"WATCH",drivers:["depth"]
+    });
+  }
   return {
-    summary:`Best available screen: ${free[0].name}.`,
-    actions:[{
-      type:"ADD_DROP",priority:1,confidence:"LOW",
-      headline:`Add ${free[0].name}${drops[0]?`, drop ${drops[0].name}`:""}`,
-      why:"Fallback recommendation because the live reasoning layer did not return valid structured output.",
-      add:{name:free[0].name},drop:drops[0]?{name:drops[0].name}:null,window:"WATCH",drivers:["depth"]
-    }],
-    watch:[]
+    summary:actions[0].headline,
+    actions,
+    watch:trades.length?trades.slice(0,2).map(t=>`Trade market: ${t.target} on ${t.partner}`):[]
   };
 }
 
