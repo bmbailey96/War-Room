@@ -57,4 +57,3 @@ MANDATORY FINAL SECTION: end with "## THE MOVE" naming the single first action t
   }
 };
 
-export const config = { schedule: "0 16 * * 1" };
