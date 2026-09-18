@@ -409,3 +409,5 @@ export default async req => {
     return new Response(JSON.stringify({error:e.message}),{status:502,headers:{"content-type":"application/json"}});
   }
 };
+
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue };
