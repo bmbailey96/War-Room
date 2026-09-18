@@ -47,8 +47,11 @@ export function slotPos(p) {
 
 export function pInfo(db,pid) {
   const p=db[pid];
-  if(!p)return {name:pid,pos:null,fps:[],age:null,team:null,inj:null};
-  return {name:p.n,pos:p.p,fps:p.fp||(p.p?[p.p]:[]),age:p.a,team:p.t,inj:p.inj};
+  if(!p)return {name:pid,pos:null,fps:[],age:null,team:null,inj:null,depthPos:null,depthOrder:null};
+  return {
+    name:p.n,pos:p.p,fps:p.fp||(p.p?[p.p]:[]),age:p.a,team:p.t,inj:p.inj,
+    depthPos:p.dp||null,depthOrder:p.do??null,
+  };
 }
 
 export async function getPlayersTrim() {
@@ -65,6 +68,7 @@ export async function getPlayersTrim() {
       n:p.full_name||`${p.first_name||""} ${p.last_name||""}`.trim()||pid,
       p:p.position||null,fp:p.fantasy_positions||null,a:p.age||null,
       t:p.team||null,inj:p.injury_status||null,
+      dp:p.depth_chart_position??null,do:p.depth_chart_order??null,
     };
   }
   await s.setJSON("players",{at:Date.now(),data:trim});
