@@ -139,7 +139,7 @@ Rules:
 3. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, or credible inactive news.
 4. If two players are within 1.5 projected points, treat it as a genuine decision. If MATCHUP STATE posture is protect_floor, prefer the stronger floor when evidence is otherwise close. If it is chase_ceiling, prefer the stronger ceiling. If neutral, do not force a risk-style tiebreak.
 5. Do not use matchup posture to override a gap larger than 1.5 projected points.
-6. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
+6. Use the graded track record above as calibration, not gospel. Prefer recentHitRate and recentAvgPointEdge over lifetime hitRate when they disagree, because roles and schemes change. If a driver has been losing lately, demand stronger evidence before using it as an override.
 7. If the model used Sleeper fallback for a player, say so and lower confidence.
 8. Never claim you found news you did not actually find.
 9. Keep this brutally scannable.
