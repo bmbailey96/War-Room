@@ -251,7 +251,7 @@ console.log("Bench stash fallback checks passed");
 
 
 const {
-  buildDepthSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks
+  buildDepthSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
 } = await import("../netlify/functions/lib/matchup-v2.mjs");
 
 const depthCsv = [
@@ -290,6 +290,7 @@ const nextCorner=inferWrCoverage({
 });
 assert.equal(nextCorner.defender,"Other Corner");
 assert.ok(nextCorner.edgePct>0);
+assert.equal(nextCorner.unavailableStartingCorners,1);
 
 const ranks=receiverRanks([
   {player_display_name:"Alpha WR",position:"WR",team:"GB",week:"1",target_share:"0.31",wopr:"0.55",targets:"10"},
@@ -299,3 +300,27 @@ assert.equal(ranks["GB|alpha wr"],1);
 assert.equal(ranks["GB|beta wr"],2);
 
 console.log("WR-CB micro-matchup checks passed");
+
+
+const pressureCurrent = [
+  "season,week,game_type,team,pfr_player_name,pressures",
+  "2026,1,REG,NE,Rusher One,10",
+  "2026,1,REG,NE,Rusher Two,8",
+  "2026,2,REG,NE,Rusher One,9",
+  "2026,2,REG,NE,Rusher Two,7",
+  "2026,1,REG,NYJ,Rusher A,3",
+  "2026,1,REG,NYJ,Rusher B,2",
+  "2026,2,REG,NYJ,Rusher A,4",
+  "2026,2,REG,NYJ,Rusher B,2",
+].join("\n");
+const pressurePrior = [
+  "season,week,game_type,team,pfr_player_name,pressures",
+  "2025,17,REG,NE,Rusher One,8",
+  "2025,17,REG,NYJ,Rusher A,4",
+].join("\n");
+const rush=buildTeamPassRush(pressureCurrent,pressurePrior,3);
+assert.ok(rush.NE.edgePct<0);
+assert.ok(rush.NYJ.edgePct>0);
+assert.ok(Math.abs(rush.NE.edgePct)<=1.5);
+
+console.log("QB pass-rush micro-edge checks passed");
