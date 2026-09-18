@@ -14,6 +14,7 @@ jobs:
           node <<'NODE'
           const assert = require("node:assert/strict");
 
+          (async () => {
           const T = "https://deploy-preview-2--transmissionalbum.netlify.app";
           const W = "https://deploy-preview-2--fantasywarroom.netlify.app";
 
@@ -82,4 +83,8 @@ jobs:
             funWeek: fun.week,
             funOpponent: fun.opponent
           }));
+          })().catch(err => {
+            console.error(err && err.stack || err);
+            process.exit(1);
+          });
           NODE
