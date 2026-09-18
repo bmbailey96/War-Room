@@ -252,7 +252,7 @@ console.log("Bench stash fallback checks passed");
 
 
 const {
-  buildDepthSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
+  buildDepthSecondaries,buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
 } = await import("../netlify/functions/lib/matchup-v2.mjs");
 
 const depthCsv = [
@@ -262,28 +262,45 @@ const depthCsv = [
   "2026-09-18T12:00:00Z,NYJ,Nickel Guy,DB,Nickel Corner,NB,3,1",
 ].join("\n");
 const currentDefCsv = [
-  "season,week,game_type,pfr_player_name,targets,completions,yards,touchdowns,passer_rating",
-  "2026,1,REG,Shutdown Corner,8,3,28,0,42",
-  "2026,1,REG,Other Corner,8,7,95,1,135",
-  "2026,1,REG,Nickel Guy,8,5,55,0,78",
+  "season,week,game_type,player_name,team,def_targets,def_completions_allowed,def_yards_allowed,def_receiving_td_allowed,def_passer_rating_allowed,def_pressures",
+  "2026,1,REG,Shutdown Corner,NYJ,8,3,28,0,42,0",
+  "2026,1,REG,Other Corner,NYJ,8,7,95,1,135,0",
+  "2026,1,REG,Nickel Guy,NYJ,8,5,55,0,78,0",
 ].join("\n");
 const priorDefCsv = [
-  "season,week,game_type,pfr_player_name,targets,completions,yards,touchdowns,passer_rating",
-  "2025,17,REG,Shutdown Corner,10,5,50,0,55",
-  "2025,17,REG,Other Corner,10,8,120,1,125",
-  "2025,17,REG,Nickel Guy,10,7,75,1,105",
+  "season,week,game_type,player_name,team,def_targets,def_completions_allowed,def_yards_allowed,def_receiving_td_allowed,def_passer_rating_allowed,def_pressures",
+  "2025,17,REG,Shutdown Corner,NYJ,10,5,50,0,55,0",
+  "2025,17,REG,Other Corner,NYJ,10,8,120,1,125,0",
+  "2025,17,REG,Nickel Guy,NYJ,10,7,75,1,105,0",
 ].join("\n");
 
 const secs=buildDepthSecondaries(depthCsv,2);
+const sleeperSecs=buildSleeperSecondaries({
+  "cb1":{n:"Shutdown Corner",p:"CB",fp:["DB"],t:"NYJ",dp:"RCB",do:1},
+  "cb2":{n:"Other Corner",p:"CB",fp:["DB"],t:"NYJ",dp:"LCB",do:1},
+  "nb1":{n:"Nickel Guy",p:"CB",fp:["DB"],t:"NYJ",dp:"SLOT",do:1},
+});
+assert.equal(sleeperSecs.NYJ.length,3);
+assert.equal(sleeperSecs.NYJ.find(x=>x.name==="Nickel Guy").role,"slot");
+assert.equal(sleeperSecs.NYJ.find(x=>x.name==="Shutdown Corner").side,"right");
+
 const cov=buildDefenderCoverage(currentDefCsv,priorDefCsv,2);
-const wr1Match=inferWrCoverage({opponent:"NYJ",receiverRank:1,secondaries:secs,coverage:cov});
+const wr1Match=inferWrCoverage({
+  opponent:"NYJ",receiverRank:1,receiverRole:"outside",receiverSide:"left",
+  secondaries:sleeperSecs,coverage:cov
+});
 assert.equal(wr1Match.defender,"Shutdown Corner");
 assert.ok(wr1Match.edgePct<0);
-assert.ok(wr1Match.assignmentConfidence<60);
+assert.ok(wr1Match.assignmentConfidence>=60);
+assert.ok(wr1Match.defenderYpt<6);
 
-const slotMatch=inferWrCoverage({opponent:"NYJ",receiverRank:3,secondaries:secs,coverage:cov});
+const slotMatch=inferWrCoverage({
+  opponent:"NYJ",receiverRank:3,receiverRole:"slot",
+  secondaries:sleeperSecs,coverage:cov
+});
 assert.equal(slotMatch.defender,"Nickel Guy");
 assert.equal(slotMatch.assignment,"likely slot matchup");
+assert.ok(slotMatch.assignmentConfidence>=70);
 
 const nextCorner=inferWrCoverage({
   opponent:"NYJ",receiverRank:1,secondaries:secs,coverage:cov,
@@ -304,7 +321,7 @@ console.log("WR-CB micro-matchup checks passed");
 
 
 const pressureCurrent = [
-  "season,week,game_type,team,pfr_player_name,pressures",
+  "season,week,game_type,team,player_name,def_pressures",
   "2026,1,REG,NE,Rusher One,10",
   "2026,1,REG,NE,Rusher Two,8",
   "2026,2,REG,NE,Rusher One,9",
@@ -315,7 +332,7 @@ const pressureCurrent = [
   "2026,2,REG,NYJ,Rusher B,2",
 ].join("\n");
 const pressurePrior = [
-  "season,week,game_type,team,pfr_player_name,pressures",
+  "season,week,game_type,team,player_name,def_pressures",
   "2025,17,REG,NE,Rusher One,8",
   "2025,17,REG,NYJ,Rusher A,4",
 ].join("\n");
