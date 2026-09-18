@@ -231,7 +231,10 @@ export default async req => {
     ]);
     const week=Number(state.week)||1, season=Number(state.season)||chosen.season;
     const stateStore=store();
-    const learnedModel=await stateStore.get(`model_${chosen.id}`,{type:"json"}).catch(()=>null);
+    const [learnedModel,learnedReasoning]=await Promise.all([
+      stateStore.get(`model_${chosen.id}`,{type:"json"}).catch(()=>null),
+      stateStore.get(`reasoning_${chosen.id}`,{type:"json"}).catch(()=>null),
+    ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const [matchups,currentCsv,priorCsv,gamesCsv,sleeperProj] = await Promise.all([
       j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${week}`).catch(()=>[]),
@@ -421,7 +424,10 @@ export default async req => {
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
       sourceNote:"QB/RB/WR/TE use actual nflverse weekly production and workload plus matchup/game context. Sleeper is comparison/fallback only. K/DEF/IDP currently use fallback.",
-      model:{weights:model,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0},
+      model:{
+        weights:model,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
+        reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
+      },
       currentTotal:round(currentTotal),
       optimalTotal:round(optimal.total),
       gain:round(optimal.total-currentTotal),
