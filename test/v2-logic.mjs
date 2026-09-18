@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize
+  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence
 } from "../netlify/functions/lineup.mjs";
 import {
   mergeProjectionSnapshot, mergeReasoningSnapshot
@@ -8,6 +8,10 @@ import {
 import { isReasoningWindow } from "../netlify/functions/lineup-refresh.mjs";
 import { sanitizeAnalysis } from "../netlify/functions/lineup-analysis.mjs";
 import { recencyWeight } from "../netlify/functions/learn.mjs";
+
+assert.equal(confidence(5,null,false),"HIGH");
+assert.equal(confidence(3,"Questionable - knee",false),"MEDIUM");
+assert.equal(confidence(10,null,true),"LOW");
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
 assert.equal(eligibility("FLEX",flexPlayer),true);
