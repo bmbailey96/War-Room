@@ -5,7 +5,7 @@
 import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam, store } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 import {
-  buildDepthSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks
+  buildDepthSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
 } from "./lib/matchup-v2.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
@@ -538,6 +538,7 @@ export default async req => {
     const wrRanks=receiverRanks(currentRows,priorRows,week);
     const secondaries=buildDepthSecondaries(depthCsv,week);
     const defenderCoverage=buildDefenderCoverage(defCoverageCsv,priorDefCoverageCsv,week);
+    const teamPassRush=buildTeamPassRush(defCoverageCsv,priorDefCoverageCsv,week);
 
     // Official weekly injury reports are a second hard-availability source.
     // Sleeper's player metadata can lag designation changes; nflverse mirrors
@@ -791,6 +792,16 @@ export default async req => {
           }
         }
 
+        if(slot==="QB" && opp && teamPassRush[normTeam(opp)]){
+          const passRush=teamPassRush[normTeam(opp)];
+          signals.passRush=passRush;
+          const mult=passRush.multiplier||1;
+          projection*=mult;
+          if(Math.abs(mult-1)>=0.007){
+            reasons.push(`${round((mult-1)*100)}% pass-rush edge`);
+          }
+        }
+
         if(game?.implied!=null){
           const ratio=clamp(game.implied/impliedAvg,0.75,1.25);
           signals.environmentRatio=ratio;
@@ -912,7 +923,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. WRs also get a conservative likely-CB matchup adjustment from current depth charts plus defender coverage history. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. WRs get conservative likely-CB micro-matchups from current depth charts plus defender coverage history; QBs get a small pass-rush micro-edge. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
         weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
