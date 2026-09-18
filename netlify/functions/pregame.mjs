@@ -110,4 +110,4 @@ export default async () => {
 
 // Game-day sweeps: Thu 4pm/6pm, Sun 8am-1pm hourly-ish, Mon 4pm/6pm ET.
 // Cron is UTC. Sun 12:00-18:00 UTC covers 8am-2pm ET pregame window.
-export const config = { schedule: "0 12,14,16,17 * * 0,1,4" };
+// Legacy V1: intentionally unscheduled. Kept for manual reference/rollback.
