@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import {
   eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
-  projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable
+  projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable,
+  matchupExposureFor
 } from "../netlify/functions/lineup.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
