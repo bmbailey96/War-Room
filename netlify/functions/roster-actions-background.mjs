@@ -81,7 +81,7 @@ function rosterAfter(roster,{removeNames=[],addPlayers=[]}={}){
 }
 function assetName(x){return x?.name||String(x||"");}
 
-function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"}={}) {
+function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
   const actions=[];
   for(const [i,w] of waivers.slice(0,3).entries()){
     const impact=Math.max(Number(w.weeklyDelta||0),mode==="DYNASTY"?Number(w.marketDelta||0)/8:0);
@@ -89,6 +89,7 @@ function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"}={}) {
     const faabBase=mode==="DYNASTY"
       ? Math.min(22,Math.max(2,Math.round((w.marketDelta||0)*.7+(w.weeklyDelta||0)*4)))
       : Math.min(28,Math.max(2,Math.round((w.weeklyDelta||0)*6+Math.log10(1+(w.trending||0))*3)));
+    const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
     actions.push({
       type:"ADD_DROP",priority:i+1,confidence,
       headline:`Add ${w.add}, drop ${w.drop}`,
@@ -96,7 +97,7 @@ function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"}={}) {
         ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
         : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
       window:"BEFORE WAIVERS",
-      add:{name:w.add},drop:{name:w.drop},faabPct:faabBase,
+      add:{name:w.add},drop:{name:w.drop},faabPct,
       drivers:["depth","schedule",...(mode==="DYNASTY"?["market"]:[])],
       weeklyDelta:w.weeklyDelta,marketDelta:w.marketDelta??null,
     });
@@ -148,6 +149,11 @@ export default async req=>{
     const me=snapshot.teams.find(t=>t.isMe);
     if(!me)throw new Error("my roster missing");
     const mode=detectLeagueMode(league);
+    const faabTotal=Number(league.settings?.waiver_budget||0);
+    const faabUsed=Number(me.waiverBudgetUsed||0);
+    const faabRemaining=Math.max(0,faabTotal-faabUsed);
+    const usesFaab=faabTotal>0;
+    const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
     const [proj,lineupData,market]=await Promise.all([
       projectionMap(season,week,league,db),
@@ -439,7 +445,7 @@ Return ONLY valid JSON:
       if(!parsed)throw new Error("invalid roster-actions JSON");
     }catch(e){error=e.message;}
     if(!parsed)parsed=deterministicRosterFallback({
-      waivers:bestWaiverPairs,trades:deterministicTrades,mode
+      waivers:bestWaiverPairs,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
     });
 
     let actions=validateActions(parsed.actions,{
@@ -506,12 +512,13 @@ Return ONLY valid JSON:
       at:Date.now(),league:{id:chosen.id,name:league.name,mode,week,season},
       summary:parsed.summary||actions[0]?.headline||"No urgent roster move.",
       actions:actions.length?actions:deterministicRosterFallback({
-        waivers:bestWaiverPairs,trades:deterministicTrades,mode
+        waivers:bestWaiverPairs,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
       }).actions,
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
+        waiver:{usesFaab,total:faabTotal,used:faabUsed,remaining:faabRemaining},
         myPicks,
         marketDate:market.scrapeDate||null,
         baselineNext3Lineup:baselineRosterTotal,
