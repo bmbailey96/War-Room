@@ -110,11 +110,13 @@ function sd(values) {
   const m=avg(values); return Math.sqrt(avg(values.map(v=>(v-m)*(v-m))));
 }
 
-function eligibility(slot, pos) {
-  if (slot==="FLEX") return ["RB","WR","TE"].includes(pos);
-  if (slot==="REC_FLEX") return ["WR","TE"].includes(pos);
-  if (slot==="SUPER_FLEX") return ["QB","RB","WR","TE"].includes(pos);
-  return slot===pos;
+function eligibility(slot, player) {
+  if (!player) return false;
+  const eligible = new Set([player.slot, ...(player.eligibleSlots || [])].filter(Boolean));
+  if (slot==="FLEX") return ["RB","WR","TE"].some(p=>eligible.has(p));
+  if (slot==="REC_FLEX") return ["WR","TE"].some(p=>eligible.has(p));
+  if (slot==="SUPER_FLEX") return ["QB","RB","WR","TE"].some(p=>eligible.has(p));
+  return eligible.has(slot);
 }
 
 function optimize(players, slots, current=[]) {
@@ -140,7 +142,7 @@ function optimize(players, slots, current=[]) {
     .sort((a,b)=>b.projection-a.projection);
   const take=(entry)=>{
     if (entry.player) return;
-    const p=pool.find(x=>!used.has(x.pid) && eligibility(entry.slot,x.slot));
+    const p=pool.find(x=>!used.has(x.pid) && eligibility(entry.slot,x));
     if(p){ entry.player=p; used.add(p.pid); }
   };
   const flexible=new Set(["REC_FLEX","FLEX","SUPER_FLEX"]);
@@ -329,7 +331,7 @@ export default async req => {
       const vals=hist.slice(-8).map(r=>fantasyPoints(r,league.scoring_settings||{}));
       const sigma=sd(vals) ?? (projection!=null?projection*0.5:null);
       return {
-        pid,name:info.name,slot,team:info.team,injury:info.inj||null,opp:opp?normTeam(opp):null,
+        pid,name:info.name,slot,eligibleSlots:info.fps||[],team:info.team,injury:info.inj||null,opp:opp?normTeam(opp):null,
         base:base==null?null:round(Math.max(0,base)),signals,
         projection:projection==null?null:round(Math.max(0,projection)),
         floor:projection==null?null:round(Math.max(0,projection-(sigma||0)*0.75)),
