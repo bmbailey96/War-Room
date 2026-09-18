@@ -3,7 +3,7 @@
 // reporting gives us a concrete reason to distrust or override that number.
 
 import lineup from "./lineup.mjs";
-import { blobs, callClaude } from "./lib/ocho.mjs";
+import { store, callClaude } from "./lib/war-v2.mjs";
 
 function parseJson(text) {
   if (!text) return null;
@@ -23,10 +23,10 @@ export default async req => {
 
     const url=new URL(req.url);
     const force=url.searchParams.get("refresh")==="1";
-    const store=blobs();
-    const reasoningModel=await store.get(`v2_reasoning_model_${data.league.id}`,{type:"json"}).catch(()=>null);
-    const cacheKey=`v2_lineup_analysis_${data.league.id}_${data.week}`;
-    const cached=await store.get(cacheKey,{type:"json"}).catch(()=>null);
+    const stateStore=store();
+    const reasoningModel=await stateStore.get(`reasoning_${data.league.id}`,{type:"json"}).catch(()=>null);
+    const cacheKey=`analysis_${data.league.id}_${data.week}`;
+    const cached=await stateStore.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force && cached && Date.now()-cached.at < 4*60*60*1000) {
       return new Response(JSON.stringify({...cached,projection:data}),{
         headers:{"content-type":"application/json","cache-control":"no-store"}
@@ -93,7 +93,7 @@ Return ONLY valid JSON:
     const analysis=parseJson(raw);
     if(!analysis) throw new Error("lineup reasoning returned invalid JSON");
     const saved={at:Date.now(),leagueId:data.league.id,week:data.week,analysis};
-    await store.setJSON(cacheKey,saved);
+    await stateStore.setJSON(cacheKey,saved);
     return new Response(JSON.stringify({...saved,projection:data}),{
       headers:{"content-type":"application/json","cache-control":"no-store"}
     });
