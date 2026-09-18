@@ -75,20 +75,37 @@ function playerValue(p) {
 }
 
 function fantasyPoints(r, s={}) {
-  const w=(key, fallback=0)=> typeof s[key] === "number" ? s[key] : fallback;
+  const w=(key,fallback=0)=>typeof s[key]==="number"?s[key]:fallback;
   let p=0;
-  p += num(r.passing_yards) * w("pass_yd", 0.04);
-  p += num(r.passing_tds) * w("pass_td", 4);
-  p += num(r.passing_interceptions) * w("pass_int", -2);
-  p += num(r.rushing_yards) * w("rush_yd", 0.1);
-  p += num(r.rushing_tds) * w("rush_td", 6);
-  p += num(r.receptions) * w("rec", 1);
-  p += num(r.receiving_yards) * w("rec_yd", 0.1);
-  p += num(r.receiving_tds) * w("rec_td", 6);
-  p += num(r.fantasy_points) && !Object.keys(s).length ? num(r.fantasy_points) : 0;
-  const lost = num(r.rushing_fumbles_lost)+num(r.receiving_fumbles_lost)+num(r.passing_fumbles_lost);
-  p += lost * w("fum_lost", -2);
+  p+=num(r.passing_yards)*w("pass_yd",0.04);
+  p+=num(r.passing_tds)*w("pass_td",4);
+  p+=num(r.passing_interceptions)*w("pass_int",-2);
+  p+=num(r.rushing_yards)*w("rush_yd",0.1);
+  p+=num(r.rushing_tds)*w("rush_td",6);
+  p+=num(r.receptions)*w("rec",1);
+  p+=num(r.receiving_yards)*w("rec_yd",0.1);
+  p+=num(r.receiving_tds)*w("rec_td",6);
+  p+=num(r.passing_first_downs)*w("pass_fd",0);
+  p+=num(r.rushing_first_downs)*w("rush_fd",0);
+  p+=num(r.receiving_first_downs)*w("rec_fd",0);
+  p+=num(r.passing_2pt_conversions)*w("pass_2pt",0);
+  p+=num(r.rushing_2pt_conversions)*w("rush_2pt",0);
+  p+=num(r.receiving_2pt_conversions)*w("rec_2pt",0);
+  const lost=num(r.rushing_fumbles_lost)+num(r.receiving_fumbles_lost)+num(r.passing_fumbles_lost);
+  p+=lost*w("fum_lost",-2);
   return p;
+}
+
+function scoreSleeperProjection(stats, scoring) {
+  if(!stats)return null;
+  let total=0, matched=0;
+  for(const [key,value] of Object.entries(stats)){
+    const weight=scoring?.[key];
+    if(typeof value!=="number" || typeof weight!=="number")continue;
+    total+=value*weight; matched++;
+  }
+  if(matched)return round(total);
+  return typeof stats.pts_ppr==="number"?round(stats.pts_ppr):null;
 }
 
 function usage(r,pos) {
@@ -225,7 +242,9 @@ export default async req => {
       "player_display_name","position","week","team","opponent_team","season_type",
       "attempts","passing_yards","passing_tds","passing_interceptions","passing_fumbles_lost",
       "carries","rushing_yards","rushing_tds","rushing_fumbles_lost",
-      "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost"
+      "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost",
+      "passing_first_downs","rushing_first_downs","receiving_first_downs",
+      "passing_2pt_conversions","rushing_2pt_conversions","receiving_2pt_conversions"
     ];
     const currentRows=parseCsv(currentCsv,wanted).filter(r=>!r.season_type || r.season_type==="REG");
     const priorRows=parseCsv(priorCsv,wanted).filter(r=>!r.season_type || r.season_type==="REG");
@@ -282,7 +301,7 @@ export default async req => {
       else if(c.length===1) base=(currentMean*0.38)+(priorMean!=null?priorMean*0.62:currentMean*0.62);
       else if(priorMean!=null) base=priorMean;
 
-      const sp=sleeperById[pid], sleeper=sp?.stats?.pts_ppr ?? null;
+      const sp=sleeperById[pid], sleeper=scoreSleeperProjection(sp?.stats,league.scoring_settings||{});
       let fallback=false;
       if(base==null || !["QB","RB","WR","TE"].includes(slot)) {
         base=typeof sleeper==="number" ? sleeper : null; fallback=true;
