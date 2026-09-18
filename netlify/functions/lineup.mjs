@@ -4,6 +4,9 @@
 
 import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam, store } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
+import {
+  buildDepthSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
+} from "./lib/matchup-v2.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
 
@@ -490,7 +493,10 @@ export default async req => {
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const positionScale=learnedModel?.positionScale||{};
-    const [matchups,currentCsv,priorCsv,snapCsv,injuryCsv,gamesCsv,sleeperProj] = await Promise.all([
+    const [
+      matchups,currentCsv,priorCsv,snapCsv,injuryCsv,gamesCsv,sleeperProj,
+      depthCsv,defCoverageCsv,priorDefCoverageCsv
+    ] = await Promise.all([
       j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${week}`).catch(()=>[]),
       text(`${NV}/stats_player/stats_player_week_${season}.csv`),
       text(`${NV}/stats_player/stats_player_week_${season-1}.csv`),
@@ -498,6 +504,9 @@ export default async req => {
       text(`${NV}/injuries/injuries_${season}.csv`),
       text("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
       j(`https://api.sleeper.app/projections/nfl/${season}/${week}?season_type=regular&order_by=ppr`).catch(()=>[]),
+      text(`${NV}/depth_charts/depth_charts_${season}.csv`),
+      text(`${NV}/pfr_advstats/advstats_week_def_${season}.csv`),
+      text(`${NV}/pfr_advstats/advstats_week_def_${season-1}.csv`),
     ]);
 
     const mine=rosters.find(r=>r.owner_id===MY_USER_ID);
@@ -526,6 +535,10 @@ export default async req => {
       for(const a of Object.values(m)) a.sort((x,y)=>num(x.week)-num(y.week)); return m;
     };
     const cur=byName(currentRows), prior=byName(priorRows);
+    const wrRanks=receiverRanks(currentRows,priorRows,week);
+    const secondaries=buildDepthSecondaries(depthCsv,week);
+    const defenderCoverage=buildDefenderCoverage(defCoverageCsv,priorDefCoverageCsv,week);
+    const teamPassRush=buildTeamPassRush(defCoverageCsv,priorDefCoverageCsv,week);
 
     // Official weekly injury reports are a second hard-availability source.
     // Sleeper's player metadata can lag designation changes; nflverse mirrors
@@ -547,6 +560,11 @@ export default async req => {
         };
       }
     }
+    const unavailableDefenders=new Set(
+      Object.entries(officialInjuryByName)
+        .filter(([,v])=>hardUnavailable("",v?.status||""))
+        .map(([k])=>k)
+    );
 
     // Offensive snap share is a leading indicator for role changes. The
     // nflverse snap feed updates throughout the week; only use games from
@@ -756,6 +774,34 @@ export default async req => {
           const mult=1+model.matchup*(ratio-1); projection*=mult;
           if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% matchup`);
         }
+
+        if(slot==="WR" && opp){
+          const receiverRank=wrRanks[`${normTeam(info.team)}|${key}`]||1;
+          const coverageMatchup=inferWrCoverage({
+            opponent:opp,receiverRank,secondaries,coverage:defenderCoverage,
+            unavailableNames:unavailableDefenders
+          });
+          if(coverageMatchup){
+            signals.coverageMatchup=coverageMatchup;
+            const mult=coverageMatchup.multiplier||1;
+            projection*=mult;
+            if(Math.abs(mult-1)>=0.01){
+              const side=mult>1?"coverage edge":"coverage drag";
+              reasons.push(`${round((mult-1)*100)}% ${side} vs ${coverageMatchup.defender}`);
+            }
+          }
+        }
+
+        if(slot==="QB" && opp && teamPassRush[normTeam(opp)]){
+          const passRush=teamPassRush[normTeam(opp)];
+          signals.passRush=passRush;
+          const mult=passRush.multiplier||1;
+          projection*=mult;
+          if(Math.abs(mult-1)>=0.007){
+            reasons.push(`${round((mult-1)*100)}% pass-rush edge`);
+          }
+        }
+
         if(game?.implied!=null){
           const ratio=clamp(game.implied/impliedAvg,0.75,1.25);
           signals.environmentRatio=ratio;
@@ -877,7 +923,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. WRs get conservative likely-CB micro-matchups from current depth charts plus defender coverage history; QBs get a small pass-rush micro-edge. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
         weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
