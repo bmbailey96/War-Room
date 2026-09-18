@@ -218,3 +218,18 @@ assert.equal(noForm.forecast,11);
 assert.equal(noForm.source,"provider");
 
 console.log("Roster blended-form forecast checks passed");
+
+
+const { ownerHistory } = await import("../netlify/functions/lib/ocho.mjs");
+const knownOwner=ownerHistory("863467130702671872");
+assert.ok((knownOwner.trades_count||0)>0);
+assert.deepEqual(ownerHistory("missing-owner"),{});
+
+console.log("Manager trade-history access checks passed");
+
+
+const rosterRefreshModule = await import("../netlify/functions/roster-refresh.mjs");
+assert.equal(typeof rosterRefreshModule.default,"function");
+assert.ok(rosterRefreshModule.config?.schedule);
+
+console.log("Scheduled core-only roster refresh import check passed");
