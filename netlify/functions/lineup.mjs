@@ -467,6 +467,98 @@ function hardUnavailable(sleeperStatus="", officialStatus="") {
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/.test(combined);
 }
 
+function playerKickoffMs(player) {
+  const ms=player?.kickoffAt?Date.parse(player.kickoffAt):NaN;
+  return Number.isFinite(ms)?ms:null;
+}
+
+function lateSwapFlexMoves(picked=[]) {
+  const flexible=new Set(["FLEX","REC_FLEX","SUPER_FLEX"]);
+  const moves=[];
+  const rows=picked.map((x,i)=>({...x,index:i}));
+
+  for(const flexRow of rows){
+    if(!flexible.has(flexRow.slot) || !flexRow.player || flexRow.player.locked)continue;
+    const flexKick=playerKickoffMs(flexRow.player);
+    if(flexKick==null)continue;
+
+    let best=null;
+    for(const posRow of rows){
+      if(posRow.index===flexRow.index || flexible.has(posRow.slot) || !posRow.player || posRow.player.locked)continue;
+      const posKick=playerKickoffMs(posRow.player);
+      if(posKick==null || posKick-flexKick<30*60*1000)continue;
+      if(!eligibility(flexRow.slot,posRow.player))continue;
+      if(!eligibility(posRow.slot,flexRow.player))continue;
+
+      const gainMinutes=Math.round((posKick-flexKick)/60000);
+      if(!best || gainMinutes>best.gainMinutes){
+        best={
+          type:"FLEX_SWAP",
+          flexSlot:flexRow.slot,
+          positionalSlot:posRow.slot,
+          moveToFlex:posRow.player.name,
+          moveToPosition:flexRow.player.name,
+          flexPlayerPid:flexRow.player.pid,
+          positionPlayerPid:posRow.player.pid,
+          currentFlexKickoff:flexRow.player.kickoffAt,
+          laterKickoff:posRow.player.kickoffAt,
+          gainMinutes,
+          message:`Put ${posRow.player.name} in ${flexRow.slot} and ${flexRow.player.name} in ${posRow.slot} to preserve ${gainMinutes} more minutes of late-swap flexibility.`,
+        };
+      }
+    }
+    if(best)moves.push(best);
+  }
+  return moves;
+}
+
+function buildLateSwapContingencies(picked=[],players=[],slots=[]) {
+  const starters=new Set(picked.map(x=>x.player?.pid).filter(Boolean));
+  const bench=players.filter(p=>p && !starters.has(p.pid) && !p.out && !p.locked && p.projection!=null);
+  const out=[];
+
+  for(const row of picked){
+    const p=row.player;
+    if(!p || p.locked || !/question/i.test(String(p.injury||"")))continue;
+    const starterKick=playerKickoffMs(p);
+
+    const exact=bench
+      .filter(b=>eligibility(row.slot,b))
+      .sort((a,b)=>(b.projection||0)-(a.projection||0));
+    const fallback=exact[0]||null;
+    const fallbackKick=playerKickoffMs(fallback);
+
+    let waitSafe=false,deadlineAt=null,urgency="NO_CLEAN_PIVOT",message;
+    if(fallback){
+      if(starterKick!=null && fallbackKick!=null && fallbackKick>=starterKick){
+        waitSafe=true;
+        deadlineAt=p.kickoffAt;
+        urgency="SAFE_TO_WAIT";
+        message=`LATE SWAP // ${p.name} is questionable. You can wait on his status and pivot to ${fallback.name} if needed; ${fallback.name} does not lock earlier.`;
+      }else if(fallbackKick!=null){
+        deadlineAt=fallback.kickoffAt;
+        urgency="DECISION_DEADLINE";
+        message=`LATE SWAP // ${p.name} is questionable, but ${fallback.name} locks first. Decide before ${fallback.name}'s kickoff or you lose the clean pivot.`;
+      }else{
+        urgency="UNKNOWN_DEADLINE";
+        message=`LATE SWAP // ${p.name} is questionable. ${fallback.name} is the best direct pivot, but the fallback kickoff is unknown.`;
+      }
+    }else{
+      message=`LATE SWAP // ${p.name} is questionable and there is no clean bench pivot for ${row.slot}. Treat his status as an early decision.`;
+    }
+
+    out.push({
+      starter:p.name,starterPid:p.pid,slot:row.slot,status:p.injury,
+      practiceStatus:p.practiceStatus||null,kickoffAt:p.kickoffAt||null,
+      fallback:fallback?.name||null,fallbackPid:fallback?.pid||null,
+      fallbackProjection:fallback?.projection??null,
+      fallbackKickoffAt:fallback?.kickoffAt||null,
+      waitSafe,deadlineAt,urgency,message,
+    });
+  }
+  return out;
+}
+
 function confidence(sample, injury, fallback) {
   if (fallback) return "LOW";
   if ((injury||"").toLowerCase().includes("question")) return "MEDIUM";
@@ -922,6 +1014,8 @@ export default async req => {
     const slots=(league.roster_positions||[]).filter(s=>s!=="BN" && s!=="IR" && s!=="TAXI");
     const current=currentStarters(myMatch,rosterPlayers,slots);
     const optimal=optimize(rosterPlayers,slots,current);
+    const flexMoves=lateSwapFlexMoves(optimal.picked);
+    const contingencies=buildLateSwapContingencies(optimal.picked,rosterPlayers,slots);
     const decision=lineupChanges(current,optimal);
     const changes=decision.calls.map(call=>{
       const probability=call.sit?probabilityBetter(call.start,call.sit):null;
@@ -1005,6 +1099,7 @@ export default async req => {
         lockedActual:{mine:round(mineLocked),opponent:round(oppLocked)},
       },
       calls:changes,decision,
+      contingencies,flexMoves,
       lockedBench,lockedStarters,
       current,optimal:optimal.picked,players:rosterPlayers,
     }), { headers:{"content-type":"application/json","cache-control":"no-store"} });
@@ -1013,4 +1108,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies };
