@@ -159,35 +159,94 @@ function eligibility(slot, player) {
   return eligible.has(slot);
 }
 
+function hungarianMin(cost) {
+  // Rectangular Hungarian algorithm, rows <= columns. Returns the chosen
+  // column index for each row. O(n^2 m), tiny for a fantasy lineup.
+  const n=cost.length;
+  const m=n ? cost[0].length : 0;
+  const u=Array(n+1).fill(0), v=Array(m+1).fill(0);
+  const p=Array(m+1).fill(0), way=Array(m+1).fill(0);
+
+  for(let i=1;i<=n;i++){
+    p[0]=i;
+    let j0=0;
+    const minv=Array(m+1).fill(Infinity);
+    const used=Array(m+1).fill(false);
+    do{
+      used[j0]=true;
+      const i0=p[j0];
+      let delta=Infinity, j1=0;
+      for(let j=1;j<=m;j++){
+        if(used[j]) continue;
+        const cur=cost[i0-1][j-1]-u[i0]-v[j];
+        if(cur<minv[j]){minv[j]=cur;way[j]=j0;}
+        if(minv[j]<delta){delta=minv[j];j1=j;}
+      }
+      for(let j=0;j<=m;j++){
+        if(used[j]){u[p[j]]+=delta;v[j]-=delta;}
+        else if(j>0) minv[j]-=delta;
+      }
+      j0=j1;
+    }while(p[j0]!==0);
+
+    do{
+      const j1=way[j0];
+      p[j0]=p[j1];
+      j0=j1;
+    }while(j0!==0);
+  }
+
+  const assignment=Array(n).fill(-1);
+  for(let j=1;j<=m;j++){
+    if(p[j]>0 && p[j]<=n) assignment[p[j]-1]=j-1;
+  }
+  return assignment;
+}
+
 function optimize(players, slots, current=[]) {
-  // A player whose NFL game has started is immovable. If he was already in
-  // the fantasy lineup, preserve him in that exact occupied slot. If he was
-  // on the bench, he is unavailable to the optimizer. No time travel.
-  const used=new Set();
+  // Locked starters are fixed in the exact slot they occupied at kickoff.
+  // Everything else is solved as a maximum-weight bipartite assignment:
+  // lineup slots on one side, eligible players on the other. This avoids the
+  // subtle greedy failure where a multi-eligible IDP gets consumed by DL and
+  // leaves LB with a much worse option even though swapping the two is better.
   const assigned=slots.map((slot,index)=>({slot,index,player:null}));
-  for (let i=0;i<assigned.length;i++) {
+  const used=new Set();
+  for(let i=0;i<assigned.length;i++){
     const p=current[i]?.player;
-    if (p?.locked) {
+    if(p?.locked){
       assigned[i].player=p;
       used.add(p.pid);
     }
   }
 
-  // Additive point projections do not need a combinatorial search here.
-  // Fill required positions first, then flexible slots from most restrictive
-  // to least restrictive. Only players whose games have not started are
-  // candidates for remaining slots.
-  const pool=players
-    .filter(p=>p.projection!=null && !p.out && !p.locked)
-    .sort((a,b)=>b.projection-a.projection);
-  const take=(entry)=>{
-    if (entry.player) return;
-    const p=pool.find(x=>!used.has(x.pid) && eligibility(entry.slot,x));
-    if(p){ entry.player=p; used.add(p.pid); }
-  };
-  const flexible=new Set(["REC_FLEX","FLEX","SUPER_FLEX"]);
-  assigned.filter(x=>!flexible.has(x.slot)).forEach(take);
-  for(const kind of ["REC_FLEX","FLEX","SUPER_FLEX"]) assigned.filter(x=>x.slot===kind).forEach(take);
+  const rows=assigned.filter(x=>!x.player);
+  if(!rows.length){
+    return {total:assigned.reduce((s,x)=>s+playerValue(x.player),0),picked:assigned.map(({slot,player})=>({slot,player}))};
+  }
+
+  const candidates=players
+    .filter(p=>p.projection!=null && !p.out && !p.locked && !used.has(p.pid))
+    .sort((a,b)=>playerValue(b)-playerValue(a));
+
+  // One dummy column per open slot guarantees a legal "leave empty" option,
+  // so the assignment always exists even with an injured/empty roster.
+  const cols=[
+    ...candidates,
+    ...rows.map((_,i)=>({pid:`__EMPTY_${i}`,dummy:true,projection:0,slot:"EMPTY",eligibleSlots:[]}))
+  ];
+  const ILLEGAL=1000000;
+  const cost=rows.map(row=>cols.map(p=>{
+    if(p.dummy) return 0;
+    return eligibility(row.slot,p) ? -playerValue(p) : ILLEGAL;
+  }));
+
+  const chosen=hungarianMin(cost);
+  rows.forEach((row,i)=>{
+    const col=chosen[i];
+    const p=col>=0?cols[col]:null;
+    if(p && !p.dummy && eligibility(row.slot,p)) row.player=p;
+  });
+
   assigned.sort((a,b)=>a.index-b.index);
   return {
     total:assigned.reduce((s,x)=>s+playerValue(x.player),0),
@@ -479,4 +538,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize };
