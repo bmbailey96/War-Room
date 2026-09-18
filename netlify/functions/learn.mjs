@@ -132,7 +132,7 @@ function signalReliability(samples,key){
   const ratioKey={role:"roleRatio",matchup:"matchupRatio",environment:"environmentRatio",scheme:"schemeRatio"}[key];
   for(const s of samples){
     const ratio=ratioKey ? (s.signals?.[ratioKey]??1) : signalRawMultiplier(s,key);
-    const threshold=(key==="coverage"||key==="passRush")?.004:.03;
+    const threshold=(key==="coverage"||key==="passRush") ? .004 : .03;
     if(Math.abs(ratio-1)<threshold) continue;
     const residual=s.actual-s.base;
     if(Math.abs(residual)<1) continue;
