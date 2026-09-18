@@ -5,7 +5,7 @@
 import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam, store } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 import {
-  buildDepthSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
+  buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
 } from "./lib/matchup-v2.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
@@ -495,7 +495,7 @@ export default async req => {
     const positionScale=learnedModel?.positionScale||{};
     const [
       matchups,currentCsv,priorCsv,snapCsv,injuryCsv,gamesCsv,sleeperProj,
-      depthCsv,defCoverageCsv,priorDefCoverageCsv
+      defCoverageCsv,priorDefCoverageCsv
     ] = await Promise.all([
       j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${week}`).catch(()=>[]),
       text(`${NV}/stats_player/stats_player_week_${season}.csv`),
@@ -504,7 +504,6 @@ export default async req => {
       text(`${NV}/injuries/injuries_${season}.csv`),
       text("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
       j(`https://api.sleeper.app/projections/nfl/${season}/${week}?season_type=regular&order_by=ppr`).catch(()=>[]),
-      text(`${NV}/depth_charts/depth_charts_${season}.csv`),
       text(`${NV}/pfr_advstats/advstats_week_def_${season}.csv`),
       text(`${NV}/pfr_advstats/advstats_week_def_${season-1}.csv`),
     ]);
@@ -536,7 +535,7 @@ export default async req => {
     };
     const cur=byName(currentRows), prior=byName(priorRows);
     const wrRanks=receiverRanks(currentRows,priorRows,week);
-    const secondaries=buildDepthSecondaries(depthCsv,week);
+    const secondaries=buildSleeperSecondaries(playersDB);
     const defenderCoverage=buildDefenderCoverage(defCoverageCsv,priorDefCoverageCsv,week);
     const teamPassRush=buildTeamPassRush(defCoverageCsv,priorDefCoverageCsv,week);
 
@@ -560,11 +559,15 @@ export default async req => {
         };
       }
     }
-    const unavailableDefenders=new Set(
-      Object.entries(officialInjuryByName)
+    const unavailableDefenders=new Set([
+      ...Object.entries(officialInjuryByName)
         .filter(([,v])=>hardUnavailable("",v?.status||""))
-        .map(([k])=>k)
-    );
+        .map(([k])=>k),
+      ...Object.values(playersDB||{})
+        .filter(p=>hardUnavailable(p?.inj||"",""))
+        .map(p=>normName(p?.n||""))
+        .filter(Boolean),
+    ]);
 
     // Offensive snap share is a leading indicator for role changes. The
     // nflverse snap feed updates throughout the week; only use games from
@@ -777,8 +780,16 @@ export default async req => {
 
         if(slot==="WR" && opp){
           const receiverRank=wrRanks[`${normTeam(info.team)}|${key}`]||1;
+          const depthPos=String(info.depthPos||"").toUpperCase();
+          const receiverRole=/SLOT|SWR|SLWR/.test(depthPos)
+            ? "slot"
+            : (/LWR|RWR|WR/.test(depthPos) ? "outside" : null);
+          const receiverSide=/LWR/.test(depthPos)
+            ? "left"
+            : (/RWR/.test(depthPos) ? "right" : null);
           const coverageMatchup=inferWrCoverage({
-            opponent:opp,receiverRank,secondaries,coverage:defenderCoverage,
+            opponent:opp,receiverRank,receiverRole,receiverSide,
+            secondaries,coverage:defenderCoverage,
             unavailableNames:unavailableDefenders
           });
           if(coverageMatchup){
