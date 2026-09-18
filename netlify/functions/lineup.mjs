@@ -154,6 +154,167 @@ function sd(values) {
   const m=avg(values); return Math.sqrt(avg(values.map(v=>(v-m)*(v-m))));
 }
 
+function quantile(values, q) {
+  const a=values.filter(Number.isFinite).sort((x,y)=>x-y);
+  if(!a.length)return null;
+  if(a.length===1)return a[0];
+  const p=(a.length-1)*q, lo=Math.floor(p), hi=Math.ceil(p);
+  if(lo===hi)return a[lo];
+  return a[lo]+(a[hi]-a[lo])*(p-lo);
+}
+
+const POS_CV={QB:.28,RB:.45,WR:.5,TE:.5,K:.42,DEF:.48,DL:.48,LB:.42,DB:.48,UNK:.5};
+
+function projectionRange(projection, values, pos) {
+  if(projection==null)return {floor:null,ceiling:null,sigma:null,volatility:null,rangeSource:"none"};
+  const vals=(values||[]).filter(v=>Number.isFinite(v) && v>=0).slice(-10);
+  const center=avg(vals);
+  if(vals.length>=4 && center!=null && center>0.5){
+    const scale=projection/center;
+    const q20=quantile(vals,.20), q80=quantile(vals,.80);
+    const histSd=sd(vals);
+    const sigma=histSd!=null ? Math.max(1,histSd*scale) : Math.max(1,projection*(POS_CV[pos]||.5));
+    return {
+      floor:round(Math.max(0,(q20??0)*scale)),
+      ceiling:round(Math.max(projection,(q80??projection)*scale)),
+      sigma:round(sigma),
+      volatility:round(sigma/Math.max(1,projection)),
+      rangeSource:"empirical",
+    };
+  }
+  const sigma=Math.max(1,projection*(POS_CV[pos]||POS_CV.UNK));
+  return {
+    floor:round(Math.max(0,projection-.84*sigma)),
+    ceiling:round(projection+.84*sigma),
+    sigma:round(sigma),
+    volatility:round(sigma/Math.max(1,projection)),
+    rangeSource:"position_prior",
+  };
+}
+
+// Abramowitz-Stegun normal CDF approximation. Plenty accurate enough for
+// communicating fantasy decision uncertainty without pretending it is exact.
+function normalCdf(x) {
+  const sign=x<0?-1:1, z=Math.abs(x)/Math.sqrt(2);
+  const t=1/(1+.3275911*z);
+  const erf=sign*(1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-z*z));
+  return .5*(1+erf);
+}
+
+function probabilityBetter(a,b) {
+  if(!a || !b || a.projection==null || b.projection==null)return null;
+  const sigma=Math.sqrt(Math.pow(a.sigma||Math.max(1,a.projection*.5),2)+Math.pow(b.sigma||Math.max(1,b.projection*.5),2));
+  if(!sigma)return a.projection>b.projection?1:.5;
+  return clamp(normalCdf((a.projection-b.projection)/sigma),.01,.99);
+}
+
+function confidenceGrade(score) {
+  if(score>=75)return "HIGH";
+  if(score>=55)return "MEDIUM";
+  return "LOW";
+}
+
+function playerConfidenceScore({sample=0,priorSample=0,injury=null,source="custom",projection=null,sleeper=null,volatility=null}) {
+  let score=50;
+  score+=Math.min(18,sample*4);
+  score+=Math.min(8,priorSample);
+  if(source==="custom")score+=12;
+  else if(source==="league_history")score+=5;
+  else score-=12;
+
+  const inj=String(injury||"").toLowerCase();
+  if(/out|ir|pup|sus/.test(inj))score-=45;
+  else if(/doubt/.test(inj))score-=28;
+  else if(/question/.test(inj))score-=12;
+
+  if(projection>0 && typeof sleeper==="number"){
+    const disagreement=Math.abs(projection-sleeper)/Math.max(4,projection);
+    if(disagreement>.4)score-=12;
+    else if(disagreement>.25)score-=7;
+    else if(disagreement<.1)score+=4;
+  }
+  if(volatility!=null){
+    if(volatility>.7)score-=12;
+    else if(volatility>.5)score-=7;
+    else if(volatility<.3)score+=4;
+  }
+  return Math.round(clamp(score,5,95));
+}
+
+function lineupSigma(picked) {
+  return Math.sqrt((picked||[]).reduce((sum,x)=>{
+    const p=x.player;
+    if(!p || p.locked)return sum;
+    const s=p.sigma||Math.max(1,(p.projection||0)*.5);
+    return sum+s*s;
+  },0));
+}
+
+function lineupRange(picked) {
+  let floor=0, ceiling=0;
+  for(const x of picked||[]){
+    const p=x.player;
+    if(!p)continue;
+    if(p.locked){
+      floor+=p.actual||0; ceiling+=p.actual||0;
+    } else {
+      floor+=p.floor??p.projection??0;
+      ceiling+=p.ceiling??p.projection??0;
+    }
+  }
+  return {floor:round(floor),ceiling:round(ceiling)};
+}
+
+async function matchupPointHistory(stateStore, league, week, season) {
+  const currentKey=`league_points_${league.league_id}_${season}_w${week}`;
+  let current=await stateStore.get(currentKey,{type:"json"}).catch(()=>null);
+  if(!current || Date.now()-(current.at||0)>6*60*60*1000){
+    const weeks=Array.from({length:Math.max(0,week-1)},(_,i)=>i+1);
+    const rows=await Promise.all(weeks.map(w=>
+      j(`https://api.sleeper.app/v1/league/${league.league_id}/matchups/${w}`).catch(()=>[])
+    ));
+    const points={};
+    rows.forEach((matches,i)=>{
+      const w=weeks[i];
+      for(const m of matches||[]){
+        for(const [pid,pts] of Object.entries(m.players_points||{})){
+          if(typeof pts!=="number")continue;
+          (points[pid]=points[pid]||[]).push({week:w,pts});
+        }
+      }
+    });
+    current={at:Date.now(),points};
+    await stateStore.setJSON(currentKey,current).catch(()=>{});
+  }
+
+  let prior={points:{}};
+  if(league.previous_league_id){
+    const priorKey=`league_points_prior_${league.previous_league_id}`;
+    prior=await stateStore.get(priorKey,{type:"json"}).catch(()=>null);
+    if(!prior){
+      // Last ten NFL weeks are enough to establish a league-scored baseline
+      // for K/DEF/IDP without making every cold request fan out to 18 calls.
+      const weeks=Array.from({length:10},(_,i)=>i+9);
+      const rows=await Promise.all(weeks.map(w=>
+        j(`https://api.sleeper.app/v1/league/${league.previous_league_id}/matchups/${w}`).catch(()=>[])
+      ));
+      const points={};
+      rows.forEach((matches,i)=>{
+        const w=weeks[i];
+        for(const m of matches||[]){
+          for(const [pid,pts] of Object.entries(m.players_points||{})){
+            if(typeof pts!=="number")continue;
+            (points[pid]=points[pid]||[]).push({week:w,pts});
+          }
+        }
+      });
+      prior={at:Date.now(),points};
+      await stateStore.setJSON(priorKey,prior).catch(()=>{});
+    }
+  }
+  return {current:current.points||{},prior:prior?.points||{}};
+}
+
 function eligibility(slot, player) {
   if (!player) return false;
   const eligible = new Set([player.slot, ...(player.eligibleSlots || [])].filter(Boolean));
