@@ -1,0 +1,85 @@
+name: Netlify runtime smoke
+
+on:
+  push:
+    branches: ["netlify-runtime-smoke-2026-09"]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit deployed V2 previews
+        shell: bash
+        run: |
+          node <<'NODE'
+          const assert = require("node:assert/strict");
+
+          const T = "https://deploy-preview-2--transmissionalbum.netlify.app";
+          const W = "https://deploy-preview-2--fantasywarroom.netlify.app";
+
+          async function getText(url, timeout=90000) {
+            const res = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+            const text = await res.text();
+            if (!res.ok) throw new Error(`${url} -> ${res.status}: ${text.slice(0,500)}`);
+            return { res, text };
+          }
+          async function getJson(url, timeout=90000) {
+            const { text } = await getText(url, timeout);
+            try { return JSON.parse(text); }
+            catch { throw new Error(`${url} did not return JSON: ${text.slice(0,500)}`); }
+          }
+
+          const tHome = await getText(T + "/");
+          assert.match(tHome.text, /TRANSMISSION/i);
+
+          const feed = await getJson(T + "/.netlify/functions/v2-feed");
+          assert.ok(Array.isArray(feed.releases), "Transmission feed must expose releases[]");
+          console.log("TRANSMISSION_OK", JSON.stringify({
+            releases: feed.releases.length,
+            lastRun: feed.lastRun || null
+          }));
+
+          const wHome = await getText(W + "/");
+          assert.match(wHome.text, /WAR ROOM/i);
+
+          const leagueData = await getJson(W + "/.netlify/functions/leagues");
+          assert.ok(Array.isArray(leagueData.leagues), "War Room leagues[] missing");
+          assert.ok(leagueData.leagues.length >= 2, `Expected 2 leagues, got ${leagueData.leagues.length}`);
+          console.log("LEAGUES", leagueData.leagues.map(x => ({id:x.id,name:x.name})));
+
+          const ochoId = "1386018360738713600";
+          const funId = "1389690067114541056";
+          const ocho = await getJson(W + "/.netlify/functions/lineup?league=" + ochoId, 120000);
+          const fun = await getJson(W + "/.netlify/functions/lineup?league=" + funId, 120000);
+
+          assert.equal(ocho.league.id, ochoId);
+          assert.equal(fun.league.id, funId);
+          assert.ok(Array.isArray(ocho.players) && ocho.players.length, "Ocho roster projection missing");
+          assert.ok(Array.isArray(fun.players) && fun.players.length, "Fun League roster projection missing");
+
+          const laporta = (ocho.players || []).find(p => p.name === "Sam LaPorta");
+          assert.ok(laporta, "Sam LaPorta missing from The Ocho roster");
+          assert.equal(laporta.locked, true, "LaPorta should be locked after Thursday game");
+
+          const lockedLaporta = (ocho.lockedBench || []).find(p => p.name === "Sam LaPorta");
+          assert.ok(lockedLaporta, "LaPorta should appear as locked bench history");
+          assert.equal(lockedLaporta.actual, 17.2, "Expected Sleeper's Week 2 actual for LaPorta");
+
+          assert.ok(
+            !(ocho.calls || []).some(c => c.start?.name === "Sam LaPorta"),
+            "War Room must never recommend starting locked-bench LaPorta"
+          );
+          assert.ok(
+            !(ocho.optimal || []).some(x => x.player?.name === "Sam LaPorta"),
+            "Best legal lineup must exclude locked-bench LaPorta"
+          );
+
+          console.log("WAR_ROOM_OK", JSON.stringify({
+            ochoWeek: ocho.week,
+            ochoOpponent: ocho.opponent,
+            lockedBench: ocho.lockedBench?.map(p => ({name:p.name,actual:p.actual})) || [],
+            calls: ocho.calls?.map(c => ({start:c.start?.name,sit:c.sit?.name,slot:c.slot})) || [],
+            funWeek: fun.week,
+            funOpponent: fun.opponent
+          }));
+          NODE
