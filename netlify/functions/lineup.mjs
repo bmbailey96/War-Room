@@ -300,7 +300,7 @@ export default async req => {
     const impliedAvg=avg(Object.values(gameByTeam).map(x=>x.implied).filter(x=>x!=null))||22;
     const sleeperById=Object.fromEntries((sleeperProj||[]).map(r=>[r.player_id,r]));
 
-    const rosterPlayers=(mine.players||[]).map(pid=>{
+    const projectPid=(pid,matchRow)=>{
       const info=pInfo(playersDB,pid), slot=slotPos(info), key=normName(info.name);
       const allCurrent=(cur[key]||[]);
       const c=allCurrent.filter(r=>num(r.week)<week), played=allCurrent.find(r=>num(r.week)===week) || null;
@@ -323,8 +323,8 @@ export default async req => {
       const game=gameByTeam[normTeam(info.team)];
       const opp=game?.opp || c.at(-1)?.opponent_team || sp?.opponent || null;
       const locked=!!game?.locked;
-      const matchupActual=myMatch?.players_points && typeof myMatch.players_points[pid] === "number"
-        ? myMatch.players_points[pid] : null;
+      const matchupActual=matchRow?.players_points && typeof matchRow.players_points[pid] === "number"
+        ? matchRow.players_points[pid] : null;
       const statActual=played ? fantasyPoints(played,league.scoring_settings||{}) : null;
       const actual=locked
         ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
@@ -372,7 +372,10 @@ export default async req => {
         fallback,sleeper:typeof sleeper==="number"?round(sleeper):null,reasons,out,
         locked,actual,kickoffAt:game?.kickoffAt||null,likelyComplete:!!game?.likelyComplete,
       };
-    });
+    };
+
+    const rosterPlayers=(mine.players||[]).map(pid=>projectPid(pid,myMatch));
+    const opponentPlayers=(oppRoster?.players||[]).map(pid=>projectPid(pid,oppMatch));
 
     const slots=(league.roster_positions||[]).filter(s=>s!=="BN" && s!=="IR" && s!=="TAXI");
     const current=currentStarters(myMatch,rosterPlayers,slots);
