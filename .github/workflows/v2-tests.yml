@@ -15,3 +15,6 @@ jobs:
           node-version: 20
       - run: npm install --no-audit --no-fund
       - run: npm test
+      - name: Live Sleeper smoke
+        continue-on-error: true
+        run: node scripts/live-sleeper-smoke.mjs
