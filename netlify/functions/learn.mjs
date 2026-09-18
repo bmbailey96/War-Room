@@ -30,6 +30,31 @@ const mae=(samples,w)=> {
 };
 const round2=x=>Math.round(x*100)/100;
 
+function fitPositionScales(samples){
+  const scales={}, detail={};
+  for(const pos of ["QB","RB","WR","TE"]){
+    const rows=samples.filter(s=>s.slot===pos && (s.rawBase??s.base)>0);
+    if(rows.length<4){
+      scales[pos]=1; detail[pos]={n:rows.length,raw:1,scale:1};
+      continue;
+    }
+    const err=scale=>rows.reduce((sum,s)=>{
+      const b=s.rawBase??s.base;
+      return sum+Math.abs(b*scale-s.actual);
+    },0)/rows.length;
+    let raw=1,best=err(1);
+    for(let x=.75;x<=1.2501;x+=.01){
+      const e=err(x);
+      if(e<best){best=e;raw=round2(x);}
+    }
+    const alpha=Math.min(.65,rows.length/30);
+    const scale=round2(1+(raw-1)*alpha);
+    scales[pos]=scale;
+    detail[pos]={n:rows.length,raw,scale,alpha:round2(alpha)};
+  }
+  return {scales,detail};
+}
+
 function fit(samples) {
   let best={...DEFAULT}, bestErr=mae(samples,DEFAULT) ?? Infinity;
   // Bounded grid. Negative weights are deliberately disallowed. If a signal
@@ -115,7 +140,8 @@ export default async () => {
           // feature fitting. Injury news is graded in the reasoning layer.
           if(p.injury) continue;
           samples.push({
-            week,pid:p.pid,name:p.name,slot:p.slot,base:p.base,actual,
+            week,pid:p.pid,name:p.name,slot:p.slot,
+            rawBase:p.rawBase??p.base,base:p.base,actual,
             signals:p.signals||{},
           });
         }
@@ -141,19 +167,25 @@ export default async () => {
       }
     }
 
-    const fitResult=samples.length>=8 ? fit(samples) : {
+    const posFit=fitPositionScales(samples);
+    const calibratedSamples=samples.map(s=>({
+      ...s,
+      base:(s.rawBase??s.base)*(posFit.scales[s.slot]||1),
+    }));
+    const fitResult=calibratedSamples.length>=8 ? fit(calibratedSamples) : {
       weights:{...DEFAULT},rawFit:null,alpha:0,
-      mae:round2(mae(samples,DEFAULT)||0),defaultMae:round2(mae(samples,DEFAULT)||0),
+      mae:round2(mae(calibratedSamples,DEFAULT)||0),defaultMae:round2(mae(calibratedSamples,DEFAULT)||0),
     };
     const model={
       at:Date.now(),leagueId:league.id,season,samples:samples.length,
       weeks:[...new Set(samples.map(s=>s.week))],
+      positionScale:posFit.scales,positionDetail:posFit.detail,
       weights:fitResult.weights,rawFit:fitResult.rawFit,shrinkage:fitResult.alpha,
       mae:fitResult.mae,defaultMae:fitResult.defaultMae,
       reliability:{
-        role:signalReliability(samples,"role"),
-        matchup:signalReliability(samples,"matchup"),
-        environment:signalReliability(samples,"environment"),
+        role:signalReliability(calibratedSamples,"role"),
+        matchup:signalReliability(calibratedSamples,"matchup"),
+        environment:signalReliability(calibratedSamples,"environment"),
       },
     };
     await stateStore.setJSON(`model_${league.id}`,model);
@@ -167,7 +199,7 @@ export default async () => {
 
     result.push({
       league:league.name,id:league.id,samples:samples.length,
-      weights:model.weights,mae:model.mae,defaultMae:model.defaultMae,
+      weights:model.weights,positionScale:model.positionScale,mae:model.mae,defaultMae:model.defaultMae,
       reasoningCalls:reasoningGrades.length,
     });
   }
