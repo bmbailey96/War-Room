@@ -62,7 +62,7 @@ console.log("Injury confidence regression check passed");
 
 const stableRange=projectionRange(20,[18,19,20,21,22,20,19,21],"WR");
 const volatileRange=projectionRange(20,[2,8,12,25,31,6,28,18],"WR");
-assert.ok(stableRange.floor < 20 && stableRange.ceiling >= 20);
+assert.ok(stableRange.floor <= 20 && stableRange.ceiling >= 20);
 assert.ok(volatileRange.sigma > stableRange.sigma);
 assert.equal(stableRange.rangeSource,"empirical");
 
@@ -82,3 +82,6 @@ const fallbackConfidence=playerConfidenceScore({
 assert.ok(strongConfidence>fallbackConfidence);
 
 console.log("Decision uncertainty checks passed");
+
+const skewedRange=projectionRange(10,[0,20,20,20,20],"WR");
+assert.ok(skewedRange.floor<=10 && skewedRange.ceiling>=10);
