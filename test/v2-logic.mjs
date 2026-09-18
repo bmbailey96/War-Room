@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {
   eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
   projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable,
-  matchupExposureFor
+  matchupExposureFor, lateSwapFlexMoves, buildLateSwapContingencies
 } from "../netlify/functions/lineup.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
@@ -335,3 +335,61 @@ assert.ok(matchupExposureFor("RB",.60)>1);
 assert.ok(matchupExposureFor("TE",.10)<1);
 
 console.log("Opportunity-scaled matchup exposure checks passed");
+
+
+const qLate={
+  pid:"Q1",name:"Questionable Alpha",slot:"WR",eligibleSlots:["WR"],
+  projection:16,injury:"Questionable",kickoffAt:"2026-09-20T20:20:00.000Z",locked:false,out:false
+};
+const latePivot={
+  pid:"B1",name:"Late Pivot",slot:"WR",eligibleSlots:["WR"],
+  projection:11,injury:null,kickoffAt:"2026-09-20T20:25:00.000Z",locked:false,out:false
+};
+const earlyPivot={
+  pid:"B2",name:"Early Pivot",slot:"WR",eligibleSlots:["WR"],
+  projection:12,injury:null,kickoffAt:"2026-09-20T17:00:00.000Z",locked:false,out:false
+};
+
+let cont=buildLateSwapContingencies(
+  [{slot:"WR",player:qLate}],
+  [qLate,latePivot],
+  ["WR"]
+);
+assert.equal(cont[0].fallback,"Late Pivot");
+assert.equal(cont[0].waitSafe,true);
+assert.equal(cont[0].urgency,"SAFE_TO_WAIT");
+
+cont=buildLateSwapContingencies(
+  [{slot:"WR",player:qLate}],
+  [qLate,earlyPivot],
+  ["WR"]
+);
+assert.equal(cont[0].fallback,"Early Pivot");
+assert.equal(cont[0].waitSafe,false);
+assert.equal(cont[0].urgency,"DECISION_DEADLINE");
+assert.equal(cont[0].deadlineAt,earlyPivot.kickoffAt);
+
+const flexEarly={
+  pid:"F1",name:"Early WR",slot:"WR",eligibleSlots:["WR"],
+  projection:13,kickoffAt:"2026-09-20T17:00:00.000Z",locked:false,out:false
+};
+const wrLate={
+  pid:"F2",name:"Late WR",slot:"WR",eligibleSlots:["WR"],
+  projection:14,kickoffAt:"2026-09-20T23:20:00.000Z",locked:false,out:false
+};
+const flexMoves=lateSwapFlexMoves([
+  {slot:"WR",player:wrLate},
+  {slot:"FLEX",player:flexEarly},
+]);
+assert.equal(flexMoves.length,1);
+assert.equal(flexMoves[0].moveToFlex,"Late WR");
+assert.equal(flexMoves[0].moveToPosition,"Early WR");
+assert.ok(flexMoves[0].gainMinutes>300);
+
+const noLockedFlex=lateSwapFlexMoves([
+  {slot:"WR",player:{...wrLate,locked:true}},
+  {slot:"FLEX",player:flexEarly},
+]);
+assert.equal(noLockedFlex.length,0);
+
+console.log("Late-swap and flex-preservation checks passed");
