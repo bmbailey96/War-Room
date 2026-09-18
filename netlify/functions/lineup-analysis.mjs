@@ -35,16 +35,20 @@ export default async req => {
 
     const current=(data.current||[]).filter(x=>x.player).map(x=>({
       slot:x.slot,name:x.player.name,proj:x.player.projection,floor:x.player.floor,ceiling:x.player.ceiling,
-      opp:x.player.opp,injury:x.player.injury,confidence:x.player.confidence,fallback:x.player.fallback,reasons:x.player.reasons
+      opp:x.player.opp,injury:x.player.injury,confidence:x.player.confidence,confidenceScore:x.player.confidenceScore,
+      source:x.player.source,rangeSource:x.player.rangeSource,reasons:x.player.reasons
     }));
     const bench=(data.players||[])
       .filter(p=>!(data.current||[]).some(x=>x.player?.pid===p.pid))
       .sort((a,b)=>(b.projection||0)-(a.projection||0))
       .slice(0,12)
-      .map(p=>({name:p.name,pos:p.slot,proj:p.projection,floor:p.floor,ceiling:p.ceiling,opp:p.opp,injury:p.injury,confidence:p.confidence,fallback:p.fallback,reasons:p.reasons}));
+      .map(p=>({name:p.name,pos:p.slot,proj:p.projection,floor:p.floor,ceiling:p.ceiling,opp:p.opp,injury:p.injury,
+        confidence:p.confidence,confidenceScore:p.confidenceScore,source:p.source,rangeSource:p.rangeSource,reasons:p.reasons}));
     const computed=(data.calls||[]).map(c=>({
-      start:c.start?.name,sit:c.sit?.name,slot:c.slot,gain:c.gain,
-      startProjection:c.start?.projection,sitProjection:c.sit?.projection
+      start:c.start?.name,sit:c.sit?.name,slot:c.slot,
+      edge:c.edge,beatProbability:c.beatProbability,decisionConfidence:c.decisionConfidence,
+      startProjection:c.start?.projection,startFloor:c.start?.floor,startCeiling:c.start?.ceiling,startSource:c.start?.source,
+      sitProjection:c.sit?.projection,sitFloor:c.sit?.floor,sitCeiling:c.sit?.ceiling,sitSource:c.sit?.source
     }));
     const lockedBench=(data.lockedBench||[]).map(p=>({
       name:p.name,actual:p.actual,team:p.team,kickoffAt:p.kickoffAt
@@ -76,10 +80,10 @@ Rules:
 1. Start from the computed lineup. Do not override it for generic matchup talk, reputation, consensus rankings, or vibes.
 2. NEVER recommend moving a player whose game has started. A player listed under PLAYERS ALREADY LOCKED ON THE BENCH is history, not an option.
 3. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, or credible inactive news.
-4. If two players are within 1.5 projected points, treat it as a genuine decision. If MATCHUP STATE posture is protect_floor, prefer the stronger floor when evidence is otherwise close. If it is chase_ceiling, prefer the stronger ceiling. If neutral, do not force a risk-style tiebreak.
-5. Do not use matchup posture to override a gap larger than 1.5 projected points.
+4. Respect the engine's uncertainty. A LOW decision-confidence call or beat probability near 50% is genuinely close even if the raw point gap looks noticeable. A HIGH-confidence mathematical edge should require strong concrete news to override.
+5. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
 6. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
-7. If the model used Sleeper fallback for a player, say so and lower confidence.
+7. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
 8. Never claim you found news you did not actually find.
 9. Keep this brutally scannable.
 

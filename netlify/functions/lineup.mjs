@@ -154,6 +154,167 @@ function sd(values) {
   const m=avg(values); return Math.sqrt(avg(values.map(v=>(v-m)*(v-m))));
 }
 
+function quantile(values, q) {
+  const a=values.filter(Number.isFinite).sort((x,y)=>x-y);
+  if(!a.length)return null;
+  if(a.length===1)return a[0];
+  const p=(a.length-1)*q, lo=Math.floor(p), hi=Math.ceil(p);
+  if(lo===hi)return a[lo];
+  return a[lo]+(a[hi]-a[lo])*(p-lo);
+}
+
+const POS_CV={QB:.28,RB:.45,WR:.5,TE:.5,K:.42,DEF:.48,DL:.48,LB:.42,DB:.48,UNK:.5};
+
+function projectionRange(projection, values, pos) {
+  if(projection==null)return {floor:null,ceiling:null,sigma:null,volatility:null,rangeSource:"none"};
+  const vals=(values||[]).filter(v=>Number.isFinite(v) && v>=0).slice(-10);
+  const center=avg(vals);
+  if(vals.length>=4 && center!=null && center>0.5){
+    const scale=projection/center;
+    const q20=quantile(vals,.20), q80=quantile(vals,.80);
+    const histSd=sd(vals);
+    const sigma=histSd!=null ? Math.max(1,histSd*scale) : Math.max(1,projection*(POS_CV[pos]||.5));
+    return {
+      floor:round(Math.min(projection,Math.max(0,(q20??0)*scale))),
+      ceiling:round(Math.max(projection,(q80??projection)*scale)),
+      sigma:round(sigma),
+      volatility:round(sigma/Math.max(1,projection)),
+      rangeSource:"empirical",
+    };
+  }
+  const sigma=Math.max(1,projection*(POS_CV[pos]||POS_CV.UNK));
+  return {
+    floor:round(Math.max(0,projection-.84*sigma)),
+    ceiling:round(projection+.84*sigma),
+    sigma:round(sigma),
+    volatility:round(sigma/Math.max(1,projection)),
+    rangeSource:"position_prior",
+  };
+}
+
+// Abramowitz-Stegun normal CDF approximation. Plenty accurate enough for
+// communicating fantasy decision uncertainty without pretending it is exact.
+function normalCdf(x) {
+  const sign=x<0?-1:1, z=Math.abs(x)/Math.sqrt(2);
+  const t=1/(1+.3275911*z);
+  const erf=sign*(1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-z*z));
+  return .5*(1+erf);
+}
+
+function probabilityBetter(a,b) {
+  if(!a || !b || a.projection==null || b.projection==null)return null;
+  const sigma=Math.sqrt(Math.pow(a.sigma||Math.max(1,a.projection*.5),2)+Math.pow(b.sigma||Math.max(1,b.projection*.5),2));
+  if(!sigma)return a.projection>b.projection?1:.5;
+  return clamp(normalCdf((a.projection-b.projection)/sigma),.01,.99);
+}
+
+function confidenceGrade(score) {
+  if(score>=75)return "HIGH";
+  if(score>=55)return "MEDIUM";
+  return "LOW";
+}
+
+function playerConfidenceScore({sample=0,priorSample=0,injury=null,source="custom",projection=null,sleeper=null,volatility=null}) {
+  let score=50;
+  score+=Math.min(18,sample*4);
+  score+=Math.min(8,priorSample);
+  if(source==="custom")score+=12;
+  else if(source==="league_history")score+=5;
+  else score-=12;
+
+  const inj=String(injury||"").toLowerCase();
+  if(/out|ir|pup|sus/.test(inj))score-=45;
+  else if(/doubt/.test(inj))score-=28;
+  else if(/question/.test(inj))score-=12;
+
+  if(projection>0 && typeof sleeper==="number"){
+    const disagreement=Math.abs(projection-sleeper)/Math.max(4,projection);
+    if(disagreement>.4)score-=12;
+    else if(disagreement>.25)score-=7;
+    else if(disagreement<.1)score+=4;
+  }
+  if(volatility!=null){
+    if(volatility>.7)score-=12;
+    else if(volatility>.5)score-=7;
+    else if(volatility<.3)score+=4;
+  }
+  return Math.round(clamp(score,5,95));
+}
+
+function lineupSigma(picked) {
+  return Math.sqrt((picked||[]).reduce((sum,x)=>{
+    const p=x.player;
+    if(!p || p.locked)return sum;
+    const s=p.sigma||Math.max(1,(p.projection||0)*.5);
+    return sum+s*s;
+  },0));
+}
+
+function lineupRange(picked) {
+  let floor=0, ceiling=0;
+  for(const x of picked||[]){
+    const p=x.player;
+    if(!p)continue;
+    if(p.locked){
+      floor+=p.actual||0; ceiling+=p.actual||0;
+    } else {
+      floor+=p.floor??p.projection??0;
+      ceiling+=p.ceiling??p.projection??0;
+    }
+  }
+  return {floor:round(floor),ceiling:round(ceiling)};
+}
+
+async function matchupPointHistory(stateStore, league, week, season) {
+  const currentKey=`league_points_${league.league_id}_${season}_w${week}`;
+  let current=await stateStore.get(currentKey,{type:"json"}).catch(()=>null);
+  if(!current || Date.now()-(current.at||0)>6*60*60*1000){
+    const weeks=Array.from({length:Math.max(0,week-1)},(_,i)=>i+1);
+    const rows=await Promise.all(weeks.map(w=>
+      j(`https://api.sleeper.app/v1/league/${league.league_id}/matchups/${w}`).catch(()=>[])
+    ));
+    const points={};
+    rows.forEach((matches,i)=>{
+      const w=weeks[i];
+      for(const m of matches||[]){
+        for(const [pid,pts] of Object.entries(m.players_points||{})){
+          if(typeof pts!=="number")continue;
+          (points[pid]=points[pid]||[]).push({week:w,pts});
+        }
+      }
+    });
+    current={at:Date.now(),points};
+    await stateStore.setJSON(currentKey,current).catch(()=>{});
+  }
+
+  let prior={points:{}};
+  if(league.previous_league_id){
+    const priorKey=`league_points_prior_${league.previous_league_id}`;
+    prior=await stateStore.get(priorKey,{type:"json"}).catch(()=>null);
+    if(!prior){
+      // Last ten NFL weeks are enough to establish a league-scored baseline
+      // for K/DEF/IDP without making every cold request fan out to 18 calls.
+      const weeks=Array.from({length:10},(_,i)=>i+9);
+      const rows=await Promise.all(weeks.map(w=>
+        j(`https://api.sleeper.app/v1/league/${league.previous_league_id}/matchups/${w}`).catch(()=>[])
+      ));
+      const points={};
+      rows.forEach((matches,i)=>{
+        const w=weeks[i];
+        for(const m of matches||[]){
+          for(const [pid,pts] of Object.entries(m.players_points||{})){
+            if(typeof pts!=="number")continue;
+            (points[pid]=points[pid]||[]).push({week:w,pts});
+          }
+        }
+      });
+      prior={at:Date.now(),points};
+      await stateStore.setJSON(priorKey,prior).catch(()=>{});
+    }
+  }
+  return {current:current.points||{},prior:prior?.points||{}};
+}
+
 function eligibility(slot, player) {
   if (!player) return false;
   const eligible = new Set([player.slot, ...(player.eligibleSlots || [])].filter(Boolean));
@@ -317,9 +478,10 @@ export default async req => {
     ]);
     const week=Number(state.week)||1, season=Number(state.season)||chosen.season;
     const stateStore=store();
-    const [learnedModel,learnedReasoning]=await Promise.all([
+    const [learnedModel,learnedReasoning,leaguePointHistory]=await Promise.all([
       stateStore.get(`model_${chosen.id}`,{type:"json"}).catch(()=>null),
       stateStore.get(`reasoning_${chosen.id}`,{type:"json"}).catch(()=>null),
+      matchupPointHistory(stateStore,league,week,season),
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const positionScale=learnedModel?.positionScale||{};
@@ -406,17 +568,45 @@ export default async req => {
       }
     }
 
-    // League-wide defense allowed by position, current season only.
-    const allowed={};
-    for(const r of currentRows){
-      const pos=r.position, def=normTeam(r.opponent_team);
-      if(!def || !["QB","RB","WR","TE"].includes(pos)) continue;
-      const d=(allowed[def]=allowed[def]||{}), b=(d[pos]=d[pos]||{pts:0,weeks:new Set()});
-      b.pts+=fantasyPoints(r,league.scoring_settings||{},pos); b.weeks.add(num(r.week));
-    }
+    // Defensive matchup strength is deliberately stabilized early in the
+    // season. Week 1 alone should not make a defense look elite or terrible.
+    // Current-season games only count if they happened before this fantasy
+    // week, then earn progressively more weight against the prior-season
+    // baseline as the sample grows.
+    const buildAllowed=(rows,maxWeek=null)=>{
+      const allowed={};
+      for(const r of rows){
+        if(maxWeek!=null && num(r.week)>=maxWeek)continue;
+        const pos=r.position, def=normTeam(r.opponent_team);
+        if(!def || !["QB","RB","WR","TE"].includes(pos)) continue;
+        const d=(allowed[def]=allowed[def]||{}), b=(d[pos]=d[pos]||{pts:0,weeks:new Set()});
+        b.pts+=fantasyPoints(r,league.scoring_settings||{},pos); b.weeks.add(num(r.week));
+      }
+      const out={};
+      for(const [team,v] of Object.entries(allowed)){
+        out[team]={};
+        for(const [pos,b] of Object.entries(v)){
+          out[team][pos]={avg:b.pts/Math.max(1,b.weeks.size),weeks:b.weeks.size};
+        }
+      }
+      return out;
+    };
+    const currentDefense=buildAllowed(currentRows,week);
+    const priorDefense=buildAllowed(priorRows,null);
     const defense={};
-    for(const [team,v] of Object.entries(allowed)){
-      defense[team]={}; for(const [pos,b] of Object.entries(v)) defense[team][pos]=b.pts/Math.max(1,b.weeks.size);
+    const teams=new Set([...Object.keys(currentDefense),...Object.keys(priorDefense)]);
+    for(const team of teams){
+      defense[team]={};
+      for(const pos of ["QB","RB","WR","TE"]){
+        const cur=currentDefense[team]?.[pos], prev=priorDefense[team]?.[pos];
+        if(!cur && !prev)continue;
+        if(cur && prev){
+          const alpha=Math.min(.75,cur.weeks/6);
+          defense[team][pos]=prev.avg*(1-alpha)+cur.avg*alpha;
+        }else{
+          defense[team][pos]=(cur||prev).avg;
+        }
+      }
     }
     const leagueAllowed={};
     for(const pos of ["QB","RB","WR","TE"]) leagueAllowed[pos]=avg(Object.values(defense).map(d=>d[pos]).filter(x=>x!=null));
@@ -453,16 +643,36 @@ export default async req => {
       else if(c.length===1) rawBase=(currentMean*0.38)+(priorMean!=null?priorMean*0.62:currentMean*0.62);
       else if(priorMean!=null) rawBase=priorMean;
 
+      const leagueCurrent=(leaguePointHistory.current?.[pid]||[]).map(x=>({week:x.week,pts:num(x.pts)}));
+      const leaguePrior=(leaguePointHistory.prior?.[pid]||[]).map(x=>({week:x.week,pts:num(x.pts)}));
+      const leagueCurrentMean=weightedMean(leagueCurrent,x=>x.pts);
+      const leaguePriorMean=weightedMean(leaguePrior.slice(-8),x=>x.pts);
+      let leagueBase=null;
+      if(leagueCurrent.length>=3) leagueBase=(leagueCurrentMean*0.72)+(leaguePriorMean!=null?leaguePriorMean*0.28:leagueCurrentMean*0.28);
+      else if(leagueCurrent.length===2) leagueBase=(leagueCurrentMean*0.58)+(leaguePriorMean!=null?leaguePriorMean*0.42:leagueCurrentMean*0.42);
+      else if(leagueCurrent.length===1) leagueBase=(leagueCurrentMean*0.38)+(leaguePriorMean!=null?leaguePriorMean*0.62:leagueCurrentMean*0.62);
+      else if(leaguePriorMean!=null) leagueBase=leaguePriorMean;
+
       const sp=sleeperById[pid], sleeper=scoreSleeperProjection(sp?.stats,league.scoring_settings||{},slot);
-      let fallback=false;
+      const offense=["QB","RB","WR","TE"].includes(slot);
+      let source="custom";
       let base=rawBase;
-      if(base==null || !["QB","RB","WR","TE"].includes(slot)) {
-        base=typeof sleeper==="number" ? sleeper : null; fallback=true;
+      if(base==null || !offense) {
+        if(leagueBase!=null){
+          base=leagueBase;
+          source="league_history";
+        }else{
+          base=typeof sleeper==="number" ? sleeper : null;
+          source="sleeper";
+        }
       } else {
         base*=positionScale[slot]||1;
       }
+      const fallback=source!=="custom";
       let projection=base, reasons=[];
-      const learnedPosScale=!fallback?(positionScale[slot]||1):1;
+      if(source==="league_history")reasons.push("league-scored history baseline");
+      if(source==="sleeper")reasons.push("Sleeper projection fallback");
+      const learnedPosScale=source==="custom"?(positionScale[slot]||1):1;
       if(Math.abs(learnedPosScale-1)>=0.03) {
         reasons.push(`${round((learnedPosScale-1)*100)}% learned ${slot} baseline calibration`);
       }
@@ -476,7 +686,7 @@ export default async req => {
         ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
         : null;
       const signals={ roleRatio:1, matchupRatio:1, environmentRatio:1, schemeRatio:1, opportunityRatio:1, snapRatio:1 };
-      if(projection!=null && !fallback && ["QB","RB","WR","TE"].includes(slot)){
+      if(projection!=null && source==="custom" && ["QB","RB","WR","TE"].includes(slot)){
         const recentUsage=weightedMean(c.slice(-3),r=>usage(r,slot));
         const priorUsage=weightedMean((c.length>3?c.slice(0,-3):p.slice(-5)),r=>usage(r,slot));
         const roleParts=[];
@@ -533,17 +743,24 @@ export default async req => {
       else if(/doubt/.test(inj) && projection!=null){ projection*=0.45; reasons.push("-55% injury status"); }
       else if(/question/.test(inj) && projection!=null){ projection*=0.93; reasons.push("-7% injury uncertainty"); }
 
-      const vals=hist.slice(-8).map(r=>fantasyPoints(r,league.scoring_settings||{},slot));
-      const sigma=sd(vals) ?? (projection!=null?projection*0.5:null);
+      const customVals=hist.slice(-10).map(r=>fantasyPoints(r,league.scoring_settings||{},slot));
+      const leagueVals=[...leaguePrior.slice(-8),...leagueCurrent].map(x=>x.pts);
+      const rangeVals=source==="custom"?customVals:leagueVals;
+      const range=projectionRange(projection,rangeVals,slot);
+      const evidenceCurrent=source==="custom"?c.length:leagueCurrent.length;
+      const evidencePrior=source==="custom"?p.length:leaguePrior.length;
+      const confidenceScore=playerConfidenceScore({
+        sample:evidenceCurrent,priorSample:evidencePrior,injury:info.inj,source,
+        projection,sleeper,volatility:range.volatility,
+      });
       return {
         pid,name:info.name,slot,eligibleSlots:info.fps||[],team:info.team,injury:info.inj||null,opp:opp?normTeam(opp):null,
         rawBase:rawBase==null?null:round(Math.max(0,rawBase)),
         base:base==null?null:round(Math.max(0,base)),signals,
         projection:projection==null?null:round(Math.max(0,projection)),
-        floor:projection==null?null:round(Math.max(0,projection-(sigma||0)*0.75)),
-        ceiling:projection==null?null:round(projection+(sigma||0)*0.9),
-        sample:c.length,priorSample:p.length,confidence:confidence(c.length,info.inj,fallback),
-        fallback,sleeper:typeof sleeper==="number"?round(sleeper):null,reasons,out,
+        floor:range.floor,ceiling:range.ceiling,sigma:range.sigma,volatility:range.volatility,rangeSource:range.rangeSource,
+        sample:evidenceCurrent,priorSample:evidencePrior,confidenceScore,confidence:confidenceGrade(confidenceScore),
+        fallback,source,sleeper:typeof sleeper==="number"?round(sleeper):null,reasons,out,
         locked,actual,kickoffAt:game?.kickoffAt||null,likelyComplete:!!game?.likelyComplete,
       };
     };
@@ -555,7 +772,23 @@ export default async req => {
     const current=currentStarters(myMatch,rosterPlayers,slots);
     const optimal=optimize(rosterPlayers,slots,current);
     const decision=lineupChanges(current,optimal);
-    const changes=decision.calls;
+    const changes=decision.calls.map(call=>{
+      const probability=call.sit?probabilityBetter(call.start,call.sit):null;
+      const edge=call.sit && call.start?.projection!=null && call.sit?.projection!=null
+        ? round(call.start.projection-call.sit.projection)
+        : null;
+      const decisionScore=probability==null
+        ? (call.start?.confidenceScore||50)
+        : Math.round(probability*100);
+      return {
+        ...call,
+        edge,
+        beatProbability:probability==null?null:Math.round(probability*100),
+        decisionScore,
+        decisionConfidence:confidenceGrade(decisionScore),
+      };
+    });
+    decision.calls=changes;
     const currentIds=new Set(current.map(x=>x.player?.pid).filter(Boolean));
     const lockedBench=rosterPlayers
       .filter(p=>p.locked && !currentIds.has(p.pid))
@@ -570,7 +803,13 @@ export default async req => {
     const mineLocked=current.filter(x=>x.player?.locked).reduce((s,x)=>s+(x.player.actual||0),0);
     const oppLocked=opponentCurrent.filter(x=>x.player?.locked).reduce((s,x)=>s+(x.player.actual||0),0);
     const projectedMargin=round(optimal.total-opponentOptimal.total);
-    const posture=projectedMargin>=8?"protect_floor":projectedMargin<=-8?"chase_ceiling":"neutral";
+    const mySigma=lineupSigma(optimal.picked), opponentSigma=lineupSigma(opponentOptimal.picked);
+    const diffSigma=Math.sqrt(mySigma*mySigma+opponentSigma*opponentSigma);
+    const winProbability=diffSigma
+      ? clamp(normalCdf(projectedMargin/diffSigma),.03,.97)
+      : (projectedMargin>0?.97:projectedMargin<0?.03:.5);
+    const posture=winProbability>=.65?"protect_floor":winProbability<=.35?"chase_ceiling":"neutral";
+    const myRange=lineupRange(optimal.picked), opponentRange=lineupRange(opponentOptimal.picked);
 
     // Keep the last pre-kickoff projection for each player. Tuesday's learner
     // grades these against actual league-scored points. Locked players are
@@ -583,7 +822,9 @@ export default async req => {
       if(p.locked) continue;
       byPid[p.pid]={
         pid:p.pid,name:p.name,slot:p.slot,team:p.team,rawBase:p.rawBase,base:p.base,projection:p.projection,
-        signals:p.signals,fallback:p.fallback,injury:p.injury,confidence:p.confidence,
+        signals:p.signals,fallback:p.fallback,source:p.source,injury:p.injury,
+        confidence:p.confidence,confidenceScore:p.confidenceScore,
+        floor:p.floor,ceiling:p.ceiling,sigma:p.sigma,volatility:p.volatility,
         savedAt:Date.now(),kickoffAt:p.kickoffAt,
       };
     }
@@ -594,7 +835,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use actual nflverse weekly production and workload plus matchup/game context. Sleeper is comparison/fallback only. K/DEF/IDP currently use fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
         weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
@@ -606,7 +847,10 @@ export default async req => {
         opponentCurrentTotal:round(opponentCurrentTotal),
         opponentBestTotal:round(opponentOptimal.total),
         projectedMargin,
+        winProbability:Math.round(winProbability*100),
         posture,
+        range:{mine:myRange,opponent:opponentRange},
+        uncertainty:{mine:round(mySigma),opponent:round(opponentSigma)},
         lockedActual:{mine:round(mineLocked),opponent:round(oppLocked)},
       },
       calls:changes,decision,
@@ -618,4 +862,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore };

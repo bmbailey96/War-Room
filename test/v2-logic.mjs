@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
-  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence
+  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
+  projectionRange, probabilityBetter, normalCdf, playerConfidenceScore
 } from "../netlify/functions/lineup.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
@@ -57,3 +58,30 @@ assert.equal(confidence(3, "Questionable", false), "MEDIUM");
 assert.equal(confidence(8, null, true), "LOW");
 
 console.log("Injury confidence regression check passed");
+
+
+const stableRange=projectionRange(20,[18,19,20,21,22,20,19,21],"WR");
+const volatileRange=projectionRange(20,[2,8,12,25,31,6,28,18],"WR");
+assert.ok(stableRange.floor <= 20 && stableRange.ceiling >= 20);
+assert.ok(volatileRange.sigma > stableRange.sigma);
+assert.equal(stableRange.rangeSource,"empirical");
+
+assert.ok(Math.abs(normalCdf(0)-0.5)<0.001);
+const better=probabilityBetter(
+  {projection:16,sigma:4},
+  {projection:12,sigma:4}
+);
+assert.ok(better>0.65 && better<0.85);
+
+const strongConfidence=playerConfidenceScore({
+  sample:6,priorSample:6,source:"custom",projection:15,sleeper:15.5,volatility:.25
+});
+const fallbackConfidence=playerConfidenceScore({
+  sample:0,priorSample:0,source:"sleeper",projection:15,sleeper:15,volatility:.55
+});
+assert.ok(strongConfidence>fallbackConfidence);
+
+console.log("Decision uncertainty checks passed");
+
+const skewedRange=projectionRange(10,[0,20,20,20,20],"WR");
+assert.ok(skewedRange.floor<=10 && skewedRange.ceiling>=10);
