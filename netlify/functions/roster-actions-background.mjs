@@ -253,6 +253,7 @@ Return ONLY valid JSON:
     };
 
     await s.setJSON(cacheKey,result);
+    await s.delete(`roster_actions_refresh_${chosen.id}`).catch(()=>{});
     const histKey=`roster_action_history_${chosen.id}`;
     const hist=await s.get(histKey,{type:"json"}).catch(()=>[])||[];
     const fingerprint=JSON.stringify(result.actions.map(a=>[a.type,a.headline]));
