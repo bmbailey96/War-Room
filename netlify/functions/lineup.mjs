@@ -772,7 +772,23 @@ export default async req => {
     const current=currentStarters(myMatch,rosterPlayers,slots);
     const optimal=optimize(rosterPlayers,slots,current);
     const decision=lineupChanges(current,optimal);
-    const changes=decision.calls;
+    const changes=decision.calls.map(call=>{
+      const probability=call.sit?probabilityBetter(call.start,call.sit):null;
+      const edge=call.sit && call.start?.projection!=null && call.sit?.projection!=null
+        ? round(call.start.projection-call.sit.projection)
+        : null;
+      const decisionScore=probability==null
+        ? (call.start?.confidenceScore||50)
+        : Math.round(probability*100);
+      return {
+        ...call,
+        edge,
+        beatProbability:probability==null?null:Math.round(probability*100),
+        decisionScore,
+        decisionConfidence:confidenceGrade(decisionScore),
+      };
+    });
+    decision.calls=changes;
     const currentIds=new Set(current.map(x=>x.player?.pid).filter(Boolean));
     const lockedBench=rosterPlayers
       .filter(p=>p.locked && !currentIds.has(p.pid))
@@ -787,7 +803,13 @@ export default async req => {
     const mineLocked=current.filter(x=>x.player?.locked).reduce((s,x)=>s+(x.player.actual||0),0);
     const oppLocked=opponentCurrent.filter(x=>x.player?.locked).reduce((s,x)=>s+(x.player.actual||0),0);
     const projectedMargin=round(optimal.total-opponentOptimal.total);
-    const posture=projectedMargin>=8?"protect_floor":projectedMargin<=-8?"chase_ceiling":"neutral";
+    const mySigma=lineupSigma(optimal.picked), opponentSigma=lineupSigma(opponentOptimal.picked);
+    const diffSigma=Math.sqrt(mySigma*mySigma+opponentSigma*opponentSigma);
+    const winProbability=diffSigma
+      ? clamp(normalCdf(projectedMargin/diffSigma),.03,.97)
+      : (projectedMargin>0?.97:projectedMargin<0?.03:.5);
+    const posture=winProbability>=.65?"protect_floor":winProbability<=.35?"chase_ceiling":"neutral";
+    const myRange=lineupRange(optimal.picked), opponentRange=lineupRange(opponentOptimal.picked);
 
     // Keep the last pre-kickoff projection for each player. Tuesday's learner
     // grades these against actual league-scored points. Locked players are
@@ -800,7 +822,9 @@ export default async req => {
       if(p.locked) continue;
       byPid[p.pid]={
         pid:p.pid,name:p.name,slot:p.slot,team:p.team,rawBase:p.rawBase,base:p.base,projection:p.projection,
-        signals:p.signals,fallback:p.fallback,injury:p.injury,confidence:p.confidence,
+        signals:p.signals,fallback:p.fallback,source:p.source,injury:p.injury,
+        confidence:p.confidence,confidenceScore:p.confidenceScore,
+        floor:p.floor,ceiling:p.ceiling,sigma:p.sigma,volatility:p.volatility,
         savedAt:Date.now(),kickoffAt:p.kickoffAt,
       };
     }
@@ -811,7 +835,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use actual nflverse weekly production and workload plus matchup/game context. Sleeper is comparison/fallback only. K/DEF/IDP currently use fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
         weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
@@ -823,7 +847,10 @@ export default async req => {
         opponentCurrentTotal:round(opponentCurrentTotal),
         opponentBestTotal:round(opponentOptimal.total),
         projectedMargin,
+        winProbability:Math.round(winProbability*100),
         posture,
+        range:{mine:myRange,opponent:opponentRange},
+        uncertainty:{mine:round(mySigma),opponent:round(opponentSigma)},
         lockedActual:{mine:round(mineLocked),opponent:round(oppLocked)},
       },
       calls:changes,decision,
@@ -835,4 +862,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore };
