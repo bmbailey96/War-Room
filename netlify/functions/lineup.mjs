@@ -93,24 +93,25 @@ function eligibility(slot, pos) {
 }
 
 function optimize(players, slots) {
-  const usable=players.filter(p=>p.projection!=null && !p.out).sort((a,b)=>b.projection-a.projection);
-  let best=null;
-  function walk(i, used, picked, total) {
-    if (i===slots.length) {
-      if (!best || total>best.total) best={total,picked:[...picked]};
-      return;
-    }
-    const slot=slots[i];
-    const candidates=usable.filter(p=>!used.has(p.pid) && eligibility(slot,p.slot));
-    if (!candidates.length) { walk(i+1,used,[...picked,{slot,player:null}],total); return; }
-    for (const p of candidates.slice(0,12)) {
-      used.add(p.pid); picked.push({slot,player:p});
-      walk(i+1,used,picked,total+p.projection);
-      picked.pop(); used.delete(p.pid);
-    }
-  }
-  walk(0,new Set(),[],0);
-  return best || {total:0,picked:[]};
+  // Additive point projections do not need a combinatorial search here.
+  // Fill required positions first, then flexible slots from most restrictive
+  // to least restrictive. This avoids an exponential DFS on deep dynasty
+  // rosters while still preserving the scarce exact-position starters.
+  const pool=players.filter(p=>p.projection!=null && !p.out).sort((a,b)=>b.projection-a.projection);
+  const used=new Set();
+  const assigned=slots.map((slot,index)=>({slot,index,player:null}));
+  const take=(entry)=>{
+    const p=pool.find(x=>!used.has(x.pid) && eligibility(entry.slot,x.slot));
+    if(p){ entry.player=p; used.add(p.pid); }
+  };
+  const flexible=new Set(["REC_FLEX","FLEX","SUPER_FLEX"]);
+  assigned.filter(x=>!flexible.has(x.slot)).forEach(take);
+  for(const kind of ["REC_FLEX","FLEX","SUPER_FLEX"]) assigned.filter(x=>x.slot===kind).forEach(take);
+  assigned.sort((a,b)=>a.index-b.index);
+  return {
+    total:assigned.reduce((s,x)=>s+(x.player?.projection||0),0),
+    picked:assigned.map(({slot,player})=>({slot,player})),
+  };
 }
 
 function currentStarters(matchup, players, slots) {
