@@ -84,7 +84,8 @@ export default async req => {
       slot:x.slot,name:x.player.name,proj:x.player.projection,floor:x.player.floor,ceiling:x.player.ceiling,
       opp:x.player.opp,injury:x.player.injury,confidence:x.player.confidence,confidenceScore:x.player.confidenceScore,
       source:x.player.source,rangeSource:x.player.rangeSource,reasons:x.player.reasons,
-      coverageMatchup:x.player.signals?.coverageMatchup||null
+      coverageMatchup:x.player.signals?.coverageMatchup||null,
+      passRush:x.player.signals?.passRush||null
     }));
     const bench=(data.players||[])
       .filter(p=>!(data.current||[]).some(x=>x.player?.pid===p.pid))
@@ -92,14 +93,17 @@ export default async req => {
       .slice(0,12)
       .map(p=>({name:p.name,pos:p.slot,proj:p.projection,floor:p.floor,ceiling:p.ceiling,opp:p.opp,injury:p.injury,
         confidence:p.confidence,confidenceScore:p.confidenceScore,source:p.source,rangeSource:p.rangeSource,reasons:p.reasons,
-        coverageMatchup:p.signals?.coverageMatchup||null}));
+        coverageMatchup:p.signals?.coverageMatchup||null,
+        passRush:p.signals?.passRush||null}));
     const computed=(data.calls||[]).map(c=>({
       start:c.start?.name,sit:c.sit?.name,slot:c.slot,
       edge:c.edge,beatProbability:c.beatProbability,decisionConfidence:c.decisionConfidence,
       startProjection:c.start?.projection,startFloor:c.start?.floor,startCeiling:c.start?.ceiling,startSource:c.start?.source,
       startCoverage:c.start?.signals?.coverageMatchup||null,
+      startPassRush:c.start?.signals?.passRush||null,
       sitProjection:c.sit?.projection,sitFloor:c.sit?.floor,sitCeiling:c.sit?.ceiling,sitSource:c.sit?.source,
-      sitCoverage:c.sit?.signals?.coverageMatchup||null
+      sitCoverage:c.sit?.signals?.coverageMatchup||null,
+      sitPassRush:c.sit?.signals?.passRush||null
     }));
     const lockedBench=(data.lockedBench||[]).map(p=>({
       name:p.name,actual:p.actual,team:p.team,kickoffAt:p.kickoffAt
@@ -143,9 +147,10 @@ Rules:
 7. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
 8. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
 9. COVERAGE MATCHUP is an inferred likely assignment from current depth charts plus actual defender coverage results. Its assignmentConfidence is deliberately modest. Treat it as a tiebreaker unless current reporting explicitly confirms a shadow/slot assignment.
-10. Never claim a defender will shadow a receiver unless current reporting actually says so.
-11. Never claim you found news you did not actually find.
-12. Keep this brutally scannable.
+10. PASS RUSH is a small opponent pressure edge derived from actual defender pressure production and is already partially reflected in the projection. Do not double-count it.
+11. Never claim a defender will shadow a receiver unless current reporting actually says so.
+12. Never claim you found news you did not actually find.
+13. Keep this brutally scannable.
 
 Return ONLY valid JSON:
 {
