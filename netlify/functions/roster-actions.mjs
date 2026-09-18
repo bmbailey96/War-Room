@@ -7,6 +7,7 @@ import {
 import { getMyLeagues } from "./leagues.mjs";
 import lineup, { scoreSleeperProjection } from "./lineup.mjs";
 import { detectLeagueMode,validateActions } from "./lib/roster-v2.mjs";
+import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 
 async function j(url){
   const r=await fetch(url);
@@ -94,11 +95,22 @@ export default async req=>{
     if(!me)throw new Error("my roster missing");
     const mode=detectLeagueMode(league);
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const [proj,lineupData]=await Promise.all([
+    const [proj,lineupData,market]=await Promise.all([
       projectionMap(season,week,league,db),
       lineup(new Request(`${url.origin}/.netlify/functions/lineup?league=${encodeURIComponent(chosen.id)}`))
-        .then(r=>r.json()).catch(()=>null)
+        .then(r=>r.json()).catch(()=>null),
+      mode==="DYNASTY"?getDynastyMarket(s):Promise.resolve({players:{},picks:{},scrapeDate:null})
     ]);
+    const marketValue=name=>market.players?.[normName(name)]?.value??null;
+    const rankedTeams=[...snapshot.teams].sort((a,b)=>(b.wins-a.wins)||(b.pointsFor-a.pointsFor));
+    const tierOfOriginal=original=>{
+      const idx=rankedTeams.findIndex(t=>t.name===original);
+      if(idx<0)return "mid";
+      const third=Math.max(1,Math.ceil(rankedTeams.length/3));
+      if(idx<third)return "late";
+      if(idx>=rankedTeams.length-third)return "early";
+      return "mid";
+    };
 
     const rostered=new Set();
     for(const r of core.rosters)for(const pid of r.players||[])rostered.add(pid);
@@ -109,26 +121,35 @@ export default async req=>{
 
     let free=candidateIds.map(pid=>{
       const p=playerView(pid,db,proj),trend=trendById[pid]||0;
+      const mv=mode==="DYNASTY"?marketValue(p.name):null;
       const ageBonus=mode==="DYNASTY"&&p.age?Math.max(-5,Math.min(6,(27-p.age)*1.1)):0;
-      const score=(p.next3||0)*4+Math.log10(1+trend)*3+ageBonus;
-      return {...p,trending:trend,screenScore:round(score)};
+      const score=mode==="DYNASTY"
+        ? (mv??0)*.7+(p.next3||0)*1.25+Math.log10(1+trend)*3+ageBonus
+        : (p.next3||0)*4+Math.log10(1+trend)*3;
+      return {...p,market:mv,trending:trend,screenScore:round(score)};
     }).filter(p=>p.name&&p.team&&!hardInjured(p.injury))
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,24);
 
     const myRoster=me.players.map(p=>({
-      ...p,next3:proj[p.pid]?.avg??0,weeks:proj[p.pid]?.weeks||{}
+      ...p,next3:proj[p.pid]?.avg??0,weeks:proj[p.pid]?.weeks||{},
+      market:mode==="DYNASTY"?marketValue(p.name):null
     }));
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
     const drops=myRoster.filter(p=>!starterSet.has(p.name)&&!p.onIR)
-      .sort((a,b)=>(a.next3||0)-(b.next3||0)).slice(0,10);
+      .map(p=>({...p,dropScore:mode==="DYNASTY"?(p.market??0)*.75+(p.next3||0)*1.5:(p.next3||0)}))
+      .sort((a,b)=>a.dropScore-b.dropScore).slice(0,10);
 
+    const enrichPick=p=>{
+      const tier=tierOfOriginal(p.original);
+      return {name:pickLabel(p),type:"pick",season:p.season,round:p.round,tier,value:pickValue(p,market,tier)};
+    };
     const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>({
       name:t.name,record:`${t.wins}-${t.losses}`,stance:t.stance,
       holes:t.holes,surplus:t.surplus,
-      players:t.players.map(p=>({...p,next3:proj[p.pid]?.avg??0})),
-      picks:mode==="DYNASTY"?t.picks.map(p=>({name:pickLabel(p),type:"pick"})):[]
+      players:t.players.map(p=>({...p,next3:proj[p.pid]?.avg??0,market:mode==="DYNASTY"?marketValue(p.name):null})),
+      picks:mode==="DYNASTY"?t.picks.map(enrichPick):[]
     }));
-    const myPicks=mode==="DYNASTY"?me.picks.map(p=>({name:pickLabel(p),type:"pick"})):[];
+    const myPicks=mode==="DYNASTY"?me.picks.map(enrichPick):[];
     const myNames=new Set(myRoster.map(p=>normName(p.name)));
     const freeNames=new Set(free.map(p=>normName(p.name)));
     const teamPlayers=Object.fromEntries(otherTeams.map(t=>[t.name,new Set(t.players.map(p=>normName(p.name)))]));
@@ -141,7 +162,7 @@ export default async req=>{
     }));
 
     const modeRules=mode==="DYNASTY"
-      ? `This is DYNASTY. Balance title odds with franchise value. Research current dynasty market values before suggesting trades. Age and future picks matter. Protect projected-early 1sts and do not spend a first for a marginal weekly gain. Trades must make sense for the other manager too.`
+      ? `This is DYNASTY. Balance title odds with franchise value. The market values attached below are a deterministic current anchor dated ${market.scrapeDate||"recently"}; live reporting may justify modest deviation but not invented value. Age and future picks matter. Protect projected-early 1sts and do not spend a first for a marginal weekly gain. Trades must make sense for the other manager too.`
       : `This is REDRAFT / the fun league. Ignore future asset value and draft picks. Maximize this season: near-term points, injury insurance, role growth, and consolidating bench depth into better starters.`;
 
     const prompt=`You are War Room's roster-management engine. The lineup engine is separate. Recommend only moves that can materially improve my team.
@@ -226,6 +247,7 @@ Return ONLY valid JSON:
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
         myPicks,
+        marketDate:market.scrapeDate||null,
       },
       error
     };
