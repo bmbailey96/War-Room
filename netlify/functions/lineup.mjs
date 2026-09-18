@@ -250,6 +250,7 @@ export default async req => {
       stateStore.get(`reasoning_${chosen.id}`,{type:"json"}).catch(()=>null),
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
+    const positionScale=learnedModel?.positionScale||{};
     const [matchups,currentCsv,priorCsv,gamesCsv,sleeperProj] = await Promise.all([
       j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${week}`).catch(()=>[]),
       text(`${NV}/stats_player/stats_player_week_${season}.csv`),
@@ -325,18 +326,25 @@ export default async req => {
       const hist=[...p,...c];
       const currentMean=weightedMean(c,r=>fantasyPoints(r,league.scoring_settings||{},slot));
       const priorMean=weightedMean(p,r=>fantasyPoints(r,league.scoring_settings||{},slot));
-      let base=null;
-      if(c.length>=3) base=(currentMean*0.72)+(priorMean!=null?priorMean*0.28:currentMean*0.28);
-      else if(c.length===2) base=(currentMean*0.58)+(priorMean!=null?priorMean*0.42:currentMean*0.42);
-      else if(c.length===1) base=(currentMean*0.38)+(priorMean!=null?priorMean*0.62:currentMean*0.62);
-      else if(priorMean!=null) base=priorMean;
+      let rawBase=null;
+      if(c.length>=3) rawBase=(currentMean*0.72)+(priorMean!=null?priorMean*0.28:currentMean*0.28);
+      else if(c.length===2) rawBase=(currentMean*0.58)+(priorMean!=null?priorMean*0.42:currentMean*0.42);
+      else if(c.length===1) rawBase=(currentMean*0.38)+(priorMean!=null?priorMean*0.62:currentMean*0.62);
+      else if(priorMean!=null) rawBase=priorMean;
 
       const sp=sleeperById[pid], sleeper=scoreSleeperProjection(sp?.stats,league.scoring_settings||{});
       let fallback=false;
+      let base=rawBase;
       if(base==null || !["QB","RB","WR","TE"].includes(slot)) {
         base=typeof sleeper==="number" ? sleeper : null; fallback=true;
+      } else {
+        base*=positionScale[slot]||1;
       }
       let projection=base, reasons=[];
+      const learnedPosScale=!fallback?(positionScale[slot]||1):1;
+      if(Math.abs(learnedPosScale-1)>=0.03) {
+        reasons.push(`${round((learnedPosScale-1)*100)}% learned ${slot} baseline calibration`);
+      }
       const game=gameByTeam[normTeam(info.team)];
       const opp=game?.opp || c.at(-1)?.opponent_team || sp?.opponent || null;
       const locked=!!game?.locked;
@@ -381,6 +389,7 @@ export default async req => {
       const sigma=sd(vals) ?? (projection!=null?projection*0.5:null);
       return {
         pid,name:info.name,slot,eligibleSlots:info.fps||[],team:info.team,injury:info.inj||null,opp:opp?normTeam(opp):null,
+        rawBase:rawBase==null?null:round(Math.max(0,rawBase)),
         base:base==null?null:round(Math.max(0,base)),signals,
         projection:projection==null?null:round(Math.max(0,projection)),
         floor:projection==null?null:round(Math.max(0,projection-(sigma||0)*0.75)),
@@ -425,7 +434,7 @@ export default async req => {
     for(const p of rosterPlayers){
       if(p.locked) continue;
       byPid[p.pid]={
-        pid:p.pid,name:p.name,slot:p.slot,team:p.team,base:p.base,projection:p.projection,
+        pid:p.pid,name:p.name,slot:p.slot,team:p.team,rawBase:p.rawBase,base:p.base,projection:p.projection,
         signals:p.signals,fallback:p.fallback,injury:p.injury,confidence:p.confidence,
         savedAt:Date.now(),kickoffAt:p.kickoffAt,
       };
@@ -439,7 +448,7 @@ export default async req => {
       leagues,week,opponent,
       sourceNote:"QB/RB/WR/TE use actual nflverse weekly production and workload plus matchup/game context. Sleeper is comparison/fallback only. K/DEF/IDP currently use fallback.",
       model:{
-        weights:model,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
+        weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
       },
       currentTotal:round(currentTotal),
