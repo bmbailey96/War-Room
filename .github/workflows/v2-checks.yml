@@ -6,6 +6,9 @@ on:
     branches:
       - main
       - "cleanup/**"
+      - "enhance/**"
+      - "hotfix/**"
+      - "fix/**"
 
 jobs:
   test:
