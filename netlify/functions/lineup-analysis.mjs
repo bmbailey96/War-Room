@@ -156,7 +156,7 @@ Rules:
 6. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
 7. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
 8. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
-9. COVERAGE MATCHUP is an inferred likely assignment from current depth charts plus actual defender coverage results. Its assignmentConfidence is deliberately modest. Treat it as a tiebreaker unless current reporting explicitly confirms a shadow/slot assignment.
+9. COVERAGE MATCHUP is an inferred likely assignment from current depth metadata plus actual defender coverage results. Respect assignmentConfidence and the APPLIED/INFO gate. Never turn it into a claimed shadow assignment unless current reporting explicitly confirms one.
 10. MATCHUP EXPOSURE scales team/coverage matchup effects by actual target or workload ownership. A low-volume player should not receive the same boost from a soft defense as an alpha player.
 11. PASS RUSH is a small opponent pressure edge derived from actual defender pressure production and is already partially reflected in the projection. Do not double-count it.
 12. Never claim a defender will shadow a receiver unless current reporting actually says so.
