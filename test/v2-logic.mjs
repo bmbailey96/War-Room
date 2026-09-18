@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue
+  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize
 } from "../netlify/functions/lineup.mjs";
 import {
   mergeProjectionSnapshot, mergeReasoningSnapshot
@@ -18,10 +18,28 @@ assert.equal(eligibility("LB",idp),true);
 const superFlex={slot:"QB",eligibleSlots:["QB"]};
 assert.equal(eligibility("SUPER_FLEX",superFlex),true);
 
+const exactLineup=optimize([
+  {pid:"multi",slot:"WR",eligibleSlots:["WR","TE"],projection:20,locked:false,out:false},
+  {pid:"wr",slot:"WR",eligibleSlots:["WR"],projection:19,locked:false,out:false},
+  {pid:"te",slot:"TE",eligibleSlots:["TE"],projection:1,locked:false,out:false},
+],["WR","TE"],[]);
+assert.equal(exactLineup.total,39);
+assert.equal(exactLineup.picked.find(x=>x.slot==="WR").player.pid,"wr");
+assert.equal(exactLineup.picked.find(x=>x.slot==="TE").player.pid,"multi");
+
+const lockedLineup=optimize([
+  {pid:"locked",slot:"TE",eligibleSlots:["TE"],projection:6,actual:17.2,completed:true,locked:true,out:false},
+  {pid:"bench",slot:"TE",eligibleSlots:["TE"],projection:20,locked:false,out:false},
+],[ "TE" ],[{slot:"TE",player:{pid:"locked",slot:"TE",eligibleSlots:["TE"],projection:6,actual:17.2,completed:true,locked:true,out:false}}]);
+assert.equal(lockedLineup.picked[0].player.pid,"locked");
+assert.equal(lockedLineup.total,17.2);
+
 const kickoff=easternKickoffMs("2026-09-17","20:15");
 assert.equal(new Date(kickoff).toISOString(),"2026-09-18T00:15:00.000Z");
 
-assert.equal(playerValue({locked:true,actual:23.4,projection:11.2}),23.4);
+assert.equal(playerValue({locked:true,completed:true,actual:23.4,projection:11.2}),23.4);
+assert.equal(playerValue({locked:true,completed:false,actual:3.4,projection:11.2}),11.2);
+assert.equal(playerValue({locked:true,completed:false,actual:23.4,projection:11.2}),23.4);
 assert.equal(playerValue({locked:false,actual:null,projection:11.2}),11.2);
 
 assert.equal(
