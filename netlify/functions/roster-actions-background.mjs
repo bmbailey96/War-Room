@@ -1,5 +1,5 @@
 import {
-  MY_USER_ID,fetchLeagueCore,computeSnapshot,normName
+  MY_USER_ID,fetchLeagueCore,computeSnapshot,normName,ownerHistory
 } from "./lib/ocho.mjs";
 import {
   getPlayersTrim,pInfo,slotPos,store,callClaude
@@ -306,15 +306,24 @@ export default async req=>{
       const tier=tierOfOriginal(p.original);
       return {name:pickLabel(p),type:"pick",season:p.season,round:p.round,tier,value:pickValue(p,market,tier)};
     };
-    const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>({
-      name:t.name,record:`${t.wins}-${t.losses}`,stance:t.stance,
-      holes:t.holes,surplus:t.surplus,
-      players:t.players.map(p=>({
-        ...enrichForecast(p),
-        market:mode==="DYNASTY"?marketValue(p.name):null
-      })),
-      picks:mode==="DYNASTY"?t.picks.map(enrichPick):[]
-    }));
+    const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>{
+      const hist=ownerHistory(t.ownerId);
+      return {
+        name:t.name,ownerId:t.ownerId,record:`${t.wins}-${t.losses}`,stance:t.stance,
+        holes:t.holes,surplus:t.surplus,
+        tradeProfile:{
+          careerTrades:Number(hist.trades_count||0),
+          acquired:hist.trade_positions_acquired||{},
+          lineupEfficiency:hist.lineup_efficiency_pct??null,
+          benchLeak:hist.avg_bench_leak_per_week??null,
+        },
+        players:t.players.map(p=>({
+          ...enrichForecast(p),
+          market:mode==="DYNASTY"?marketValue(p.name):null
+        })),
+        picks:mode==="DYNASTY"?t.picks.map(enrichPick):[]
+      };
+    });
     const myPicks=mode==="DYNASTY"?me.picks.map(enrichPick):[];
     const myNames=new Set(myRoster.map(p=>normName(p.name)));
     const freeNames=new Set(free.map(p=>normName(p.name)));
@@ -442,7 +451,24 @@ export default async req=>{
         const fairnessPenalty=mode==="DYNASTY"&&receiveValue!=null
           ? Math.abs(receiveValue-sendValue)*.18
           : Math.abs(Math.min(0,partnerWeeklyDelta))*1.2;
-        const score=weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty;
+
+        // Manager realism: prefer packages that resemble what this owner has
+        // actually acquired historically. This is a soft ranking factor, not
+        // permission to show an unfair trade.
+        const profile=partner.tradeProfile||{};
+        const careerTrades=Number(profile.careerTrades||0);
+        const openness=Math.min(1.18,.88+Math.log10(1+careerTrades)*.11);
+        const sentPositions=sentPlayers.map(p=>p.pos).filter(Boolean);
+        const histAcquired=profile.acquired||{};
+        const positionTaste=sentPositions.length
+          ? sentPositions.reduce((s,pos)=>s+Math.log1p(Number(histAcquired[pos]||0)),0)/sentPositions.length
+          : 0;
+        const hasPick=combo.some(x=>x.type==="pick");
+        const stanceFit=hasPick
+          ? (/rebuild|retool/i.test(partner.stance||"")?1.4:/win-now|ascending/i.test(partner.stance||"")?-.6:0)
+          : (/win-now|ascending/i.test(partner.stance||"")?.7:0);
+        const managerFit=positionTaste*.8+stanceFit;
+        const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+managerFit;
         if(!best||score>best.score){
           best={
             score,partner:target.partner,target:target.name,
@@ -451,13 +477,15 @@ export default async req=>{
             sendValue:mode==="DYNASTY"?round(sendValue):null,
             receiveValue:mode==="DYNASTY"&&receiveValue!=null?round(receiveValue):null,
             marketDelta,
+            managerFit:round(managerFit),
+            partnerCareerTrades:careerTrades,
           };
         }
       }
       if(best){
         best.confidence=best.weeklyDelta>=2&&best.partnerWeeklyDelta>=-1?"HIGH":"MEDIUM";
         best.why=mode==="DYNASTY"
-          ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, with market ${best.sendValue} → ${best.receiveValue}.`
+          ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical trade behavior.`
           : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup and ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs.`;
         deterministicTrades.push(best);
       }
@@ -649,6 +677,7 @@ Return ONLY valid JSON:
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         forecastModel:"provider + recent league-scored production + workload trend",
+        tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
       },
       reasoningMode:error?"deterministic":"live_news",
       reasoningAvailable:!error,
