@@ -13,6 +13,53 @@ function parseJson(text) {
   try { return JSON.parse(s.slice(a,b+1)); } catch(e) { return null; }
 }
 
+export function deterministicAnalysis(data) {
+  const calls=(data.calls||[]).map(c=>{
+    const edge=c.edge==null?null:Number(c.edge);
+    const prob=c.beatProbability==null?null:Number(c.beatProbability);
+    const start=c.start?.name||"";
+    const sit=c.sit?.name||null;
+    const confidence=c.decisionConfidence||c.start?.confidence||"MEDIUM";
+    const bits=[];
+    if(edge!=null)bits.push(`${edge>=0?"+":""}${edge.toFixed(1)} projected-point edge`);
+    if(prob!=null)bits.push(`${Math.round(prob)}% better-outlook estimate`);
+    if(c.start?.injury)bits.push(`${start} is listed ${c.start.injury}`);
+    return {
+      start,sit,slot:c.slot,
+      verdict:"START",
+      confidence,
+      why:bits.length
+        ? `${bits.join("; ")}. No live-news override was applied.`
+        : "Best legal lineup from the deterministic engine. No live-news override was applied.",
+      sourceDate:null,
+      drivers:["projection_only"],
+    };
+  });
+
+  const watch=[];
+  const seen=new Set();
+  for(const p of data.players||[]){
+    const status=String(p.injury||"");
+    if(!status || !/question|doubt|out|ir|pup|sus/i.test(status))continue;
+    const key=(p.name||"").toLowerCase();
+    if(seen.has(key))continue;
+    seen.add(key);
+    const practice=p.practiceStatus?` // ${p.practiceStatus}`:"";
+    watch.push(`${p.name}: ${status}${practice}`);
+    if(watch.length>=3)break;
+  }
+
+  const top=calls[0];
+  return {
+    summary:top
+      ? `Start ${top.start}${top.sit?` over ${top.sit}`:""}.`
+      : "Keep the lineup as it is.",
+    confidence:top?.confidence||"MEDIUM",
+    calls,
+    watch,
+  };
+}
+
 export default async req => {
   try {
     const baseResponse=await lineup(req);
@@ -104,16 +151,34 @@ Return ONLY valid JSON:
   "watch":["up to 3 short things to check before kickoff"]
 }`;
 
-    const raw=await callClaude(prompt,{maxTokens:1500,useSearch:true});
-    const analysis=parseJson(raw);
-    if(!analysis) throw new Error("lineup reasoning returned invalid JSON");
+    let analysis=null,reasoningMode="live_news",reasoningError=null;
+    try {
+      const raw=await callClaude(prompt,{maxTokens:1500,useSearch:true});
+      analysis=parseJson(raw);
+      if(!analysis) throw new Error("lineup reasoning returned invalid JSON");
+    } catch (err) {
+      reasoningMode="deterministic";
+      reasoningError=err?.message||String(err);
+      analysis=deterministicAnalysis(data);
+    }
+
     const now=Date.now();
     const priorHistory=Array.isArray(cached?.history)
       ? cached.history
       : (cached?.analysis ? [{at:cached.at,analysis:cached.analysis}] : []);
-    const history=[...priorHistory,{at:now,analysis}].slice(-30);
-    const saved={at:now,leagueId:data.league.id,week:data.week,analysis,history};
-    await stateStore.setJSON(cacheKey,saved);
+
+    // Only grade/store true live-news judgments. Deterministic fallback is
+    // already represented by the projection engine and should not masquerade
+    // as an independent reasoning sample.
+    const history=reasoningMode==="live_news"
+      ? [...priorHistory,{at:now,analysis}].slice(-30)
+      : priorHistory;
+    const saved={
+      at:now,leagueId:data.league.id,week:data.week,analysis,history,
+      reasoningMode,reasoningAvailable:reasoningMode==="live_news",
+      reasoningError:reasoningMode==="live_news"?null:reasoningError,
+    };
+    if(reasoningMode==="live_news")await stateStore.setJSON(cacheKey,saved);
     return new Response(JSON.stringify({...saved,projection:data}),{
       headers:{"content-type":"application/json","cache-control":"no-store"}
     });
