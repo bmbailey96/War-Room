@@ -390,6 +390,13 @@ export default async req => {
       .filter(x=>x.player?.locked)
       .map(x=>({slot:x.slot,player:x.player}));
     const currentTotal=current.reduce((s,x)=>s+playerValue(x.player),0);
+    const opponentCurrent=currentStarters(oppMatch,opponentPlayers,slots);
+    const opponentOptimal=optimize(opponentPlayers,slots,opponentCurrent);
+    const opponentCurrentTotal=opponentCurrent.reduce((s,x)=>s+playerValue(x.player),0);
+    const mineLocked=current.filter(x=>x.player?.locked).reduce((s,x)=>s+(x.player.actual||0),0);
+    const oppLocked=opponentCurrent.filter(x=>x.player?.locked).reduce((s,x)=>s+(x.player.actual||0),0);
+    const projectedMargin=round(optimal.total-opponentOptimal.total);
+    const posture=projectedMargin>=8?"protect_floor":projectedMargin<=-8?"chase_ceiling":"neutral";
 
     // Keep the last pre-kickoff projection for each player. Tuesday's learner
     // grades these against actual league-scored points. Locked players are
@@ -418,6 +425,13 @@ export default async req => {
       currentTotal:round(currentTotal),
       optimalTotal:round(optimal.total),
       gain:round(optimal.total-currentTotal),
+      matchup:{
+        opponentCurrentTotal:round(opponentCurrentTotal),
+        opponentBestTotal:round(opponentOptimal.total),
+        projectedMargin,
+        posture,
+        lockedActual:{mine:round(mineLocked),opponent:round(oppLocked)},
+      },
       calls:changes,decision,
       lockedBench,lockedStarters,
       current,optimal:optimal.picked,players:rosterPlayers,
