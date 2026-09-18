@@ -4,5 +4,8 @@
   "type": "module",
   "dependencies": {
     "@netlify/blobs": "^8.1.0"
+  },
+  "scripts": {
+    "test": "node test/v2-logic.mjs"
   }
 }

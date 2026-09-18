@@ -147,4 +147,4 @@ export default async () => {
   }), { headers: { "content-type": "application/json" } });
 };
 
-export const config = { schedule: "15 * * * *" };
+// Legacy V1: intentionally unscheduled. Kept for manual reference/rollback.
