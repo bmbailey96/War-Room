@@ -205,7 +205,8 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
       faabPct:null,drivers:["consolidation",...(mode==="DYNASTY"?["market","pick_value"]:[])],
       weeklyDelta:t.weeklyDelta,partnerWeeklyDelta:t.partnerWeeklyDelta,
       sendValue:t.sendValue??null,receiveValue:t.receiveValue??null,
-      marketDelta:t.marketDelta??null,
+      marketDelta:t.marketDelta??null,managerFit:t.managerFit??null,
+      partnerCareerTrades:t.partnerCareerTrades??null,
     });
   }
   if(!actions.length){
