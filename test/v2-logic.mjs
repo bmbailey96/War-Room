@@ -233,3 +233,18 @@ assert.equal(typeof rosterRefreshModule.default,"function");
 assert.ok(rosterRefreshModule.config?.schedule);
 
 console.log("Scheduled core-only roster refresh import check passed");
+
+
+const stashFallback = deterministicRosterFallback({
+  mode:"REDRAFT",usesFaab:true,faabRemainingPct:100,
+  waivers:[{
+    add:"Breakout Backup",drop:"Dead Bench",weeklyDelta:0,depthDelta:2.4,
+    breakoutScore:4.2,stash:true,trending:250,addRoleRatio:1.18,addSource:"blended_form"
+  }],
+  trades:[]
+});
+assert.ok(stashFallback.actions[0].headline.startsWith("Stash "));
+assert.equal(stashFallback.actions[0].stash,true);
+assert.ok(stashFallback.actions[0].faabPct<=12);
+
+console.log("Bench stash fallback checks passed");
