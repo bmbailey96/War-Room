@@ -1,45 +1,80 @@
-# The Ocho War Room (v24: confidence, foresight, and a stress test)
+# War Room V2
 
-## Three things in this build
+War Room answers one question first: **what lineup can I still legally set that gives me the best chance this week?**
 
-1. CONFIDENCE AND SOURCING on the evaluator and chat
-   The trade evaluator now ends every verdict with a "HOW SURE I AM"
-   section: its confidence level and the biggest reason for it, what
-   specifically it based the call on (values as of their date, your
-   roster, age curve, scarcity), and the one piece of new info that
-   would flip the verdict, so you know what to watch. It also tells you
-   its data is from the daily value snapshot, not a live lookup, when
-   that matters.
-   The chat now closes real judgment calls with a one-line read:
-   "<confidence>, based on <main driver>; would change if <the thing
-   that flips it>." You can tell when it is sure and when it is
-   guessing.
+The old full War Room remains at `/legacy.html` for reference. It is not the source of truth for V2.
 
-2. THE DRAFT BRAIN NOW THINKS AHEAD
-   It computes how many picks until your next turn (correct snake-draft
-   math, verified for all 8 slots) and reasons about which positional
-   tiers will survive that gap. So instead of just "best guy now," it
-   tells you "take the RB now, the WR tier will still be there at your
-   next pick but the RB tier will not." That is real draft strategy.
-   Rookies with no listed age are now flagged as young/high-upside so
-   they are not undervalued.
+## V2 architecture
 
-3. STRESS TEST (dev only, not shipped in the app)
-   Before shipping, the whole in-season path was run against a
-   simulated live Sunday: an injured starter, the pregame pivot logic,
-   alert dedup, no-healthy-backup handling, tricky player-name
-   matching, the grading loop scoring a past call, and the draft
-   look-ahead math at every slot. 19 checks, all passing. The one
-   thing it surfaced (rookies not flagged as young) is fixed above.
-   This is why it now handles a real game week without surprises.
+- `netlify/functions/lineup.mjs` builds league-specific projections and the mathematically best legal lineup.
+- `lineup-analysis.mjs` is the live-news judgment layer. It may override a close numerical call only for concrete current evidence.
+- `lineup-refresh.mjs` snapshots both leagues before games so learning happens even if the site is never opened.
+- `learn.mjs` grades completed weeks every Tuesday and updates each league independently.
+- V2 state lives only in the Netlify Blob store `war-room-v2`.
+- Legacy scheduled jobs are disabled.
 
-## The 8 tabs
+## Projection hierarchy
 
-The Call (pinned) / Roster / Rivals / Trades / Pickups / Draft /
-Standings / Data / Intel.
+For QB/RB/WR/TE the point estimate is built from actual nflverse production and role data, not from Sleeper's projection:
 
-## Deploy
+1. weighted recent production
+2. prior-season baseline when the current sample is small
+3. learned position calibration
+4. workload/role change, including WOPR and offensive snap share
+5. recent team pass/run scheme movement
+6. opponent allowance by position
+7. game scoring environment
+8. injury status
 
-Same as before. Env: ANTHROPIC_API_KEY (required), NTFY_TOPIC
-(optional). Seed once: snapshot, news, stats, values, memory,
-notify-test.
+Sleeper is retained as a visible fallback for thin/missing data and for positions V2 does not yet model well (K/DEF/IDP).
+
+All scoring is recalculated using the selected Sleeper league's own scoring settings.
+
+## Game locks
+
+NFL kickoff is a hard boundary.
+
+- A starter whose game has begun stays fixed in that slot.
+- A bench player whose game has begun is unavailable.
+- Locked players use actual league-scored points, not stale projections.
+- The UI surfaces locked bench points under **Already Happened** instead of recommending impossible moves.
+
+## Learning
+
+Learning is explicit, per league, and outcome-based.
+
+Every Tuesday the engine compares the last genuinely pre-kickoff forecast with actual Sleeper points. It separately learns how much to trust:
+
+- role/workload
+- recent scheme movement
+- matchup
+- scoring environment
+- position-level baseline calibration
+
+The reasoning layer separately grades the drivers behind start/sit overrides:
+
+- injury
+- role
+- depth chart
+- scheme
+- weather
+- matchup
+- projection-only
+
+A later in-game refresh cannot rewrite history. The learner grades the last recommendation that existed before either player kicked off.
+
+Early samples are shrunk toward conservative defaults so one weird week cannot rewrite the model.
+
+## Interface
+
+The root page is deliberately small:
+
+- league selector
+- The Call
+- legal start/sit changes
+- already-locked results
+- best legal lineup
+- pre-kickoff watch items
+- a compact view of what the engine has learned
+
+The old multi-tab interface remains at `/legacy.html`.
