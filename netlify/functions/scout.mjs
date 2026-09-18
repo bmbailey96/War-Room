@@ -145,4 +145,4 @@ Empty array if nothing warrants action.`;
   }), { headers: { "content-type": "application/json" } });
 };
 
-export const config = { schedule: "25 * * * *" };
+// Legacy V1: intentionally unscheduled. Kept for manual reference/rollback.
