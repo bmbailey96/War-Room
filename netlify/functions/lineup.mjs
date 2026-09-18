@@ -152,6 +152,12 @@ function weightedMean(rows, getter) {
   return d ? n/d : null;
 }
 
+function matchupExposureFor(slot, share) {
+  if(share==null)return 1;
+  const benchmark={WR:.22,TE:.17,RB:.45,QB:1}[slot]||1;
+  return clamp(share/benchmark,.45,1.25);
+}
+
 function sd(values) {
   if (values.length < 2) return null;
   const m=avg(values); return Math.sqrt(avg(values.map(v=>(v-m)*(v-m))));
@@ -799,7 +805,7 @@ export default async req => {
         }
         const matchupExposure=opportunityShare==null
           ? 1
-          : clamp(opportunityShare/benchmark,.45,1.25);
+          : matchupExposureFor(slot,opportunityShare);
         signals.opportunityShare=opportunityShare==null?null:round(opportunityShare*100);
         signals.opportunityLabel=opportunityLabel;
         signals.matchupExposure=round(matchupExposure);
@@ -1007,4 +1013,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor };
