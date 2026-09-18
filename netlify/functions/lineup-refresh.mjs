@@ -29,4 +29,4 @@ export default async () => {
 // Several snapshots on game days. The projection log only overwrites players
 // whose games have not started, so each player's last saved state is naturally
 // the last pre-kickoff state rather than hindsight.
-export const config={schedule:"0 15,18,21 * * 0,1,4"};
+export const config={schedule:"30 15,16,19,22 * * 0,1,4"};
