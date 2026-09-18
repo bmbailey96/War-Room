@@ -14,9 +14,10 @@ function parseJson(text) {
 }
 
 export default async req => {
+  let data=null;
   try {
     const baseResponse=await lineup(req);
-    const data=await baseResponse.json();
+    data=await baseResponse.json();
     if(!baseResponse.ok || data.error) {
       return new Response(JSON.stringify(data),{status:baseResponse.status||502,headers:{"content-type":"application/json"}});
     }
@@ -25,7 +26,9 @@ export default async req => {
     const force=url.searchParams.get("refresh")==="1";
     const stateStore=store();
     const reasoningModel=await stateStore.get(`reasoning_${data.league.id}`,{type:"json"}).catch(()=>null);
-    const cacheKey=`analysis_${data.league.id}_${data.week}`;
+    // This cache is for the live UI only. The learner never reads it.
+    // Scheduled pregame freezes live in a separate immutable-ish snapshot.
+    const cacheKey=`live_analysis_${data.league.id}_${data.week}`;
     const cached=await stateStore.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force && cached && Date.now()-cached.at < 4*60*60*1000) {
       return new Response(JSON.stringify({...cached,projection:data}),{
@@ -102,6 +105,9 @@ Return ONLY valid JSON:
       headers:{"content-type":"application/json","cache-control":"no-store"}
     });
   } catch(e) {
-    return new Response(JSON.stringify({error:e.message}),{status:502,headers:{"content-type":"application/json"}});
+    return new Response(JSON.stringify({
+      error:e.message,
+      projection:data && !data.error ? data : null,
+    }),{status:502,headers:{"content-type":"application/json"}});
   }
 };
