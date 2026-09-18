@@ -453,6 +453,11 @@ function lineupChanges(current, optimal) {
   };
 }
 
+function hardUnavailable(sleeperStatus="", officialStatus="") {
+  const combined=`${sleeperStatus||""} ${officialStatus||""}`.toLowerCase();
+  return /\b(out|ir|pup|sus|suspended|doubtful)\b/.test(combined);
+}
+
 function confidence(sample, injury, fallback) {
   if (fallback) return "LOW";
   if ((injury||"").toLowerCase().includes("question")) return "MEDIUM";
@@ -766,7 +771,7 @@ export default async req => {
       // "Doubtful" is functionally unavailable for lineup optimization. If a
       // player is upgraded later, the hourly Sleeper refresh / live injury
       // report will put him back into the candidate pool automatically.
-      const out=/\b(out|ir|pup|sus|suspended|doubtful)\b/.test(combinedStatus);
+      const out=hardUnavailable(sleeperInj,officialStatus);
       if(out){
         projection=0;
         reasons.push(`UNAVAILABLE: ${official?.status||info.inj||"injury designation"}`);
@@ -899,4 +904,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable };
