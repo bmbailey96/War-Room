@@ -1,4 +1,4 @@
-import { USERNAME, MY_USER_ID } from "./lib/ocho.mjs";
+import { USERNAME, MY_USER_ID } from "./lib/war-v2.mjs";
 
 async function j(url) {
   const r = await fetch(url);
