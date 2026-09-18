@@ -661,8 +661,13 @@ Return ONLY valid JSON:
         }),activeSlots);
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
+        const depthDelta=round(marginal(add)-marginal(drop));
+        const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
+        const trendSignal=Math.log10(1+Number(add?.trending||0));
+        const breakoutScore=round(roleSurge*10+trendSignal);
+        const stash=weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
         return {
-          ...a,weeklyDelta,marketDelta,
+          ...a,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
@@ -708,7 +713,9 @@ Return ONLY valid JSON:
     }).filter(a=>{
       if(a.invalidMath)return false;
       if(["ADD","WAIVER","ADD_DROP"].includes(a.type)){
-        return (a.weeklyDelta??0)>.15 || (mode==="DYNASTY"&&(a.marketDelta??0)>=6);
+        return (a.weeklyDelta??0)>.15 ||
+          (mode==="DYNASTY"&&(a.marketDelta??0)>=6) ||
+          (mode==="REDRAFT"&&a.stash&&(a.depthDelta??0)>=1.5);
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
         if(mode==="DYNASTY"&&a.sendValue!=null&&a.receiveValue!=null){
@@ -739,6 +746,7 @@ Return ONLY valid JSON:
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         forecastModel:"provider + recent league-scored production + workload trend",
+        replacementByPos,
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
       },
       reasoningMode:(coreOnly||error)?"deterministic":"live_news",
