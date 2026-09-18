@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {
   eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
   projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable,
-  matchupExposureFor, lateSwapFlexMoves, buildLateSwapContingencies
+  matchupExposureFor, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall
 } from "../netlify/functions/lineup.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
@@ -393,3 +393,29 @@ const noLockedFlex=lateSwapFlexMoves([
 assert.equal(noLockedFlex.length,0);
 
 console.log("Late-swap and flex-preservation checks passed");
+
+
+const tinyLean=classifyLineupCall({
+  start:{name:"A"},sit:{name:"B"},edge:.3,beatProbability:52,directLegal:true
+});
+assert.equal(tinyLean.actionable,false);
+assert.equal(tinyLean.strength,"LEAN");
+
+const realMove=classifyLineupCall({
+  start:{name:"A"},sit:{name:"B"},edge:1.1,beatProbability:57,directLegal:true
+});
+assert.equal(realMove.actionable,true);
+assert.equal(realMove.strength,"MOVE");
+
+const strongMove=classifyLineupCall({
+  start:{name:"A"},sit:{name:"B"},edge:2.1,beatProbability:65,directLegal:true
+});
+assert.equal(strongMove.strength,"STRONG");
+
+const forcedMove=classifyLineupCall({
+  start:{name:"Healthy"},sit:{name:"Unavailable",out:true},edge:.1,beatProbability:51,directLegal:true
+});
+assert.equal(forcedMove.actionable,true);
+assert.equal(forcedMove.strength,"FORCED");
+
+console.log("Actionable-vs-lean lineup threshold checks passed");

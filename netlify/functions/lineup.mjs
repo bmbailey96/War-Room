@@ -217,6 +217,32 @@ function probabilityBetter(a,b) {
   return clamp(normalCdf((a.projection-b.projection)/sigma),.01,.99);
 }
 
+function classifyLineupCall({start,sit,edge=null,beatProbability=null,directLegal=true}={}) {
+  if(!start)return {actionable:false,strength:"NONE",reason:"no candidate"};
+  if(!sit)return {
+    actionable:true,strength:"MOVE",
+    reason:directLegal?"open-slot improvement":"legal lineup shift"
+  };
+
+  const sitUnavailable=!!sit.out || sit.availability==="UNAVAILABLE" ||
+    /\b(out|ir|pup|sus|suspended|doubtful)\b/i.test(String(sit.injury||""));
+  if(sitUnavailable)return {actionable:true,strength:"FORCED",reason:"current starter unavailable"};
+
+  const e=Number(edge);
+  const p=Number(beatProbability);
+  const hasEdge=Number.isFinite(e),hasProb=Number.isFinite(p);
+  if((hasEdge&&e>=1.5)||(hasProb&&p>=62)){
+    return {actionable:true,strength:"STRONG",reason:"clear model edge"};
+  }
+  if((hasEdge&&e>=.75)&&(hasProb?p>=54:true)){
+    return {actionable:true,strength:"MOVE",reason:"meaningful model edge"};
+  }
+  if(hasProb&&p>=58){
+    return {actionable:true,strength:"MOVE",reason:"uncertainty-adjusted edge"};
+  }
+  return {actionable:false,strength:"LEAN",reason:"difference is within model noise"};
+}
+
 function confidenceGrade(score) {
   if(score>=75)return "HIGH";
   if(score>=55)return "MEDIUM";
@@ -1022,18 +1048,26 @@ export default async req => {
       const edge=call.sit && call.start?.projection!=null && call.sit?.projection!=null
         ? round(call.start.projection-call.sit.projection)
         : null;
+      const beatProbability=probability==null?null:Math.round(probability*100);
       const decisionScore=probability==null
         ? (call.start?.confidenceScore||50)
-        : Math.round(probability*100);
+        : beatProbability;
+      const action=classifyLineupCall({
+        ...call,edge,beatProbability
+      });
       return {
         ...call,
-        edge,
-        beatProbability:probability==null?null:Math.round(probability*100),
+        edge,beatProbability,
         decisionScore,
         decisionConfidence:confidenceGrade(decisionScore),
+        actionable:action.actionable,
+        callStrength:action.strength,
+        actionReason:action.reason,
       };
     });
     decision.calls=changes;
+    decision.actionableCalls=changes.filter(x=>x.actionable);
+    decision.leans=changes.filter(x=>!x.actionable);
     const currentIds=new Set(current.map(x=>x.player?.pid).filter(Boolean));
     const lockedBench=rosterPlayers
       .filter(p=>p.locked && !currentIds.has(p.pid))
@@ -1098,7 +1132,10 @@ export default async req => {
         uncertainty:{mine:round(mySigma),opponent:round(opponentSigma)},
         lockedActual:{mine:round(mineLocked),opponent:round(oppLocked)},
       },
-      calls:changes,decision,
+      calls:changes,
+      actionableCalls:decision.actionableCalls,
+      leans:decision.leans,
+      decision,
       contingencies,flexMoves,
       lockedBench,lockedStarters,
       current,optimal:optimal.picked,players:rosterPlayers,
@@ -1108,4 +1145,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall };
