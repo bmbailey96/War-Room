@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import {
   eligibility, easternKickoffMs, scoreSleeperProjection, playerValue
 } from "../netlify/functions/lineup.mjs";
+import {
+  mergeProjectionSnapshot, mergeReasoningSnapshot
+} from "../netlify/functions/lib/freeze-v2.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
 assert.equal(eligibility("FLEX",flexPlayer),true);
@@ -36,5 +39,43 @@ assert.equal(
   ),
   26
 );
+
+const freezeData={
+  league:{id:"L1",season:2026},
+  week:2,
+  players:[
+    {pid:"1",name:"Open Player",slot:"WR",team:"A",projection:12,base:11,rawBase:10,signals:{roleRatio:1.1},locked:false},
+    {pid:"2",name:"Locked Player",slot:"TE",team:"B",projection:15,base:14,rawBase:13,signals:{},locked:true},
+    {pid:"3",name:"Another Open",slot:"RB",team:"C",projection:9,base:8,rawBase:8,signals:{},locked:false},
+  ],
+};
+const priorProjection={
+  players:{
+    "2":{pid:"2",name:"Locked Player",projection:8,savedAt:100},
+  },
+};
+const frozen=mergeProjectionSnapshot(freezeData,priorProjection,200);
+assert.equal(frozen.players["1"].projection,12);
+assert.equal(frozen.players["2"].projection,8);
+assert.equal(frozen.players["2"].savedAt,100);
+assert.equal(frozen.players["3"].savedAt,200);
+
+const firstReason=mergeReasoningSnapshot(freezeData,{
+  calls:[
+    {start:"Open Player",sit:"Another Open",slot:"FLEX",drivers:["role"]},
+    {start:"Open Player",sit:"Locked Player",slot:"FLEX",drivers:["injury"]},
+  ],
+},null,300);
+assert.equal(Object.keys(firstReason.calls).length,1);
+const key=Object.keys(firstReason.calls)[0];
+assert.equal(firstReason.calls[key].startPid,"1");
+assert.equal(firstReason.calls[key].sitPid,"3");
+
+const flipped=mergeReasoningSnapshot(freezeData,{
+  calls:[{start:"Another Open",sit:"Open Player",slot:"FLEX",drivers:["matchup"]}],
+},firstReason,400);
+assert.equal(Object.keys(flipped.calls).length,1);
+assert.equal(flipped.calls[key].startPid,"3");
+assert.deepEqual(flipped.calls[key].drivers,["matchup"]);
 
 console.log("War Room V2 logic checks passed");
