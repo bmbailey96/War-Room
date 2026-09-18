@@ -12,10 +12,15 @@ async function j(url) {
   if (!r.ok) throw new Error(`${url} -> ${r.status}`);
   return r.json();
 }
+const TEXT_CACHE=new Map();
 async function text(url) {
+  const cached=TEXT_CACHE.get(url);
+  if(cached && Date.now()-cached.at < 15*60*1000) return cached.value;
   const r = await fetch(url, { redirect: "follow" });
   if (!r.ok) return null;
-  return r.text();
+  const value=await r.text();
+  TEXT_CACHE.set(url,{at:Date.now(),value});
+  return value;
 }
 function splitLine(line) {
   const out=[]; let field="", q=false;
