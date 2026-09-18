@@ -5,7 +5,7 @@ import {
   getPlayersTrim,pInfo,slotPos,store,callClaude
 } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
-import lineup, { scoreSleeperProjection } from "./lineup.mjs";
+import lineup, { scoreSleeperProjection, optimize } from "./lineup.mjs";
 import { detectLeagueMode,validateActions } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 
@@ -57,10 +57,30 @@ async function projectionMap(season,week,league,db){
 function playerView(pid,db,proj){
   const p=pInfo(db,pid);
   return {
-    pid,name:p.name,pos:slotPos(p),team:p.team,age:p.age,injury:p.inj||null,
+    pid,name:p.name,pos:slotPos(p),eligibleSlots:p.fps||[],team:p.team,age:p.age,injury:p.inj||null,
     next3:proj[pid]?.avg??0,weeks:proj[pid]?.weeks||{}
   };
 }
+
+function simPlayer(p){
+  return {
+    pid:p.pid,name:p.name,slot:p.pos||p.slot||"UNK",
+    eligibleSlots:p.eligibleSlots||p.fps||[],
+    projection:Number(p.next3||0),out:hardInjured(p.injury),locked:false
+  };
+}
+function simTotal(players,slots){
+  return round(optimize(players.map(simPlayer),slots,[]).total||0);
+}
+function rosterAfter(roster,{removeNames=[],addPlayers=[]}={}){
+  const remove=new Set(removeNames.map(normName));
+  return [
+    ...roster.filter(p=>!remove.has(normName(p.name))),
+    ...addPlayers.filter(Boolean),
+  ];
+}
+function assetName(x){return x?.name||String(x||"");}
+
 function fallbackAction(free,drops){
   if(!free.length)return {summary:"No urgent roster move.",actions:[{type:"HOLD",priority:1,confidence:"LOW",headline:"Hold",why:"No available player cleared the deterministic screen."}],watch:[]};
   return {
@@ -131,7 +151,7 @@ export default async req=>{
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,24);
 
     const myRoster=me.players.map(p=>({
-      ...p,next3:proj[p.pid]?.avg??0,weeks:proj[p.pid]?.weeks||{},
+      ...p,eligibleSlots:p.fps||[],next3:proj[p.pid]?.avg??0,weeks:proj[p.pid]?.weeks||{},
       market:mode==="DYNASTY"?marketValue(p.name):null
     }));
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
@@ -146,7 +166,7 @@ export default async req=>{
     const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>({
       name:t.name,record:`${t.wins}-${t.losses}`,stance:t.stance,
       holes:t.holes,surplus:t.surplus,
-      players:t.players.map(p=>({...p,next3:proj[p.pid]?.avg??0,market:mode==="DYNASTY"?marketValue(p.name):null})),
+      players:t.players.map(p=>({...p,eligibleSlots:p.fps||[],next3:proj[p.pid]?.avg??0,market:mode==="DYNASTY"?marketValue(p.name):null})),
       picks:mode==="DYNASTY"?t.picks.map(enrichPick):[]
     }));
     const myPicks=mode==="DYNASTY"?me.picks.map(enrichPick):[];
@@ -155,6 +175,73 @@ export default async req=>{
     const teamPlayers=Object.fromEntries(otherTeams.map(t=>[t.name,new Set(t.players.map(p=>normName(p.name)))]));
     const teamPicks=Object.fromEntries(otherTeams.map(t=>[t.name,new Set(t.picks.map(p=>p.name))]));
     const myPickNames=new Set(myPicks.map(p=>p.name));
+
+    const activeSlots=(league.roster_positions||[]).filter(s=>!["BN","IR","TAXI"].includes(s));
+    const baselineRosterTotal=simTotal(myRoster,activeSlots);
+
+    const waiverPairs=[];
+    for(const add of free.slice(0,18)){
+      for(const drop of drops.slice(0,8)){
+        if(add.pid===drop.pid)continue;
+        const after=simTotal(rosterAfter(myRoster,{removeNames:[drop.name],addPlayers:[add]}),activeSlots);
+        const weeklyDelta=round(after-baselineRosterTotal);
+        const marketDelta=mode==="DYNASTY"&&add.market!=null&&drop.market!=null?add.market-drop.market:null;
+        const score=mode==="DYNASTY"
+          ? weeklyDelta*5+(marketDelta??0)*.35+(add.screenScore-drop.dropScore)*.08
+          : weeklyDelta*8+(add.next3-drop.next3)*1.5+Math.log10(1+add.trending)*2;
+        waiverPairs.push({
+          add:add.name,drop:drop.name,pos:add.pos,weeklyDelta,marketDelta,
+          score:round(score),addNext3:add.next3,dropNext3:drop.next3,
+          addMarket:add.market,dropMarket:drop.market,trending:add.trending
+        });
+      }
+    }
+    waiverPairs.sort((a,b)=>b.score-a.score);
+    const bestWaiverPairs=waiverPairs
+      .filter(x=>x.weeklyDelta>0 || (mode==="DYNASTY"&&(x.marketDelta??0)>=8))
+      .slice(0,12);
+
+    const tradeTargets=[];
+    for(const team of otherTeams){
+      for(const p of team.players){
+        if(hardInjured(p.injury))continue;
+        const after=simTotal(rosterAfter(myRoster,{addPlayers:[p]}),activeSlots);
+        const weeklyCeiling=round(after-baselineRosterTotal);
+        if(weeklyCeiling<=0.2 && mode!=="DYNASTY")continue;
+        tradeTargets.push({
+          partner:team.name,name:p.name,pos:p.pos,age:p.age,next3:p.next3,
+          market:p.market,weeklyCeiling,partnerHoles:team.holes,partnerSurplus:team.surplus
+        });
+      }
+    }
+    tradeTargets.sort((a,b)=>
+      mode==="DYNASTY"
+        ? ((b.weeklyCeiling*5+(b.market??0)*.15)-(a.weeklyCeiling*5+(a.market??0)*.15))
+        : b.weeklyCeiling-a.weeklyCeiling
+    );
+    const bestTradeTargets=tradeTargets.slice(0,24);
+
+    const rosterByName=new Map(myRoster.map(p=>[normName(p.name),p]));
+    const freeByName=new Map(free.map(p=>[normName(p.name),p]));
+    const teamByName=Object.fromEntries(otherTeams.map(t=>[t.name,t]));
+    const pickValueByName=new Map([
+      ...myPicks.map(p=>[p.name,p.value]),
+      ...otherTeams.flatMap(t=>t.picks.map(p=>[p.name,p.value]))
+    ]);
+    const playerAssetValue=name=>{
+      const k=normName(name);
+      const own=rosterByName.get(k)||freeByName.get(k);
+      if(own)return own.market??null;
+      for(const t of otherTeams){
+        const p=t.players.find(x=>normName(x.name)===k);
+        if(p)return p.market??null;
+      }
+      return null;
+    };
+    const dynastyAssetValue=x=>{
+      if(x?.type==="pick")return pickValueByName.get(assetName(x))??null;
+      return playerAssetValue(assetName(x));
+    };
 
     const lineupSummary=(lineupData?.optimal||[]).filter(x=>x.player).map(x=>({
       slot:x.slot,name:x.player.name,projection:x.player.projection,
@@ -183,8 +270,14 @@ ${JSON.stringify(myRoster,null,2)}
 MY MOST PLAUSIBLE DROPS:
 ${JSON.stringify(drops,null,2)}
 
+DETERMINISTIC ADD/DROP PAIRS, ordered by real best-lineup impact:
+${JSON.stringify(bestWaiverPairs,null,2)}
+
 ACTUALLY UNROSTERED CANDIDATES:
 ${JSON.stringify(free,null,2)}
+
+DETERMINISTIC TRADE TARGET SCREEN (weeklyCeiling = max three-week lineup gain before acquisition cost):
+${JSON.stringify(bestTradeTargets,null,2)}
 
 ${mode==="DYNASTY"?`MY ACTUAL PICKS (only these may be spent):
 ${JSON.stringify(myPicks,null,2)}`:""}
@@ -196,13 +289,17 @@ Use web search for current injury/practice news, depth-chart movement, snap/rout
 
 Hard rules:
 - A pickup must be from ACTUALLY UNROSTERED CANDIDATES.
+- Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
 - If an add needs a roster spot, give an exact drop from MY ROSTER.
 - A trade target must be on the named partner's roster.
 - I can only send assets I actually own.
 - In dynasty, only use the exact pick labels listed under MY ACTUAL PICKS.
 - In redraft, never use draft picks.
 - Give at most 5 actions, ordered by importance.
+- Prefer trade targets from the deterministic TRADE TARGET SCREEN.
 - For a trade, explain briefly why the other manager might accept.
+- In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
+- In redraft, the other manager also needs a credible weekly roster reason to accept.
 - Do not recommend lateral churn.
 - Do not recommend a player who is Out, IR, PUP, Suspended or Doubtful.
 
@@ -235,9 +332,66 @@ Return ONLY valid JSON:
     }catch(e){error=e.message;}
     if(!parsed)parsed=fallbackAction(free,drops);
 
-    const actions=validateActions(parsed.actions,{
+    let actions=validateActions(parsed.actions,{
       myNames,freeNames,teamPlayers,teamPicks,myPicks:myPickNames,dynasty:mode==="DYNASTY"
     });
+
+    actions=actions.map(a=>{
+      if(["ADD","WAIVER","ADD_DROP"].includes(a.type)){
+        const add=freeByName.get(normName(a.add?.name||""));
+        const drop=rosterByName.get(normName(a.drop?.name||""));
+        const after=simTotal(rosterAfter(myRoster,{
+          removeNames:drop?[drop.name]:[],addPlayers:add?[add]:[]
+        }),activeSlots);
+        const weeklyDelta=round(after-baselineRosterTotal);
+        const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
+        return {...a,weeklyDelta,marketDelta};
+      }
+      if(["TRADE_FOR","SELL"].includes(a.type)){
+        const partner=teamByName[a.partner];
+        if(!partner)return {...a,invalidMath:true};
+        const sentPlayers=(a.send||[]).filter(x=>x.type!=="pick")
+          .map(x=>rosterByName.get(normName(assetName(x)))).filter(Boolean);
+        const gotPlayers=(a.receive||[]).filter(x=>x.type!=="pick")
+          .map(x=>partner.players.find(p=>normName(p.name)===normName(assetName(x)))).filter(Boolean);
+        const myAfter=simTotal(rosterAfter(myRoster,{
+          removeNames:sentPlayers.map(p=>p.name),addPlayers:gotPlayers
+        }),activeSlots);
+        const partnerBase=simTotal(partner.players,activeSlots);
+        const partnerAfter=simTotal(rosterAfter(partner.players,{
+          removeNames:gotPlayers.map(p=>p.name),addPlayers:sentPlayers
+        }),activeSlots);
+        const weeklyDelta=round(myAfter-baselineRosterTotal);
+        const partnerWeeklyDelta=round(partnerAfter-partnerBase);
+        let sendValue=null,receiveValue=null,marketDelta=null;
+        if(mode==="DYNASTY"){
+          const sv=(a.send||[]).map(dynastyAssetValue);
+          const rv=(a.receive||[]).map(dynastyAssetValue);
+          if(sv.every(v=>v!=null)&&rv.every(v=>v!=null)){
+            sendValue=sv.reduce((x,y)=>x+y,0);
+            receiveValue=rv.reduce((x,y)=>x+y,0);
+            marketDelta=receiveValue-sendValue;
+          }
+        }
+        return {...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta};
+      }
+      return a;
+    }).filter(a=>{
+      if(a.invalidMath)return false;
+      if(["ADD","WAIVER","ADD_DROP"].includes(a.type)){
+        return (a.weeklyDelta??0)>.15 || (mode==="DYNASTY"&&(a.marketDelta??0)>=6);
+      }
+      if(["TRADE_FOR","SELL"].includes(a.type)){
+        if(mode==="DYNASTY"&&a.sendValue!=null&&a.receiveValue!=null){
+          const ratio=a.sendValue>0?a.receiveValue/a.sendValue:1;
+          if(ratio<.68||ratio>1.48)return false;
+          if((a.partnerWeeklyDelta??0)<-3 && ratio>1.15)return false;
+        }else if(mode!=="DYNASTY"&&(a.partnerWeeklyDelta??0)<-3.5){
+          return false;
+        }
+      }
+      return true;
+    }).slice(0,6);
     const result={
       at:Date.now(),league:{id:chosen.id,name:league.name,mode,week,season},
       summary:parsed.summary||actions[0]?.headline||"No urgent roster move.",
@@ -248,6 +402,9 @@ Return ONLY valid JSON:
         waiverPosition:me.waiverPosition??null,
         myPicks,
         marketDate:market.scrapeDate||null,
+        baselineNext3Lineup:baselineRosterTotal,
+        deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
+        deterministicTradeTargets:bestTradeTargets.slice(0,8),
       },
       error
     };
