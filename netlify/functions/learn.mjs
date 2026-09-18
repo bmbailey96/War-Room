@@ -6,7 +6,7 @@
 // It also grades the live-news reasoning layer by driver. This is not model
 // fine-tuning. It is an explicit, inspectable feedback loop stored per league.
 
-import { store, MY_USER_ID, normName } from "./lib/war-v2.mjs";
+import { store, MY_USER_ID } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
 const DEFAULT = { role:0.28, matchup:0.25, environment:0.35 };
@@ -123,9 +123,9 @@ export default async () => {
     const reasoningGrades=[];
 
     for(let week=1;week<currentWeek;week++){
-      const [log,analysis,matchups]=await Promise.all([
+      const [log,reasoningSnapshot,matchups]=await Promise.all([
         stateStore.get(`projection_${league.id}_${week}`,{type:"json"}).catch(()=>null),
-        stateStore.get(`analysis_${league.id}_${week}`,{type:"json"}).catch(()=>null),
+        stateStore.get(`reasoning_snapshot_${league.id}_${week}`,{type:"json"}).catch(()=>null),
         j(`https://api.sleeper.app/v1/league/${league.id}/matchups/${week}`),
       ]);
       const row=(matchups||[]).find(m=>m.roster_id===mine.roster_id);
@@ -147,21 +147,17 @@ export default async () => {
         }
       }
 
-      if(analysis?.analysis?.calls?.length && log?.players){
-        const byName={};
-        for(const p of Object.values(log.players)) byName[normName(p.name)]=p;
-        for(const call of analysis.analysis.calls){
-          if(!call.start || !call.sit) continue;
-          const a=byName[normName(call.start)], b=byName[normName(call.sit)];
-          if(!a || !b) continue;
-          const aPts=actualByPid[a.pid], bPts=actualByPid[b.pid];
+      if(reasoningSnapshot?.calls){
+        for(const call of Object.values(reasoningSnapshot.calls)){
+          if(!call.startPid || !call.sitPid) continue;
+          const aPts=actualByPid[call.startPid], bPts=actualByPid[call.sitPid];
           if(typeof aPts!=="number" || typeof bPts!=="number") continue;
           const hit=aPts>bPts;
           const drivers=Array.isArray(call.drivers)&&call.drivers.length?call.drivers:["other"];
           drivers.forEach(d=>addDriverStat(driverStats,d,hit));
           reasoningGrades.push({
             week,start:call.start,sit:call.sit,startPts:aPts,sitPts:bPts,hit,
-            verdict:call.verdict||null,drivers,
+            verdict:call.verdict||null,drivers,frozenAt:call.frozenAt||null,
           });
         }
       }
