@@ -175,7 +175,7 @@ function projectionRange(projection, values, pos) {
     const histSd=sd(vals);
     const sigma=histSd!=null ? Math.max(1,histSd*scale) : Math.max(1,projection*(POS_CV[pos]||.5));
     return {
-      floor:round(Math.max(0,(q20??0)*scale)),
+      floor:round(Math.min(projection,Math.max(0,(q20??0)*scale))),
       ceiling:round(Math.max(projection,(q80??projection)*scale)),
       sigma:round(sigma),
       volatility:round(sigma/Math.max(1,projection)),
