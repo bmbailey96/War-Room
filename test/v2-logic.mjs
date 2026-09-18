@@ -5,6 +5,7 @@ import {
 import {
   mergeProjectionSnapshot, mergeReasoningSnapshot
 } from "../netlify/functions/lib/freeze-v2.mjs";
+import { isReasoningWindow } from "../netlify/functions/lineup-refresh.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
 assert.equal(eligibility("FLEX",flexPlayer),true);
@@ -77,5 +78,10 @@ const flipped=mergeReasoningSnapshot(freezeData,{
 assert.equal(Object.keys(flipped.calls).length,1);
 assert.equal(flipped.calls[key].startPid,"3");
 assert.deepEqual(flipped.calls[key].drivers,["matchup"]);
+
+const now=Date.parse("2026-09-19T12:00:00Z");
+assert.equal(isReasoningWindow({players:[{locked:false,kickoffAt:"2026-09-19T15:00:00Z"}]},now),true);
+assert.equal(isReasoningWindow({players:[{locked:false,kickoffAt:"2026-09-20T12:00:00Z"}]},now),false);
+assert.equal(isReasoningWindow({players:[{locked:true,kickoffAt:"2026-09-19T13:00:00Z"}]},now),false);
 
 console.log("War Room V2 logic checks passed");
