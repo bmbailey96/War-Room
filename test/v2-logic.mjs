@@ -419,3 +419,28 @@ assert.equal(forcedMove.actionable,true);
 assert.equal(forcedMove.strength,"FORCED");
 
 console.log("Actionable-vs-lean lineup threshold checks passed");
+
+
+const { fitMicroScale } = await import("../netlify/functions/learn.mjs");
+
+const badCoverageSamples=Array.from({length:12},(_,i)=>({
+  week:i+1,slot:"WR",base:10,actual:10,
+  signals:{
+    roleRatio:1,matchupRatio:1,environmentRatio:1,schemeRatio:1,
+    coverageMatchup:{rawMultiplier:1.05}
+  }
+}));
+const badCoverageFit=fitMicroScale(badCoverageSamples,"coverage",{
+  role:.28,matchup:.25,environment:.35,scheme:.22,coverage:1,passRush:1
+});
+assert.ok(badCoverageFit.scale<1);
+assert.ok(badCoverageFit.scale>.5);
+assert.equal(badCoverageFit.n,12);
+
+const tooFewMicro=fitMicroScale(badCoverageSamples.slice(0,4),"coverage",{
+  role:.28,matchup:.25,environment:.35,scheme:.22,coverage:1,passRush:1
+});
+assert.equal(tooFewMicro.scale,1);
+assert.equal(tooFewMicro.alpha,0);
+
+console.log("Micro-matchup self-calibration checks passed");

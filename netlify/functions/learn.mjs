@@ -9,22 +9,29 @@
 import { store, MY_USER_ID, normName } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
-const DEFAULT = { role:0.28, matchup:0.25, environment:0.35, scheme:0.22 };
+const DEFAULT = { role:0.28, matchup:0.25, environment:0.35, scheme:0.22, coverage:1, passRush:1 };
 const DRIVER_KEYS = ["injury","role","depth_chart","scheme","weather","matchup","projection_only","other"];
 
 async function j(url) {
   try { const r=await fetch(url); return r.ok ? r.json() : null; }
   catch(e){ return null; }
 }
+const signalRawMultiplier=(s,key)=>{
+  if(key==="coverage")return s.signals?.coverageMatchup?.rawMultiplier ?? 1;
+  if(key==="passRush")return s.signals?.passRush?.rawMultiplier ?? 1;
+  return 1;
+};
 const mae=(samples,w)=> {
   if(!samples.length) return null;
   let total=0;
   for(const s of samples){
     let p=s.base;
-    p*=1+w.role*((s.signals?.roleRatio||1)-1);
-    p*=1+w.matchup*((s.signals?.matchupRatio||1)-1);
-    p*=1+w.environment*((s.signals?.environmentRatio||1)-1);
-    p*=1+w.scheme*((s.signals?.schemeRatio||1)-1);
+    p*=1+(w.role??DEFAULT.role)*((s.signals?.roleRatio||1)-1);
+    p*=1+(w.matchup??DEFAULT.matchup)*((s.signals?.matchupRatio||1)-1);
+    p*=1+(w.environment??DEFAULT.environment)*((s.signals?.environmentRatio||1)-1);
+    p*=1+(w.scheme??DEFAULT.scheme)*((s.signals?.schemeRatio||1)-1);
+    p*=1+(w.coverage??1)*(signalRawMultiplier(s,"coverage")-1);
+    p*=1+(w.passRush??1)*(signalRawMultiplier(s,"passRush")-1);
     total+=Math.abs(p-s.actual);
   }
   return total/samples.length;
@@ -56,6 +63,28 @@ function fitPositionScales(samples){
   return {scales,detail};
 }
 
+export function fitMicroScale(samples,key,baseWeights={...DEFAULT}) {
+  const rows=samples.filter(s=>{
+    const m=signalRawMultiplier(s,key);
+    return Number.isFinite(m) && Math.abs(m-1)>=0.004;
+  });
+  if(rows.length<6)return {scale:1,raw:1,alpha:0,n:rows.length,mae:rows.length?round2(mae(rows,{...baseWeights,[key]:1})):null};
+
+  let raw=1,bestErr=mae(rows,{...baseWeights,[key]:1})??Infinity;
+  for(let x=0;x<=1.5001;x+=0.1){
+    const scale=round2(x);
+    const err=mae(rows,{...baseWeights,[key]:scale});
+    if(err<bestErr){bestErr=err;raw=scale;}
+  }
+
+  // Micro-matchups are sparse and noisy. They earn trust more slowly than
+  // broad role/matchup signals and can never jump from 1.0 to an extreme
+  // weight from a small sample.
+  const alpha=Math.min(.6,rows.length/45);
+  const scale=round2(1+(raw-1)*alpha);
+  return {scale,raw,alpha:round2(alpha),n:rows.length,mae:round2(mae(rows,{...baseWeights,[key]:scale}))};
+}
+
 function fit(samples) {
   let best={...DEFAULT}, bestErr=mae(samples,DEFAULT) ?? Infinity;
   // Bounded grid. Negative weights are deliberately disallowed. If a signal
@@ -65,7 +94,10 @@ function fit(samples) {
     for(let matchup=0;matchup<=0.6001;matchup+=0.05){
       for(let environment=0;environment<=0.7001;environment+=0.05){
         for(let scheme=0;scheme<=0.5001;scheme+=0.10){
-          const w={role:round2(role),matchup:round2(matchup),environment:round2(environment),scheme:round2(scheme)};
+          const w={
+            role:round2(role),matchup:round2(matchup),environment:round2(environment),scheme:round2(scheme),
+            coverage:1,passRush:1
+          };
           const err=mae(samples,w);
           if(err<bestErr){best=w;bestErr=err;}
         }
@@ -75,17 +107,33 @@ function fit(samples) {
   // Do not let one week yank the engine around. At 20 samples only 25% of
   // the fitted move is admitted; trust grows toward 75% after ~60 samples.
   const alpha=Math.min(0.75, samples.length/80);
-  const weights={};
-  for(const k of Object.keys(DEFAULT)) weights[k]=round2(DEFAULT[k]*(1-alpha)+best[k]*alpha);
-  return {weights,rawFit:best,alpha:round2(alpha),mae:round2(mae(samples,weights)),defaultMae:round2(mae(samples,DEFAULT))};
+  const weights={
+    role:round2(DEFAULT.role*(1-alpha)+best.role*alpha),
+    matchup:round2(DEFAULT.matchup*(1-alpha)+best.matchup*alpha),
+    environment:round2(DEFAULT.environment*(1-alpha)+best.environment*alpha),
+    scheme:round2(DEFAULT.scheme*(1-alpha)+best.scheme*alpha),
+    coverage:1,passRush:1,
+  };
+
+  const coverageFit=fitMicroScale(samples,"coverage",weights);
+  weights.coverage=coverageFit.scale;
+  const passRushFit=fitMicroScale(samples,"passRush",weights);
+  weights.passRush=passRushFit.scale;
+
+  return {
+    weights,rawFit:best,alpha:round2(alpha),
+    microFit:{coverage:coverageFit,passRush:passRushFit},
+    mae:round2(mae(samples,weights)),defaultMae:round2(mae(samples,DEFAULT))
+  };
 }
 
 function signalReliability(samples,key){
   let n=0, hit=0;
   const ratioKey={role:"roleRatio",matchup:"matchupRatio",environment:"environmentRatio",scheme:"schemeRatio"}[key];
   for(const s of samples){
-    const ratio=s.signals?.[ratioKey] ?? 1;
-    if(Math.abs(ratio-1)<0.03) continue;
+    const ratio=ratioKey ? (s.signals?.[ratioKey]??1) : signalRawMultiplier(s,key);
+    const threshold=(key==="coverage"||key==="passRush") ? .004 : .03;
+    if(Math.abs(ratio-1)<threshold) continue;
     const residual=s.actual-s.base;
     if(Math.abs(residual)<1) continue;
     n++;
@@ -199,6 +247,10 @@ export default async () => {
     }));
     const fitResult=calibratedSamples.length>=8 ? fit(calibratedSamples) : {
       weights:{...DEFAULT},rawFit:null,alpha:0,
+      microFit:{
+        coverage:{scale:1,raw:1,alpha:0,n:0},
+        passRush:{scale:1,raw:1,alpha:0,n:0},
+      },
       mae:round2(mae(calibratedSamples,DEFAULT)||0),defaultMae:round2(mae(calibratedSamples,DEFAULT)||0),
     };
     const model={
@@ -207,11 +259,17 @@ export default async () => {
       positionScale:posFit.scales,positionDetail:posFit.detail,
       weights:fitResult.weights,rawFit:fitResult.rawFit,shrinkage:fitResult.alpha,
       mae:fitResult.mae,defaultMae:fitResult.defaultMae,
+      microFit:fitResult.microFit||{
+        coverage:{scale:1,raw:1,alpha:0,n:0},
+        passRush:{scale:1,raw:1,alpha:0,n:0},
+      },
       reliability:{
         role:signalReliability(calibratedSamples,"role"),
         matchup:signalReliability(calibratedSamples,"matchup"),
         environment:signalReliability(calibratedSamples,"environment"),
         scheme:signalReliability(calibratedSamples,"scheme"),
+        coverage:signalReliability(calibratedSamples,"coverage"),
+        passRush:signalReliability(calibratedSamples,"passRush"),
       },
     };
     await stateStore.setJSON(`model_${league.id}`,model);

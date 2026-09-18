@@ -51,7 +51,7 @@ const num=v => (v==null || v==="" || v==="NA" || Number.isNaN(+v)) ? 0 : +v;
 const avg=a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
 const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 const round=x=>Math.round(x*10)/10;
-const DEFAULT_MODEL = { role: 0.28, matchup: 0.25, environment: 0.35, scheme: 0.22, learned: false };
+const DEFAULT_MODEL = { role:0.28, matchup:0.25, environment:0.35, scheme:0.22, coverage:1, passRush:1, learned:false };
 
 function easternKickoffMs(dateStr, timeStr) {
   if (!dateStr || !timeStr) return null;
@@ -955,12 +955,16 @@ export default async req => {
           });
           if(coverageMatchup){
             const rawEdge=(coverageMatchup.multiplier||1)-1;
-            const scaledEdge=clamp(rawEdge*(signals.matchupExposure||1),-.045,.055);
+            const opportunityEdge=clamp(rawEdge*(signals.matchupExposure||1),-.045,.055);
+            const learnedEdge=clamp(opportunityEdge*(model.coverage??1),-.05,.06);
             const adjusted={
               ...coverageMatchup,
-              rawEdgePct:coverageMatchup.edgePct,
-              edgePct:round(scaledEdge*100),
-              multiplier:1+scaledEdge,
+              sourceEdgePct:coverageMatchup.edgePct,
+              rawEdgePct:round(opportunityEdge*100),
+              rawMultiplier:1+opportunityEdge,
+              edgePct:round(learnedEdge*100),
+              multiplier:1+learnedEdge,
+              learnedTrust:round(model.coverage??1),
               opportunityExposure:signals.matchupExposure||1,
             };
             signals.coverageMatchup=adjusted;
@@ -975,8 +979,18 @@ export default async req => {
 
         if(slot==="QB" && opp && teamPassRush[normTeam(opp)]){
           const passRush=teamPassRush[normTeam(opp)];
-          signals.passRush=passRush;
-          const mult=passRush.multiplier||1;
+          const rawMultiplier=passRush.multiplier||1;
+          const learnedEdge=clamp((rawMultiplier-1)*(model.passRush??1),-.02,.02);
+          const adjusted={
+            ...passRush,
+            rawEdgePct:passRush.edgePct,
+            rawMultiplier,
+            edgePct:round(learnedEdge*100),
+            multiplier:1+learnedEdge,
+            learnedTrust:round(model.passRush??1),
+          };
+          signals.passRush=adjusted;
+          const mult=adjusted.multiplier;
           projection*=mult;
           if(Math.abs(mult-1)>=0.007){
             reasons.push(`${round((mult-1)*100)}% pass-rush edge`);
