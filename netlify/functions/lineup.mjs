@@ -643,16 +643,36 @@ export default async req => {
       else if(c.length===1) rawBase=(currentMean*0.38)+(priorMean!=null?priorMean*0.62:currentMean*0.62);
       else if(priorMean!=null) rawBase=priorMean;
 
+      const leagueCurrent=(leaguePointHistory.current?.[pid]||[]).map(x=>({week:x.week,pts:num(x.pts)}));
+      const leaguePrior=(leaguePointHistory.prior?.[pid]||[]).map(x=>({week:x.week,pts:num(x.pts)}));
+      const leagueCurrentMean=weightedMean(leagueCurrent,x=>x.pts);
+      const leaguePriorMean=weightedMean(leaguePrior.slice(-8),x=>x.pts);
+      let leagueBase=null;
+      if(leagueCurrent.length>=3) leagueBase=(leagueCurrentMean*0.72)+(leaguePriorMean!=null?leaguePriorMean*0.28:leagueCurrentMean*0.28);
+      else if(leagueCurrent.length===2) leagueBase=(leagueCurrentMean*0.58)+(leaguePriorMean!=null?leaguePriorMean*0.42:leagueCurrentMean*0.42);
+      else if(leagueCurrent.length===1) leagueBase=(leagueCurrentMean*0.38)+(leaguePriorMean!=null?leaguePriorMean*0.62:leagueCurrentMean*0.62);
+      else if(leaguePriorMean!=null) leagueBase=leaguePriorMean;
+
       const sp=sleeperById[pid], sleeper=scoreSleeperProjection(sp?.stats,league.scoring_settings||{},slot);
-      let fallback=false;
+      const offense=["QB","RB","WR","TE"].includes(slot);
+      let source="custom";
       let base=rawBase;
-      if(base==null || !["QB","RB","WR","TE"].includes(slot)) {
-        base=typeof sleeper==="number" ? sleeper : null; fallback=true;
+      if(base==null || !offense) {
+        if(leagueBase!=null){
+          base=leagueBase;
+          source="league_history";
+        }else{
+          base=typeof sleeper==="number" ? sleeper : null;
+          source="sleeper";
+        }
       } else {
         base*=positionScale[slot]||1;
       }
+      const fallback=source!=="custom";
       let projection=base, reasons=[];
-      const learnedPosScale=!fallback?(positionScale[slot]||1):1;
+      if(source==="league_history")reasons.push("league-scored history baseline");
+      if(source==="sleeper")reasons.push("Sleeper projection fallback");
+      const learnedPosScale=source==="custom"?(positionScale[slot]||1):1;
       if(Math.abs(learnedPosScale-1)>=0.03) {
         reasons.push(`${round((learnedPosScale-1)*100)}% learned ${slot} baseline calibration`);
       }
@@ -666,7 +686,7 @@ export default async req => {
         ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
         : null;
       const signals={ roleRatio:1, matchupRatio:1, environmentRatio:1, schemeRatio:1, opportunityRatio:1, snapRatio:1 };
-      if(projection!=null && !fallback && ["QB","RB","WR","TE"].includes(slot)){
+      if(projection!=null && source==="custom" && ["QB","RB","WR","TE"].includes(slot)){
         const recentUsage=weightedMean(c.slice(-3),r=>usage(r,slot));
         const priorUsage=weightedMean((c.length>3?c.slice(0,-3):p.slice(-5)),r=>usage(r,slot));
         const roleParts=[];
@@ -723,17 +743,24 @@ export default async req => {
       else if(/doubt/.test(inj) && projection!=null){ projection*=0.45; reasons.push("-55% injury status"); }
       else if(/question/.test(inj) && projection!=null){ projection*=0.93; reasons.push("-7% injury uncertainty"); }
 
-      const vals=hist.slice(-8).map(r=>fantasyPoints(r,league.scoring_settings||{},slot));
-      const sigma=sd(vals) ?? (projection!=null?projection*0.5:null);
+      const customVals=hist.slice(-10).map(r=>fantasyPoints(r,league.scoring_settings||{},slot));
+      const leagueVals=[...leaguePrior.slice(-8),...leagueCurrent].map(x=>x.pts);
+      const rangeVals=source==="custom"?customVals:leagueVals;
+      const range=projectionRange(projection,rangeVals,slot);
+      const evidenceCurrent=source==="custom"?c.length:leagueCurrent.length;
+      const evidencePrior=source==="custom"?p.length:leaguePrior.length;
+      const confidenceScore=playerConfidenceScore({
+        sample:evidenceCurrent,priorSample:evidencePrior,injury:info.inj,source,
+        projection,sleeper,volatility:range.volatility,
+      });
       return {
         pid,name:info.name,slot,eligibleSlots:info.fps||[],team:info.team,injury:info.inj||null,opp:opp?normTeam(opp):null,
         rawBase:rawBase==null?null:round(Math.max(0,rawBase)),
         base:base==null?null:round(Math.max(0,base)),signals,
         projection:projection==null?null:round(Math.max(0,projection)),
-        floor:projection==null?null:round(Math.max(0,projection-(sigma||0)*0.75)),
-        ceiling:projection==null?null:round(projection+(sigma||0)*0.9),
-        sample:c.length,priorSample:p.length,confidence:confidence(c.length,info.inj,fallback),
-        fallback,sleeper:typeof sleeper==="number"?round(sleeper):null,reasons,out,
+        floor:range.floor,ceiling:range.ceiling,sigma:range.sigma,volatility:range.volatility,rangeSource:range.rangeSource,
+        sample:evidenceCurrent,priorSample:evidencePrior,confidenceScore,confidence:confidenceGrade(confidenceScore),
+        fallback,source,sleeper:typeof sleeper==="number"?round(sleeper):null,reasons,out,
         locked,actual,kickoffAt:game?.kickoffAt||null,likelyComplete:!!game?.likelyComplete,
       };
     };
