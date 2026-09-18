@@ -453,6 +453,11 @@ function lineupChanges(current, optimal) {
   };
 }
 
+function hardUnavailable(sleeperStatus="", officialStatus="") {
+  const combined=`${sleeperStatus||""} ${officialStatus||""}`.toLowerCase();
+  return /\b(out|ir|pup|sus|suspended|doubtful)\b/.test(combined);
+}
+
 function confidence(sample, injury, fallback) {
   if (fallback) return "LOW";
   if ((injury||"").toLowerCase().includes("question")) return "MEDIUM";
@@ -485,11 +490,12 @@ export default async req => {
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const positionScale=learnedModel?.positionScale||{};
-    const [matchups,currentCsv,priorCsv,snapCsv,gamesCsv,sleeperProj] = await Promise.all([
+    const [matchups,currentCsv,priorCsv,snapCsv,injuryCsv,gamesCsv,sleeperProj] = await Promise.all([
       j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${week}`).catch(()=>[]),
       text(`${NV}/stats_player/stats_player_week_${season}.csv`),
       text(`${NV}/stats_player/stats_player_week_${season-1}.csv`),
       text(`${NV}/snap_counts/snap_counts_${season}.csv`),
+      text(`${NV}/injuries/injuries_${season}.csv`),
       text("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
       j(`https://api.sleeper.app/projections/nfl/${season}/${week}?season_type=regular&order_by=ppr`).catch(()=>[]),
     ]);
@@ -520,6 +526,27 @@ export default async req => {
       for(const a of Object.values(m)) a.sort((x,y)=>num(x.week)-num(y.week)); return m;
     };
     const cur=byName(currentRows), prior=byName(priorRows);
+
+    // Official weekly injury reports are a second hard-availability source.
+    // Sleeper's player metadata can lag designation changes; nflverse mirrors
+    // the report/practice status by week and is checked on every board build.
+    const officialInjuryByName={};
+    for(const r of parseCsv(injuryCsv,[
+      "full_name","week","report_status","practice_status",
+      "report_primary_injury","practice_primary_injury"
+    ])){
+      const wk=num(r.week), key=normName(r.full_name||"");
+      if(!key || wk>week)continue;
+      const prev=officialInjuryByName[key];
+      if(!prev || wk>=prev.week){
+        officialInjuryByName[key]={
+          week:wk,
+          status:(r.report_status||r.practice_status||"").trim(),
+          practice:(r.practice_status||"").trim(),
+          injury:(r.report_primary_injury||r.practice_primary_injury||"").trim(),
+        };
+      }
+    }
 
     // Offensive snap share is a leading indicator for role changes. The
     // nflverse snap feed updates throughout the week; only use games from
@@ -737,11 +764,23 @@ export default async req => {
           if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% team total`);
         }
       }
-      const inj=(info.inj||"").toLowerCase();
-      const out=/out|ir|pup|sus/.test(inj);
-      if(out) projection=0;
-      else if(/doubt/.test(inj) && projection!=null){ projection*=0.45; reasons.push("-55% injury status"); }
-      else if(/question/.test(inj) && projection!=null){ projection*=0.93; reasons.push("-7% injury uncertainty"); }
+      const official=officialInjuryByName[key]||null;
+      const sleeperInj=(info.inj||"").toLowerCase();
+      const officialStatus=(official?.status||"").toLowerCase();
+      const combinedStatus=`${sleeperInj} ${officialStatus}`.trim();
+      // "Doubtful" is functionally unavailable for lineup optimization. If a
+      // player is upgraded later, the hourly Sleeper refresh / live injury
+      // report will put him back into the candidate pool automatically.
+      const out=hardUnavailable(sleeperInj,officialStatus);
+      if(out){
+        projection=0;
+        reasons.push(`UNAVAILABLE: ${official?.status||info.inj||"injury designation"}`);
+      }else if(/question/.test(combinedStatus) && projection!=null){
+        const dnp=/did not practice|dnp/.test((official?.practice||"").toLowerCase());
+        const mult=dnp?0.82:0.93;
+        projection*=mult;
+        reasons.push(`${round((mult-1)*100)}% injury uncertainty`);
+      }
 
       const customVals=hist.slice(-10).map(r=>fantasyPoints(r,league.scoring_settings||{},slot));
       const leagueVals=[...leaguePrior.slice(-8),...leagueCurrent].map(x=>x.pts);
@@ -754,7 +793,10 @@ export default async req => {
         projection,sleeper,volatility:range.volatility,
       });
       return {
-        pid,name:info.name,slot,eligibleSlots:info.fps||[],team:info.team,injury:info.inj||null,opp:opp?normTeam(opp):null,
+        pid,name:info.name,slot,eligibleSlots:info.fps||[],team:info.team,
+        injury:official?.status||info.inj||null,injuryDetail:official?.injury||null,
+        practiceStatus:official?.practice||null,availability:out?"UNAVAILABLE":"ACTIVE_CANDIDATE",
+        opp:opp?normTeam(opp):null,
         rawBase:rawBase==null?null:round(Math.max(0,rawBase)),
         base:base==null?null:round(Math.max(0,base)),signals,
         projection:projection==null?null:round(Math.max(0,projection)),
@@ -862,4 +904,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable };

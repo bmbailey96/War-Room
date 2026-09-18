@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
-  projectionRange, probabilityBetter, normalCdf, playerConfidenceScore
+  projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable
 } from "../netlify/functions/lineup.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
@@ -85,3 +85,11 @@ console.log("Decision uncertainty checks passed");
 
 const skewedRange=projectionRange(10,[0,20,20,20,20],"WR");
 assert.ok(skewedRange.floor<=10 && skewedRange.ceiling>=10);
+
+
+assert.equal(hardUnavailable("", "Doubtful"), true);
+assert.equal(hardUnavailable("Out", ""), true);
+assert.equal(hardUnavailable("Questionable", "Limited Participation"), false);
+assert.equal(hardUnavailable("", "Full Participation"), false);
+
+console.log("Hard availability checks passed");

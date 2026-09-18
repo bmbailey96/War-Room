@@ -53,6 +53,9 @@ export default async req => {
     const lockedBench=(data.lockedBench||[]).map(p=>({
       name:p.name,actual:p.actual,team:p.team,kickoffAt:p.kickoffAt
     }));
+    const unavailable=(data.players||[])
+      .filter(p=>p.availability==="UNAVAILABLE")
+      .map(p=>({name:p.name,status:p.injury,injury:p.injuryDetail,practice:p.practiceStatus}));
     const learnedDrivers=reasoningModel?.drivers||{};
 
     const prompt=`You are the final sit/start editor for one fantasy football roster. The projection engine below is deterministic and is the default answer. Your job is NOT to make a second projection model or invent a different number. Use web search for current, dated information from this week: injury/practice reports, confirmed role or depth-chart changes, coach statements, expected limitations, inactives, and major scheme changes.
@@ -73,19 +76,23 @@ ${JSON.stringify(bench,null,2)}
 PLAYERS ALREADY LOCKED ON THE BENCH:
 ${JSON.stringify(lockedBench,null,2)}
 
+PLAYERS UNAVAILABLE THIS WEEK:
+${JSON.stringify(unavailable,null,2)}
+
 YOUR GRADED REASONING TRACK RECORD IN THIS LEAGUE:
 ${JSON.stringify(learnedDrivers,null,2)}
 
 Rules:
 1. Start from the computed lineup. Do not override it for generic matchup talk, reputation, consensus rankings, or vibes.
 2. NEVER recommend moving a player whose game has started. A player listed under PLAYERS ALREADY LOCKED ON THE BENCH is history, not an option.
-3. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, or credible inactive news.
-4. Respect the engine's uncertainty. A LOW decision-confidence call or beat probability near 50% is genuinely close even if the raw point gap looks noticeable. A HIGH-confidence mathematical edge should require strong concrete news to override.
-5. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
-6. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
-7. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
-8. Never claim you found news you did not actually find.
-9. Keep this brutally scannable.
+3. NEVER recommend START/HOLD/OVERRIDE in favor of anyone listed under PLAYERS UNAVAILABLE THIS WEEK, even if old projections or reputation favor him.
+4. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, or credible inactive news.
+5. Respect the engine's uncertainty. A LOW decision-confidence call or beat probability near 50% is genuinely close even if the raw point gap looks noticeable. A HIGH-confidence mathematical edge should require strong concrete news to override.
+6. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
+7. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
+8. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
+9. Never claim you found news you did not actually find.
+10. Keep this brutally scannable.
 
 Return ONLY valid JSON:
 {
