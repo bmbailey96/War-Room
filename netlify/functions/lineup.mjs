@@ -2,7 +2,7 @@
 // Offense is projected from actual nflverse weekly production and workload.
 // Sleeper projection is kept only as a transparent fallback/comparison.
 
-import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam } from "./lib/ocho.mjs";
+import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam, blobs } from "./lib/ocho.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
@@ -48,6 +48,7 @@ const num=v => (v==null || v==="" || v==="NA" || Number.isNaN(+v)) ? 0 : +v;
 const avg=a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
 const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 const round=x=>Math.round(x*10)/10;
+const DEFAULT_MODEL = { role: 0.28, matchup: 0.25, environment: 0.35, learned: false };
 
 function easternKickoffMs(dateStr, timeStr) {
   if (!dateStr || !timeStr) return null;
@@ -197,6 +198,9 @@ export default async req => {
       getPlayersTrim(),
     ]);
     const week=Number(state.week)||1, season=Number(state.season)||chosen.season;
+    const store=blobs();
+    const learnedModel=await store.get(`v2_model_${chosen.id}`,{type:"json"}).catch(()=>null);
+    const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const [matchups,currentCsv,priorCsv,gamesCsv,sleeperProj] = await Promise.all([
       j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${week}`).catch(()=>[]),
       text(`${NV}/stats_player/stats_player_week_${season}.csv`),
@@ -291,21 +295,27 @@ export default async req => {
       const actual=locked
         ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
         : null;
+      const signals={ roleRatio:1, matchupRatio:1, environmentRatio:1 };
       if(projection!=null && !fallback && ["QB","RB","WR","TE"].includes(slot)){
         const recentUsage=weightedMean(c.slice(-3),r=>usage(r,slot));
         const priorUsage=weightedMean((c.length>3?c.slice(0,-3):p.slice(-5)),r=>usage(r,slot));
         if(recentUsage!=null && priorUsage>0){
-          const ratio=clamp(recentUsage/priorUsage,0.72,1.28), mult=1+0.28*(ratio-1);
+          const ratio=clamp(recentUsage/priorUsage,0.72,1.28);
+          signals.roleRatio=ratio;
+          const mult=1+model.role*(ratio-1);
           projection*=mult;
           if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% role/workload`);
         }
         if(opp && defense[normTeam(opp)]?.[slot]!=null && leagueAllowed[slot]){
           const ratio=clamp(defense[normTeam(opp)][slot]/leagueAllowed[slot],0.7,1.3);
-          const mult=1+0.25*(ratio-1); projection*=mult;
+          signals.matchupRatio=ratio;
+          const mult=1+model.matchup*(ratio-1); projection*=mult;
           if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% matchup`);
         }
         if(game?.implied!=null){
-          const ratio=clamp(game.implied/impliedAvg,0.75,1.25), mult=1+0.35*(ratio-1);
+          const ratio=clamp(game.implied/impliedAvg,0.75,1.25);
+          signals.environmentRatio=ratio;
+          const mult=1+model.environment*(ratio-1);
           projection*=mult;
           if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% team total`);
         }
@@ -320,6 +330,7 @@ export default async req => {
       const sigma=sd(vals) ?? (projection!=null?projection*0.5:null);
       return {
         pid,name:info.name,slot,team:info.team,injury:info.inj||null,opp:opp?normTeam(opp):null,
+        base:base==null?null:round(Math.max(0,base)),signals,
         projection:projection==null?null:round(Math.max(0,projection)),
         floor:projection==null?null:round(Math.max(0,projection-(sigma||0)*0.75)),
         ceiling:projection==null?null:round(projection+(sigma||0)*0.9),
@@ -342,10 +353,30 @@ export default async req => {
       .map(x=>({slot:x.slot,player:x.player}));
     const currentTotal=current.reduce((s,x)=>s+playerValue(x.player),0);
 
+    // Keep the last pre-kickoff projection for each player. Tuesday's learner
+    // grades these against actual league-scored points. Locked players are
+    // never overwritten after kickoff, which prevents hindsight from leaking
+    // into the training record.
+    const projectionKey=`v2_projection_${chosen.id}_${week}`;
+    const priorLog=await store.get(projectionKey,{type:"json"}).catch(()=>null);
+    const byPid={...(priorLog?.players||{})};
+    for(const p of rosterPlayers){
+      if(p.locked) continue;
+      byPid[p.pid]={
+        pid:p.pid,name:p.name,slot:p.slot,team:p.team,base:p.base,projection:p.projection,
+        signals:p.signals,fallback:p.fallback,injury:p.injury,confidence:p.confidence,
+        savedAt:Date.now(),kickoffAt:p.kickoffAt,
+      };
+    }
+    await store.setJSON(projectionKey,{
+      leagueId:chosen.id,season,week,updatedAt:Date.now(),players:byPid,
+    }).catch(()=>{});
+
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
       sourceNote:"QB/RB/WR/TE use actual nflverse weekly production and workload plus matchup/game context. Sleeper is comparison/fallback only. K/DEF/IDP currently use fallback.",
+      model:{weights:model,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0},
       currentTotal:round(currentTotal),
       optimalTotal:round(optimal.total),
       gain:round(optimal.total-currentTotal),
