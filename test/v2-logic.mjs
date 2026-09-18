@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue
+  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize
 } from "../netlify/functions/lineup.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
@@ -38,3 +38,15 @@ assert.equal(
 );
 
 console.log("War Room V2 logic checks passed");
+
+
+const idpPool=[
+  {pid:"A",slot:"DL",eligibleSlots:["DL","LB"],projection:15,out:false,locked:false},
+  {pid:"B",slot:"DL",eligibleSlots:["DL"],projection:14,out:false,locked:false},
+  {pid:"C",slot:"LB",eligibleSlots:["LB"],projection:5,out:false,locked:false},
+];
+const solved=optimize(idpPool,["DL","LB"],[]);
+assert.equal(solved.total,29);
+assert.deepEqual(solved.picked.map(x=>x.player?.pid),["B","A"]);
+
+console.log("Exact assignment optimizer check passed");
