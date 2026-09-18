@@ -54,7 +54,9 @@ export function pInfo(db,pid) {
 export async function getPlayersTrim() {
   const s=store();
   const cached=await s.get("players",{type:"json"}).catch(()=>null);
-  if(cached && Date.now()-cached.at < 20*60*60*1000)return cached.data;
+  // Injury status is lineup-critical. A 20-hour cache can survive straight
+  // through a Friday/Saturday designation change, so keep this fresh in season.
+  if(cached && Date.now()-cached.at < 60*60*1000)return cached.data;
   const full=await json("https://api.sleeper.app/v1/players/nfl");
   const trim={};
   for(const [pid,p] of Object.entries(full||{})){
