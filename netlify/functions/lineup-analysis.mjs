@@ -96,7 +96,12 @@ Return ONLY valid JSON:
     const raw=await callClaude(prompt,{maxTokens:1500,useSearch:true});
     const analysis=parseJson(raw);
     if(!analysis) throw new Error("lineup reasoning returned invalid JSON");
-    const saved={at:Date.now(),leagueId:data.league.id,week:data.week,analysis};
+    const now=Date.now();
+    const priorHistory=Array.isArray(cached?.history)
+      ? cached.history
+      : (cached?.analysis ? [{at:cached.at,analysis:cached.analysis}] : []);
+    const history=[...priorHistory,{at:now,analysis}].slice(-30);
+    const saved={at:now,leagueId:data.league.id,week:data.week,analysis,history};
     await stateStore.setJSON(cacheKey,saved);
     return new Response(JSON.stringify({...saved,projection:data}),{
       headers:{"content-type":"application/json","cache-control":"no-store"}
