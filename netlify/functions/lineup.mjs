@@ -71,7 +71,42 @@ function easternKickoffMs(dateStr, timeStr) {
 
 function playerValue(p) {
   if (!p) return 0;
-  return p.locked && p.actual != null ? p.actual : (p.projection || 0);
+  if (p.locked && p.actual != null) {
+    // Once the game is truly complete, actual points are the only truth.
+    // While it is merely locked/in progress, keep at least the pregame
+    // expectation in the matchup forecast so a 1Q score of 0.0 does not get
+    // mistaken for the player's final outcome.
+    if (p.completed) return p.actual;
+    return Math.max(p.actual, p.projection || 0);
+  }
+  return p.projection || 0;
+}
+
+async function exactLeagueHistory(stateStore, leagueId, week) {
+  if (week <= 1) return {};
+  const cacheKey=`exact_points_${leagueId}_through_${week-1}`;
+  const cached=await stateStore.get(cacheKey,{type:"json"}).catch(()=>null);
+  if(cached && Date.now()-cached.at < 12*60*60*1000) return cached.byPid||{};
+
+  const first=Math.max(1,week-6);
+  const weeks=[];
+  for(let w=first;w<week;w++) weeks.push(w);
+  const responses=await Promise.all(
+    weeks.map(w=>j(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${w}`).catch(()=>[]))
+  );
+  const byPid={};
+  responses.forEach((rows,i)=>{
+    const w=weeks[i];
+    for(const row of rows||[]){
+      for(const [pid,pts] of Object.entries(row.players_points||{})){
+        if(typeof pts!=="number") continue;
+        (byPid[pid]=byPid[pid]||[]).push({week:w,points:pts});
+      }
+    }
+  });
+  for(const rows of Object.values(byPid)) rows.sort((a,b)=>a.week-b.week);
+  await stateStore.setJSON(cacheKey,{at:Date.now(),leagueId,throughWeek:week-1,byPid}).catch(()=>{});
+  return byPid;
 }
 
 function fantasyPoints(r, s={}, pos=null) {
@@ -160,34 +195,60 @@ function eligibility(slot, player) {
 }
 
 function optimize(players, slots, current=[]) {
-  // A player whose NFL game has started is immovable. If he was already in
-  // the fantasy lineup, preserve him in that exact occupied slot. If he was
-  // on the bench, he is unavailable to the optimizer. No time travel.
-  const used=new Set();
+  // Locked starters are fixed in their exact occupied slots. Locked bench
+  // players are unavailable. For everything else, solve the lineup exactly
+  // with a slot-bitmask DP instead of a greedy fill. This handles odd
+  // multi-position eligibility without sacrificing a scarce TE/WR/DL slot.
   const assigned=slots.map((slot,index)=>({slot,index,player:null}));
-  for (let i=0;i<assigned.length;i++) {
+  const used=new Set();
+  for(let i=0;i<assigned.length;i++){
     const p=current[i]?.player;
-    if (p?.locked) {
+    if(p?.locked){
       assigned[i].player=p;
       used.add(p.pid);
     }
   }
 
-  // Additive point projections do not need a combinatorial search here.
-  // Fill required positions first, then flexible slots from most restrictive
-  // to least restrictive. Only players whose games have not started are
-  // candidates for remaining slots.
-  const pool=players
-    .filter(p=>p.projection!=null && !p.out && !p.locked)
-    .sort((a,b)=>b.projection-a.projection);
-  const take=(entry)=>{
-    if (entry.player) return;
-    const p=pool.find(x=>!used.has(x.pid) && eligibility(entry.slot,x));
-    if(p){ entry.player=p; used.add(p.pid); }
-  };
-  const flexible=new Set(["REC_FLEX","FLEX","SUPER_FLEX"]);
-  assigned.filter(x=>!flexible.has(x.slot)).forEach(take);
-  for(const kind of ["REC_FLEX","FLEX","SUPER_FLEX"]) assigned.filter(x=>x.slot===kind).forEach(take);
+  const open=assigned.filter(x=>!x.player);
+  const pool=players.filter(p=>p.projection!=null && !p.out && !p.locked && !used.has(p.pid));
+  const fullMask=(1<<open.length)-1;
+  let dp=new Map([[0,{score:0,picks:Array(open.length).fill(null)}]]);
+
+  for(const p of pool){
+    const next=new Map(dp);
+    for(const [mask,state] of dp){
+      for(let i=0;i<open.length;i++){
+        const bit=1<<i;
+        if(mask&bit) continue;
+        if(!eligibility(open[i].slot,p)) continue;
+        const newMask=mask|bit;
+        const score=state.score+(p.projection||0);
+        const prev=next.get(newMask);
+        if(!prev || score>prev.score){
+          const picks=state.picks.slice();
+          picks[i]=p;
+          next.set(newMask,{score,picks});
+        }
+      }
+    }
+    dp=next;
+  }
+
+  let best=dp.get(fullMask)||null;
+  if(!best){
+    // A malformed/incomplete roster can leave a slot unfillable. Prefer the
+    // state with the most filled slots, then the highest point total.
+    let bestCount=-1;
+    for(const [mask,state] of dp){
+      let count=0,x=mask;
+      while(x){count+=x&1;x>>=1;}
+      if(count>bestCount || (count===bestCount && (!best || state.score>best.score))){
+        bestCount=count; best=state;
+      }
+    }
+  }
+
+  for(let i=0;i<open.length;i++) open[i].player=best?.picks?.[i]||null;
   assigned.sort((a,b)=>a.index-b.index);
   return {
     total:assigned.reduce((s,x)=>s+playerValue(x.player),0),
@@ -254,9 +315,10 @@ export default async req => {
     ]);
     const week=Number(state.week)||1, season=Number(state.season)||chosen.season;
     const stateStore=store();
-    const [learnedModel,learnedReasoning]=await Promise.all([
+    const [learnedModel,learnedReasoning,exactHistory]=await Promise.all([
       stateStore.get(`model_${chosen.id}`,{type:"json"}).catch(()=>null),
       stateStore.get(`reasoning_${chosen.id}`,{type:"json"}).catch(()=>null),
+      exactLeagueHistory(stateStore,chosen.id,week),
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const positionScale=learnedModel?.positionScale||{};
@@ -333,12 +395,16 @@ export default async req => {
       const c=allCurrent.filter(r=>num(r.week)<week), played=allCurrent.find(r=>num(r.week)===week) || null;
       const p=(prior[key]||[]).slice(-8);
       const hist=[...p,...c];
-      const currentMean=weightedMean(c,r=>fantasyPoints(r,league.scoring_settings||{},slot));
+      const exactRows=exactHistory[pid]||[];
+      const exactMean=weightedMean(exactRows,r=>r.points);
+      const nflverseMean=weightedMean(c,r=>fantasyPoints(r,league.scoring_settings||{},slot));
+      const currentMean=exactMean!=null?exactMean:nflverseMean;
+      const currentSamples=exactRows.length||c.length;
       const priorMean=weightedMean(p,r=>fantasyPoints(r,league.scoring_settings||{},slot));
       let rawBase=null;
-      if(c.length>=3) rawBase=(currentMean*0.72)+(priorMean!=null?priorMean*0.28:currentMean*0.28);
-      else if(c.length===2) rawBase=(currentMean*0.58)+(priorMean!=null?priorMean*0.42:currentMean*0.42);
-      else if(c.length===1) rawBase=(currentMean*0.38)+(priorMean!=null?priorMean*0.62:currentMean*0.62);
+      if(currentSamples>=3) rawBase=(currentMean*0.72)+(priorMean!=null?priorMean*0.28:currentMean*0.28);
+      else if(currentSamples===2) rawBase=(currentMean*0.58)+(priorMean!=null?priorMean*0.42:currentMean*0.42);
+      else if(currentSamples===1) rawBase=(currentMean*0.38)+(priorMean!=null?priorMean*0.62:currentMean*0.62);
       else if(priorMean!=null) rawBase=priorMean;
 
       const sp=sleeperById[pid], sleeper=scoreSleeperProjection(sp?.stats,league.scoring_settings||{},slot);
@@ -363,6 +429,7 @@ export default async req => {
       const actual=locked
         ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
         : null;
+      const completed=!!played || !!game?.likelyComplete;
       const signals={ roleRatio:1, matchupRatio:1, environmentRatio:1 };
       if(projection!=null && !fallback && ["QB","RB","WR","TE"].includes(slot)){
         const recentUsage=weightedMean(c.slice(-3),r=>usage(r,slot));
@@ -403,9 +470,10 @@ export default async req => {
         projection:projection==null?null:round(Math.max(0,projection)),
         floor:projection==null?null:round(Math.max(0,projection-(sigma||0)*0.75)),
         ceiling:projection==null?null:round(projection+(sigma||0)*0.9),
-        sample:c.length,priorSample:p.length,confidence:confidence(c.length,info.inj,fallback),
+        sample:currentSamples,priorSample:p.length,confidence:confidence(currentSamples,info.inj,fallback),
         fallback,sleeper:typeof sleeper==="number"?round(sleeper):null,reasons,out,
-        locked,actual,kickoffAt:game?.kickoffAt||null,likelyComplete:!!game?.likelyComplete,
+        exactHistory:exactRows.length,
+        locked,actual,completed,kickoffAt:game?.kickoffAt||null,likelyComplete:!!game?.likelyComplete,
       };
     };
 
@@ -440,7 +508,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use actual nflverse weekly production and workload plus matchup/game context. Sleeper is comparison/fallback only. K/DEF/IDP currently use fallback.",
+      sourceNote:"QB/RB/WR/TE use exact completed-week points from this Sleeper league for the scoring baseline, then independent nflverse workload/matchup data and game context to project forward. Sleeper future projections are comparison/fallback only. K/DEF/IDP currently use fallback.",
       model:{
         weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
@@ -464,4 +532,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize };
