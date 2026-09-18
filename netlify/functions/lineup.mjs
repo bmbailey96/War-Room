@@ -110,7 +110,7 @@ function fantasyPoints(r, s={}, pos=null) {
   return p;
 }
 
-function scoreSleeperProjection(stats, scoring) {
+function scoreSleeperProjection(stats, scoring, pos=null) {
   if(!stats)return null;
   let total=0, matched=0;
   for(const [key,value] of Object.entries(stats)){
@@ -118,8 +118,17 @@ function scoreSleeperProjection(stats, scoring) {
     if(typeof value!=="number" || typeof weight!=="number")continue;
     total+=value*weight; matched++;
   }
-  if(matched)return round(total);
-  return typeof stats.pts_ppr==="number"?round(stats.pts_ppr):null;
+  if(!matched)return typeof stats.pts_ppr==="number"?round(stats.pts_ppr):null;
+
+  const bonus=k=>typeof scoring?.[k]==="number"?scoring[k]:0;
+  if(pos==="TE" && typeof stats.rec==="number") total+=stats.rec*bonus("bonus_rec_te");
+  if((stats.pass_yd||0)>=300)total+=bonus("bonus_pass_yd_300");
+  if((stats.pass_yd||0)>=400)total+=bonus("bonus_pass_yd_400");
+  if((stats.rush_yd||0)>=100)total+=bonus("bonus_rush_yd_100");
+  if((stats.rush_yd||0)>=200)total+=bonus("bonus_rush_yd_200");
+  if((stats.rec_yd||0)>=100)total+=bonus("bonus_rec_yd_100");
+  if((stats.rec_yd||0)>=200)total+=bonus("bonus_rec_yd_200");
+  return round(total);
 }
 
 function usage(r,pos) {
@@ -332,7 +341,7 @@ export default async req => {
       else if(c.length===1) rawBase=(currentMean*0.38)+(priorMean!=null?priorMean*0.62:currentMean*0.62);
       else if(priorMean!=null) rawBase=priorMean;
 
-      const sp=sleeperById[pid], sleeper=scoreSleeperProjection(sp?.stats,league.scoring_settings||{});
+      const sp=sleeperById[pid], sleeper=scoreSleeperProjection(sp?.stats,league.scoring_settings||{},slot);
       let fallback=false;
       let base=rawBase;
       if(base==null || !["QB","RB","WR","TE"].includes(slot)) {
