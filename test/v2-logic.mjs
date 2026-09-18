@@ -248,3 +248,54 @@ assert.equal(stashFallback.actions[0].stash,true);
 assert.ok(stashFallback.actions[0].faabPct<=12);
 
 console.log("Bench stash fallback checks passed");
+
+
+const {
+  buildDepthSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks
+} = await import("../netlify/functions/lib/matchup-v2.mjs");
+
+const depthCsv = [
+  "dt,team,player_name,pos_grp,pos_name,pos_abb,pos_slot,pos_rank",
+  "2026-09-18T12:00:00Z,NYJ,Shutdown Corner,DB,Cornerback,CB,1,1",
+  "2026-09-18T12:00:00Z,NYJ,Other Corner,DB,Cornerback,CB,2,2",
+  "2026-09-18T12:00:00Z,NYJ,Nickel Guy,DB,Nickel Corner,NB,3,1",
+].join("\n");
+const currentDefCsv = [
+  "season,week,game_type,pfr_player_name,targets,completions,yards,touchdowns,passer_rating",
+  "2026,1,REG,Shutdown Corner,8,3,28,0,42",
+  "2026,1,REG,Other Corner,8,7,95,1,135",
+  "2026,1,REG,Nickel Guy,8,5,55,0,78",
+].join("\n");
+const priorDefCsv = [
+  "season,week,game_type,pfr_player_name,targets,completions,yards,touchdowns,passer_rating",
+  "2025,17,REG,Shutdown Corner,10,5,50,0,55",
+  "2025,17,REG,Other Corner,10,8,120,1,125",
+  "2025,17,REG,Nickel Guy,10,7,75,1,105",
+].join("\n");
+
+const secs=buildDepthSecondaries(depthCsv,2);
+const cov=buildDefenderCoverage(currentDefCsv,priorDefCsv,2);
+const wr1Match=inferWrCoverage({opponent:"NYJ",receiverRank:1,secondaries:secs,coverage:cov});
+assert.equal(wr1Match.defender,"Shutdown Corner");
+assert.ok(wr1Match.edgePct<0);
+assert.ok(wr1Match.assignmentConfidence<60);
+
+const slotMatch=inferWrCoverage({opponent:"NYJ",receiverRank:3,secondaries:secs,coverage:cov});
+assert.equal(slotMatch.defender,"Nickel Guy");
+assert.equal(slotMatch.assignment,"likely slot matchup");
+
+const nextCorner=inferWrCoverage({
+  opponent:"NYJ",receiverRank:1,secondaries:secs,coverage:cov,
+  unavailableNames:new Set(["shutdown corner"])
+});
+assert.equal(nextCorner.defender,"Other Corner");
+assert.ok(nextCorner.edgePct>0);
+
+const ranks=receiverRanks([
+  {player_display_name:"Alpha WR",position:"WR",team:"GB",week:"1",target_share:"0.31",wopr:"0.55",targets:"10"},
+  {player_display_name:"Beta WR",position:"WR",team:"GB",week:"1",target_share:"0.19",wopr:"0.33",targets:"6"},
+],[],2);
+assert.equal(ranks["GB|alpha wr"],1);
+assert.equal(ranks["GB|beta wr"],2);
+
+console.log("WR-CB micro-matchup checks passed");
