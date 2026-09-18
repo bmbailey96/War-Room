@@ -176,22 +176,32 @@ function assetName(x){return x?.name||String(x||"");}
 export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
   const actions=[];
   for(const [i,w] of waivers.slice(0,3).entries()){
-    const impact=Math.max(Number(w.weeklyDelta||0),mode==="DYNASTY"?Number(w.marketDelta||0)/8:0);
+    const impact=Math.max(
+      Number(w.weeklyDelta||0),
+      Number(w.depthDelta||0)*.55,
+      mode==="DYNASTY"?Number(w.marketDelta||0)/8:0
+    );
     const confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
     const faabBase=mode==="DYNASTY"
       ? Math.min(22,Math.max(2,Math.round((w.marketDelta||0)*.7+(w.weeklyDelta||0)*4)))
-      : Math.min(28,Math.max(2,Math.round((w.weeklyDelta||0)*6+Math.log10(1+(w.trending||0))*3)));
+      : w.stash
+        ? Math.min(12,Math.max(2,Math.round((w.depthDelta||0)*2+Math.log10(1+(w.trending||0))*2)))
+        : Math.min(28,Math.max(2,Math.round((w.weeklyDelta||0)*6+Math.log10(1+(w.trending||0))*3)));
     const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
     actions.push({
       type:"ADD_DROP",priority:i+1,confidence,
-      headline:`Add ${w.add}, drop ${w.drop}`,
+      headline:`${w.stash?"Stash":"Add"} ${w.add}, drop ${w.drop}`,
       why:mode==="DYNASTY"
         ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
-        : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
+        : w.stash
+          ? `Bench-upside screen: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value with a real role/trend breakout signal; no immediate starter gain is required.`
+          : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
       window:"BEFORE WAIVERS",
       add:{name:w.add},drop:{name:w.drop},faabPct,
-      drivers:["depth","schedule",...(mode==="DYNASTY"?["market"]:[])],
-      weeklyDelta:w.weeklyDelta,marketDelta:w.marketDelta??null,
+      drivers:[w.stash?"role":"depth","schedule",...(mode==="DYNASTY"?["market"]:[])],
+      weeklyDelta:w.weeklyDelta,depthDelta:w.depthDelta??null,stash:!!w.stash,
+      breakoutScore:w.breakoutScore??null,marketDelta:w.marketDelta??null,
+      roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
   }
   for(const [i,t] of trades.slice(0,Math.max(0,3-actions.length)).entries()){
@@ -356,6 +366,16 @@ export default async req=>{
     const activeSlots=(league.roster_positions||[]).filter(s=>!["BN","IR","TAXI"].includes(s));
     const baselineRosterTotal=simTotal(myRoster,activeSlots);
 
+    // Replacement value matters for bench construction. The third-best
+    // available option at a position is a conservative approximation of what
+    // can be replaced from waivers in this specific league.
+    const replacementByPos={};
+    for(const pos of ["QB","RB","WR","TE","K","DEF","DL","LB","DB"]){
+      const vals=free.filter(p=>p.pos===pos).map(p=>Number(p.next3||0)).sort((a,b)=>b-a);
+      replacementByPos[pos]=vals.length?vals[Math.min(2,vals.length-1)]:0;
+    }
+    const marginal=p=>p?Math.max(0,Number(p.next3||0)-Number(replacementByPos[p.pos]||0)):0;
+
     const waiverPairs=[];
     for(const add of free.slice(0,18)){
       for(const drop of drops.slice(0,8)){
@@ -363,21 +383,31 @@ export default async req=>{
         const after=simTotal(rosterAfter(myRoster,{removeNames:[drop.name],addPlayers:[add]}),activeSlots);
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add.market!=null&&drop.market!=null?add.market-drop.market:null;
+        const depthDelta=round(marginal(add)-marginal(drop));
+        const roleSurge=Math.max(0,Number(add.roleRatio||1)-1);
+        const trendSignal=Math.log10(1+Number(add.trending||0));
+        const breakoutScore=round(roleSurge*10+trendSignal);
+        const stash=weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
         const score=mode==="DYNASTY"
-          ? weeklyDelta*5+(marketDelta??0)*.35+(add.screenScore-drop.dropScore)*.08
-          : weeklyDelta*8+(add.next3-drop.next3)*1.5+Math.log10(1+add.trending)*2;
+          ? weeklyDelta*5+(marketDelta??0)*.35+depthDelta*.7+(add.screenScore-drop.dropScore)*.08
+          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5;
         waiverPairs.push({
-          add:add.name,drop:drop.name,pos:add.pos,weeklyDelta,marketDelta,
+          add:add.name,drop:drop.name,pos:add.pos,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           score:round(score),addNext3:add.next3,dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
-          addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio
+          addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio,
+          replacement:Number(replacementByPos[add.pos]||0)
         });
       }
     }
     waiverPairs.sort((a,b)=>b.score-a.score);
     const bestWaiverPairs=waiverPairs
-      .filter(x=>x.weeklyDelta>0 || (mode==="DYNASTY"&&(x.marketDelta??0)>=8))
+      .filter(x=>
+        x.weeklyDelta>.15 ||
+        (mode==="DYNASTY"&&(x.marketDelta??0)>=8) ||
+        (mode==="REDRAFT"&&x.stash&&x.depthDelta>=1.5)
+      )
       .slice(0,12);
 
     const tradeTargets=[];
@@ -631,8 +661,13 @@ Return ONLY valid JSON:
         }),activeSlots);
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
+        const depthDelta=round(marginal(add)-marginal(drop));
+        const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
+        const trendSignal=Math.log10(1+Number(add?.trending||0));
+        const breakoutScore=round(roleSurge*10+trendSignal);
+        const stash=weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
         return {
-          ...a,weeklyDelta,marketDelta,
+          ...a,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
@@ -678,7 +713,9 @@ Return ONLY valid JSON:
     }).filter(a=>{
       if(a.invalidMath)return false;
       if(["ADD","WAIVER","ADD_DROP"].includes(a.type)){
-        return (a.weeklyDelta??0)>.15 || (mode==="DYNASTY"&&(a.marketDelta??0)>=6);
+        return (a.weeklyDelta??0)>.15 ||
+          (mode==="DYNASTY"&&(a.marketDelta??0)>=6) ||
+          (mode==="REDRAFT"&&a.stash&&(a.depthDelta??0)>=1.5);
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
         if(mode==="DYNASTY"&&a.sendValue!=null&&a.receiveValue!=null){
@@ -709,6 +746,7 @@ Return ONLY valid JSON:
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         forecastModel:"provider + recent league-scored production + workload trend",
+        replacementByPos,
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
       },
       reasoningMode:(coreOnly||error)?"deterministic":"live_news",
