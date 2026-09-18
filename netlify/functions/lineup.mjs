@@ -478,9 +478,10 @@ export default async req => {
     ]);
     const week=Number(state.week)||1, season=Number(state.season)||chosen.season;
     const stateStore=store();
-    const [learnedModel,learnedReasoning]=await Promise.all([
+    const [learnedModel,learnedReasoning,leaguePointHistory]=await Promise.all([
       stateStore.get(`model_${chosen.id}`,{type:"json"}).catch(()=>null),
       stateStore.get(`reasoning_${chosen.id}`,{type:"json"}).catch(()=>null),
+      matchupPointHistory(stateStore,league,week,season),
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const positionScale=learnedModel?.positionScale||{};
@@ -567,17 +568,45 @@ export default async req => {
       }
     }
 
-    // League-wide defense allowed by position, current season only.
-    const allowed={};
-    for(const r of currentRows){
-      const pos=r.position, def=normTeam(r.opponent_team);
-      if(!def || !["QB","RB","WR","TE"].includes(pos)) continue;
-      const d=(allowed[def]=allowed[def]||{}), b=(d[pos]=d[pos]||{pts:0,weeks:new Set()});
-      b.pts+=fantasyPoints(r,league.scoring_settings||{},pos); b.weeks.add(num(r.week));
-    }
+    // Defensive matchup strength is deliberately stabilized early in the
+    // season. Week 1 alone should not make a defense look elite or terrible.
+    // Current-season games only count if they happened before this fantasy
+    // week, then earn progressively more weight against the prior-season
+    // baseline as the sample grows.
+    const buildAllowed=(rows,maxWeek=null)=>{
+      const allowed={};
+      for(const r of rows){
+        if(maxWeek!=null && num(r.week)>=maxWeek)continue;
+        const pos=r.position, def=normTeam(r.opponent_team);
+        if(!def || !["QB","RB","WR","TE"].includes(pos)) continue;
+        const d=(allowed[def]=allowed[def]||{}), b=(d[pos]=d[pos]||{pts:0,weeks:new Set()});
+        b.pts+=fantasyPoints(r,league.scoring_settings||{},pos); b.weeks.add(num(r.week));
+      }
+      const out={};
+      for(const [team,v] of Object.entries(allowed)){
+        out[team]={};
+        for(const [pos,b] of Object.entries(v)){
+          out[team][pos]={avg:b.pts/Math.max(1,b.weeks.size),weeks:b.weeks.size};
+        }
+      }
+      return out;
+    };
+    const currentDefense=buildAllowed(currentRows,week);
+    const priorDefense=buildAllowed(priorRows,null);
     const defense={};
-    for(const [team,v] of Object.entries(allowed)){
-      defense[team]={}; for(const [pos,b] of Object.entries(v)) defense[team][pos]=b.pts/Math.max(1,b.weeks.size);
+    const teams=new Set([...Object.keys(currentDefense),...Object.keys(priorDefense)]);
+    for(const team of teams){
+      defense[team]={};
+      for(const pos of ["QB","RB","WR","TE"]){
+        const cur=currentDefense[team]?.[pos], prev=priorDefense[team]?.[pos];
+        if(!cur && !prev)continue;
+        if(cur && prev){
+          const alpha=Math.min(.75,cur.weeks/6);
+          defense[team][pos]=prev.avg*(1-alpha)+cur.avg*alpha;
+        }else{
+          defense[team][pos]=(cur||prev).avg;
+        }
+      }
     }
     const leagueAllowed={};
     for(const pos of ["QB","RB","WR","TE"]) leagueAllowed[pos]=avg(Object.values(defense).map(d=>d[pos]).filter(x=>x!=null));
