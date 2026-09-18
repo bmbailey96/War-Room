@@ -146,3 +146,9 @@ const redraftActions=validateActions([
 assert.equal(redraftActions.length,0);
 
 console.log("Roster action validation checks passed");
+
+
+const rosterActionsModule = await import("../netlify/functions/roster-actions.mjs");
+assert.equal(typeof rosterActionsModule.default,"function");
+
+console.log("Roster actions endpoint import check passed");
