@@ -307,6 +307,24 @@ export default async req=>{
       const tier=tierOfOriginal(p.original);
       return {name:pickLabel(p),type:"pick",season:p.season,round:p.round,tier,value:pickValue(p,market,tier)};
     };
+
+    const seasonTradeProfile={};
+    for(const txns of core.txnWeeks||[]){
+      for(const tx of txns||[]){
+        if(tx?.type!=="trade" || (tx.status && tx.status!=="complete"))continue;
+        for(const rid of tx.roster_ids||[]){
+          const p=seasonTradeProfile[rid]||(seasonTradeProfile[rid]={trades:0,acquired:{},picksReceived:0});
+          p.trades++;
+          for(const [pid,toRid] of Object.entries(tx.adds||{})){
+            if(Number(toRid)!==Number(rid))continue;
+            const pos=slotPos(pInfo(db,pid));
+            if(pos)p.acquired[pos]=(p.acquired[pos]||0)+1;
+          }
+          p.picksReceived+=(tx.draft_picks||[]).filter(dp=>Number(dp.owner_id)===Number(rid)).length;
+        }
+      }
+    }
+
     const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>{
       const hist=ownerHistory(t.ownerId);
       return {
@@ -314,7 +332,10 @@ export default async req=>{
         holes:t.holes,surplus:t.surplus,
         tradeProfile:{
           careerTrades:Number(hist.trades_count||0),
+          seasonTrades:Number(seasonTradeProfile[t.rosterId]?.trades||0),
           acquired:hist.trade_positions_acquired||{},
+          seasonAcquired:seasonTradeProfile[t.rosterId]?.acquired||{},
+          seasonPicksReceived:Number(seasonTradeProfile[t.rosterId]?.picksReceived||0),
           lineupEfficiency:hist.lineup_efficiency_pct??null,
           benchLeak:hist.avg_bench_leak_per_week??null,
         },
@@ -458,15 +479,22 @@ export default async req=>{
         // permission to show an unfair trade.
         const profile=partner.tradeProfile||{};
         const careerTrades=Number(profile.careerTrades||0);
-        const openness=Math.min(1.18,.88+Math.log10(1+careerTrades)*.11);
+        const seasonTrades=Number(profile.seasonTrades||0);
+        const openness=Math.min(1.22,.86+Math.log10(1+careerTrades)*.10+Math.min(.16,seasonTrades*.035));
         const sentPositions=sentPlayers.map(p=>p.pos).filter(Boolean);
         const histAcquired=profile.acquired||{};
+        const seasonAcquired=profile.seasonAcquired||{};
         const positionTaste=sentPositions.length
-          ? sentPositions.reduce((s,pos)=>s+Math.log1p(Number(histAcquired[pos]||0)),0)/sentPositions.length
+          ? sentPositions.reduce((s,pos)=>{
+              const longTerm=Math.log1p(Number(histAcquired[pos]||0));
+              const recent=Math.log1p(Number(seasonAcquired[pos]||0))*1.6;
+              return s+longTerm+recent;
+            },0)/sentPositions.length
           : 0;
         const hasPick=combo.some(x=>x.type==="pick");
+        const pickHistory=Number(profile.seasonPicksReceived||0);
         const stanceFit=hasPick
-          ? (/rebuild|retool/i.test(partner.stance||"")?1.4:/win-now|ascending/i.test(partner.stance||"")?-.6:0)
+          ? (/rebuild|retool/i.test(partner.stance||"")?1.4:/win-now|ascending/i.test(partner.stance||"")?-.6:0)+Math.min(.8,pickHistory*.25)
           : (/win-now|ascending/i.test(partner.stance||"")?.7:0);
         const managerFit=positionTaste*.8+stanceFit;
         const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+managerFit;
@@ -480,6 +508,7 @@ export default async req=>{
             marketDelta,
             managerFit:round(managerFit),
             partnerCareerTrades:careerTrades,
+            partnerSeasonTrades:seasonTrades,
           };
         }
       }
