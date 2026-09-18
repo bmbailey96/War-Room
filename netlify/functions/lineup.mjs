@@ -294,7 +294,7 @@ function lineupChanges(current, optimal) {
 
 function confidence(sample, injury, fallback) {
   if (fallback) return "LOW";
-  if ((inj||"").toLowerCase().includes("question")) return "MEDIUM";
+  if ((injury||"").toLowerCase().includes("question")) return "MEDIUM";
   if (sample>=5) return "HIGH";
   if (sample>=2) return "MEDIUM";
   return "LOW";
@@ -618,4 +618,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence };
