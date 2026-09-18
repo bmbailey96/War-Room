@@ -59,6 +59,12 @@ function depthRole(r){
   if(/CORNER|\bCB\b|\bLCB\b|\bRCB\b/.test(s))return "outside";
   return "db";
 }
+function depthSide(r){
+  const s=posText(r);
+  if(/\bLCB\b|LEFT CORNER/.test(s))return "left";
+  if(/\bRCB\b|RIGHT CORNER/.test(s))return "right";
+  return null;
+}
 function isCorner(r){
   const s=posText(r);
   return /CORNER|\bCB\b|\bLCB\b|\bRCB\b|NICKEL|\bNB\b|\bSCB\b/.test(s);
@@ -90,11 +96,34 @@ export function buildDepthSecondaries(csvText,week=99){
     const stamp=dt?Date.parse(dt):(Number.isFinite(wk)?wk:0);
     if(Number.isFinite(stamp)&&maxStamp[team]!=null&&stamp!==maxStamp[team])continue;
     const rec={
-      name,team,role:depthRole(r),rank:depthRank(r),
+      name,team,role:depthRole(r),side:depthSide(r),rank:depthRank(r),
       slot:Number(first(r,["pos_slot"]))||null,
       pos:String(first(r,["pos_abb","position","depth_position"])||"CB"),
     };
     (byTeam[team]=byTeam[team]||[]).push(rec);
+  }
+  for(const arr of Object.values(byTeam)){
+    arr.sort((a,b)=>(a.rank-b.rank)||((a.role==="slot"?1:0)-(b.role==="slot"?1:0))||a.name.localeCompare(b.name));
+  }
+  return byTeam;
+}
+
+export function buildSleeperSecondaries(playersDB={}){
+  const byTeam={};
+  for(const p of Object.values(playersDB||{})){
+    const team=normTeam(p?.t),name=String(p?.n||"").trim();
+    const pos=String(p?.p||"").toUpperCase();
+    const fps=Array.isArray(p?.fp)?p.fp.map(x=>String(x).toUpperCase()):[];
+    if(!team||!name)continue;
+    if(!(pos==="CB"||pos==="DB"||fps.includes("DB")))continue;
+    const rawDepth=String(p?.dp??"").toUpperCase();
+    const role=/SLOT|NICKEL|\bNB\b|\bSCB\b/.test(rawDepth)?"slot":"outside";
+    const side=/LCB|LEFT/.test(rawDepth)?"left":/RCB|RIGHT/.test(rawDepth)?"right":null;
+    const rank=Number(p?.do);
+    (byTeam[team]=byTeam[team]||[]).push({
+      name,team,role,side,rank:Number.isFinite(rank)&&rank>0?rank:99,
+      pos:rawDepth||pos||"CB",source:"sleeper_depth",
+    });
   }
   for(const arr of Object.values(byTeam)){
     arr.sort((a,b)=>(a.rank-b.rank)||((a.role==="slot"?1:0)-(b.role==="slot"?1:0))||a.name.localeCompare(b.name));
@@ -110,11 +139,11 @@ function coverageRaw(rows){
   if(!rows?.length)return null;
   let targets=0,comps=0,yards=0,tds=0,prNum=0,prDen=0;
   for(const r of rows){
-    const t=n(first(r,["targets","tgt","pass_targets"]));
-    const cmp=n(first(r,["completions","cmp","receptions_allowed","rec"]));
-    const y=n(first(r,["yards","yds","receiving_yards","rec_yards"]));
-    const td=n(first(r,["touchdowns","td","tds","receiving_tds"]));
-    const pr=Number(first(r,["passer_rating","rating","pass_rating"]));
+    const t=n(first(r,["def_targets","targets","tgt","pass_targets"]));
+    const cmp=n(first(r,["def_completions_allowed","completions","cmp","receptions_allowed","rec"]));
+    const y=n(first(r,["def_yards_allowed","yards","yds","receiving_yards","rec_yards"]));
+    const td=n(first(r,["def_receiving_td_allowed","touchdowns","td","tds","receiving_tds"]));
+    const pr=Number(first(r,["def_passer_rating_allowed","passer_rating","rating","pass_rating"]));
     targets+=t;comps+=cmp;yards+=y;tds+=td;
     if(Number.isFinite(pr)&&t>0){prNum+=pr*t;prDen+=t;}
   }
@@ -182,7 +211,8 @@ function cbCandidates(team,secondaries,coverage,unavailableNames){
 }
 
 export function inferWrCoverage({
-  opponent,receiverRank=1,secondaries={},coverage={},unavailableNames=new Set()
+  opponent,receiverRank=1,receiverRole=null,receiverSide=null,
+  secondaries={},coverage={},unavailableNames=new Set()
 }={}){
   const teamKey=normTeam(opponent);
   const original=secondaries[teamKey]||[];
@@ -193,11 +223,20 @@ export function inferWrCoverage({
   const slot=all.filter(x=>x.role==="slot");
   const outside=all.filter(x=>x.role!=="slot");
   let pool,assignmentConfidence,assignment;
-  if(receiverRank>=3&&slot.length){
-    pool=slot;assignmentConfidence=.68;assignment="likely slot matchup";
+
+  if(receiverRole==="slot"&&slot.length){
+    pool=slot;assignmentConfidence=.74;assignment="likely slot matchup";
+  }else if(receiverRole==="outside"){
+    const oppositeSide=receiverSide==="left"?"right":receiverSide==="right"?"left":null;
+    const sided=oppositeSide?outside.filter(x=>x.side===oppositeSide):[];
+    pool=sided.length?sided:(outside.length?outside:all);
+    assignmentConfidence=sided.length?.62:.54;
+    assignment=sided.length?"likely side-specific outside matchup":"likely outside matchup";
+  }else if(receiverRank>=3&&slot.length){
+    pool=slot;assignmentConfidence=.58;assignment="possible slot matchup";
   }else{
     pool=outside.length?outside:all;
-    assignmentConfidence=receiverRank===1?.48:.42;
+    assignmentConfidence=receiverRank===1?.46:.38;
     assignment=receiverRank===1?"likely primary outside matchup":"likely outside matchup";
   }
 
@@ -287,12 +326,12 @@ function teamPressureRows(rows,maxWeek=null){
     const team=normTeam(first(r,["team","club_code"]));
     if(!team||!Number.isFinite(wk))continue;
     const key=`${team}|${wk}`,x=weekly[key]||(weekly[key]={team,week:wk,pressure:0});
-    const direct=Number(first(r,["pressures","pressure"]));
+    const direct=Number(first(r,["def_pressures","pressures","pressure"]));
     if(Number.isFinite(direct))x.pressure+=direct;
     else{
-      x.pressure+=n(first(r,["hurries","qb_hurries","hur"]));
-      x.pressure+=n(first(r,["qb_hits","hits","qbkd"]));
-      x.pressure+=n(first(r,["sacks","sk"]));
+      x.pressure+=n(first(r,["def_times_hurried","hurries","qb_hurries","hur"]));
+      x.pressure+=n(first(r,["def_times_hitqb","qb_hits","hits","qbkd"]));
+      x.pressure+=n(first(r,["def_sacks","sacks","sk"]));
     }
   }
   const byTeam={};
