@@ -199,6 +199,7 @@ export function computeSnapshot(core, playersDB) {
       pointsAgainst: Math.round(((st.fpts_against || 0) + (st.fpts_against_decimal || 0) / 100) * 10) / 10,
       benchLeakage: ppts ? Math.round((ppts - fpts) * 10) / 10 : null,
       waiverPosition: st.waiver_position || null,
+      waiverBudgetUsed: Number(st.waiver_budget_used||0),
       depth, holes, surplus, injured,
       players: players.map(p => ({
         pid: p.pid, name: p.name, pos: p.pos, slot: slotPos(p), fps: p.fps || [],
@@ -242,6 +243,10 @@ export function computeSnapshot(core, playersDB) {
       num_teams: (league.settings || {}).num_teams,
       draft_rounds: draftRounds,
       pick_trading: (league.settings || {}).pick_trading,
+      waiver_type: (league.settings || {}).waiver_type,
+      waiver_budget: Number((league.settings || {}).waiver_budget||0),
+      waiver_clear_days: (league.settings || {}).waiver_clear_days,
+      daily_waivers: (league.settings || {}).daily_waivers,
     },
     leagueStatus: league.status,
     playoffTeams,
