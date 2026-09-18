@@ -177,20 +177,33 @@ function currentStarters(matchup, players, slots) {
   return (matchup?.starters||[]).map((pid,i)=>({slot:slots[i]||"?",player:byId[pid]||null}));
 }
 
-function calls(current, optimal) {
+function lineupChanges(current, optimal) {
   const curIds=new Set(current.map(x=>x.player?.pid).filter(Boolean));
   const optIds=new Set(optimal.picked.map(x=>x.player?.pid).filter(Boolean));
   const incoming=optimal.picked.filter(x=>x.player && !curIds.has(x.player.pid));
   const outgoing=current.filter(x=>x.player && !optIds.has(x.player.pid));
-  return incoming.map((x,i)=>{
-    const out=outgoing[i] || null;
+  const unused=[...outgoing];
+
+  // Pair only when the incoming player can legally occupy the outgoing
+  // player's CURRENT slot. This prevents invented "X over Y" swaps caused
+  // by a third player shifting between WR/TE/FLEX in the optimized lineup.
+  const calls=incoming.map(entry=>{
+    const idx=unused.findIndex(out=>eligibility(out.slot,entry.player));
+    const out=idx>=0?unused.splice(idx,1)[0]:null;
     return {
-      start:x.player,
+      start:entry.player,
       sit:out?.player||null,
-      slot:x.slot,
-      gain:round((x.player?.projection||0)-(out?.player?.projection||0)),
+      slot:out?.slot||entry.slot,
+      directLegal:!!out,
     };
-  }).sort((a,b)=>b.gain-a.gain);
+  });
+
+  return {
+    calls,
+    starts:incoming.map(x=>({slot:x.slot,player:x.player})),
+    sits:outgoing.map(x=>({slot:x.slot,player:x.player})),
+    unpairedSits:unused,
+  };
 }
 
 function confidence(sample, injury, fallback) {
@@ -364,7 +377,8 @@ export default async req => {
     const slots=(league.roster_positions||[]).filter(s=>s!=="BN" && s!=="IR" && s!=="TAXI");
     const current=currentStarters(myMatch,rosterPlayers,slots);
     const optimal=optimize(rosterPlayers,slots,current);
-    const changes=calls(current,optimal);
+    const decision=lineupChanges(current,optimal);
+    const changes=decision.calls;
     const currentIds=new Set(current.map(x=>x.player?.pid).filter(Boolean));
     const lockedBench=rosterPlayers
       .filter(p=>p.locked && !currentIds.has(p.pid))
@@ -401,7 +415,7 @@ export default async req => {
       currentTotal:round(currentTotal),
       optimalTotal:round(optimal.total),
       gain:round(optimal.total-currentTotal),
-      calls:changes,
+      calls:changes,decision,
       lockedBench,lockedStarters,
       current,optimal:optimal.picked,players:rosterPlayers,
     }), { headers:{"content-type":"application/json","cache-control":"no-store"} });
