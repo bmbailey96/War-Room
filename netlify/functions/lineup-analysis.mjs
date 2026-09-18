@@ -83,19 +83,23 @@ export default async req => {
     const current=(data.current||[]).filter(x=>x.player).map(x=>({
       slot:x.slot,name:x.player.name,proj:x.player.projection,floor:x.player.floor,ceiling:x.player.ceiling,
       opp:x.player.opp,injury:x.player.injury,confidence:x.player.confidence,confidenceScore:x.player.confidenceScore,
-      source:x.player.source,rangeSource:x.player.rangeSource,reasons:x.player.reasons
+      source:x.player.source,rangeSource:x.player.rangeSource,reasons:x.player.reasons,
+      coverageMatchup:x.player.signals?.coverageMatchup||null
     }));
     const bench=(data.players||[])
       .filter(p=>!(data.current||[]).some(x=>x.player?.pid===p.pid))
       .sort((a,b)=>(b.projection||0)-(a.projection||0))
       .slice(0,12)
       .map(p=>({name:p.name,pos:p.slot,proj:p.projection,floor:p.floor,ceiling:p.ceiling,opp:p.opp,injury:p.injury,
-        confidence:p.confidence,confidenceScore:p.confidenceScore,source:p.source,rangeSource:p.rangeSource,reasons:p.reasons}));
+        confidence:p.confidence,confidenceScore:p.confidenceScore,source:p.source,rangeSource:p.rangeSource,reasons:p.reasons,
+        coverageMatchup:p.signals?.coverageMatchup||null}));
     const computed=(data.calls||[]).map(c=>({
       start:c.start?.name,sit:c.sit?.name,slot:c.slot,
       edge:c.edge,beatProbability:c.beatProbability,decisionConfidence:c.decisionConfidence,
       startProjection:c.start?.projection,startFloor:c.start?.floor,startCeiling:c.start?.ceiling,startSource:c.start?.source,
-      sitProjection:c.sit?.projection,sitFloor:c.sit?.floor,sitCeiling:c.sit?.ceiling,sitSource:c.sit?.source
+      startCoverage:c.start?.signals?.coverageMatchup||null,
+      sitProjection:c.sit?.projection,sitFloor:c.sit?.floor,sitCeiling:c.sit?.ceiling,sitSource:c.sit?.source,
+      sitCoverage:c.sit?.signals?.coverageMatchup||null
     }));
     const lockedBench=(data.lockedBench||[]).map(p=>({
       name:p.name,actual:p.actual,team:p.team,kickoffAt:p.kickoffAt
@@ -133,13 +137,15 @@ Rules:
 1. Start from the computed lineup. Do not override it for generic matchup talk, reputation, consensus rankings, or vibes.
 2. NEVER recommend moving a player whose game has started. A player listed under PLAYERS ALREADY LOCKED ON THE BENCH is history, not an option.
 3. NEVER recommend START/HOLD/OVERRIDE in favor of anyone listed under PLAYERS UNAVAILABLE THIS WEEK, even if old projections or reputation favor him.
-4. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, or credible inactive news.
+4. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, credible inactive news, or a confirmed shadow/slot coverage assignment.
 5. Respect the engine's uncertainty. A LOW decision-confidence call or beat probability near 50% is genuinely close even if the raw point gap looks noticeable. A HIGH-confidence mathematical edge should require strong concrete news to override.
 6. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
 7. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
 8. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
-9. Never claim you found news you did not actually find.
-10. Keep this brutally scannable.
+9. COVERAGE MATCHUP is an inferred likely assignment from current depth charts plus actual defender coverage results. Its assignmentConfidence is deliberately modest. Treat it as a tiebreaker unless current reporting explicitly confirms a shadow/slot assignment.
+10. Never claim a defender will shadow a receiver unless current reporting actually says so.
+11. Never claim you found news you did not actually find.
+12. Keep this brutally scannable.
 
 Return ONLY valid JSON:
 {
