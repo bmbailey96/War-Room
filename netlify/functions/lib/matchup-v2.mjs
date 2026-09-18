@@ -184,6 +184,10 @@ function cbCandidates(team,secondaries,coverage,unavailableNames){
 export function inferWrCoverage({
   opponent,receiverRank=1,secondaries={},coverage={},unavailableNames=new Set()
 }={}){
+  const teamKey=normTeam(opponent);
+  const original=secondaries[teamKey]||[];
+  const unavailable=unavailableNames||new Set();
+  const unavailableStarters=original.filter(x=>x.rank===1&&unavailable.has(normName(x.name))).length;
   const all=cbCandidates(opponent,secondaries,coverage,unavailableNames);
   if(!all.length)return null;
   const slot=all.filter(x=>x.role==="slot");
@@ -209,7 +213,8 @@ export function inferWrCoverage({
   const cov=defender.coverage;
   const rel=cov?.reliability??.15;
   const rawScore=cov?.score??0;
-  const edge=clamp(-rawScore*rel*assignmentConfidence*.055,-.04,.04);
+  const attritionEdge=Math.min(.02,unavailableStarters*.012)*assignmentConfidence;
+  const edge=clamp(-rawScore*rel*assignmentConfidence*.055+attritionEdge,-.04,.05);
   return {
     defender:defender.name,
     defenderRole:defender.role,
@@ -220,6 +225,7 @@ export function inferWrCoverage({
     defenderPasserRating:cov?.passerRating??null,
     defenderYpt:cov?.ypt??null,
     coverageReliability:round(rel*100),
+    unavailableStartingCorners:unavailableStarters,
     edgePct:round(edge*100),
     multiplier:1+edge,
     source:"depth_chart_inference",
@@ -266,6 +272,64 @@ export function receiverRanks(currentRows,priorRows,week){
     }
     scored.sort((a,b)=>b.value-a.value);
     scored.forEach((x,i)=>out[`${team}|${x.name}`]=i+1);
+  }
+  return out;
+}
+
+
+function teamPressureRows(rows,maxWeek=null){
+  const weekly={};
+  for(const r of rows||[]){
+    const gt=String(first(r,["game_type","season_type"])||"REG").toUpperCase();
+    if(gt&&gt!=="REG")continue;
+    const wk=Number(first(r,["week"]));
+    if(maxWeek!=null&&Number.isFinite(wk)&&wk>=maxWeek)continue;
+    const team=normTeam(first(r,["team","club_code"]));
+    if(!team||!Number.isFinite(wk))continue;
+    const key=`${team}|${wk}`,x=weekly[key]||(weekly[key]={team,week:wk,pressure:0});
+    const direct=Number(first(r,["pressures","pressure"]));
+    if(Number.isFinite(direct))x.pressure+=direct;
+    else{
+      x.pressure+=n(first(r,["hurries","qb_hurries","hur"]));
+      x.pressure+=n(first(r,["qb_hits","hits","qbkd"]));
+      x.pressure+=n(first(r,["sacks","sk"]));
+    }
+  }
+  const byTeam={};
+  for(const x of Object.values(weekly))(byTeam[x.team]=byTeam[x.team]||[]).push(x);
+  return byTeam;
+}
+
+export function buildTeamPassRush(currentCsv,priorCsv,week){
+  const cur=teamPressureRows(parseAllCsv(currentCsv),week);
+  const prior=teamPressureRows(parseAllCsv(priorCsv),null);
+  const teams=new Set([...Object.keys(cur),...Object.keys(prior)]);
+  const raw={};
+  for(const team of teams){
+    const c=cur[team]||[],p=prior[team]||[];
+    const cm=c.length?c.reduce((s,x)=>s+x.pressure,0)/c.length:null;
+    const pm=p.length?p.reduce((s,x)=>s+x.pressure,0)/p.length:null;
+    const cw=Math.min(.75,.18+c.length*.14);
+    const value=cm!=null&&pm!=null?cm*cw+pm*(1-cw):(cm??pm);
+    if(value!=null)raw[team]={pressurePerGame:value,currentGames:c.length};
+  }
+  const vals=Object.values(raw).map(x=>x.pressurePerGame).filter(Number.isFinite);
+  const avg=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:null;
+  if(!avg)return {};
+  const out={};
+  for(const [team,x] of Object.entries(raw)){
+    const ratio=clamp(x.pressurePerGame/avg,.65,1.4);
+    // This is deliberately small because fantasy points allowed already
+    // captures some pass-rush effect. It is a micro edge, not a second model.
+    const edge=clamp((1-ratio)*.03,-.015,.015);
+    out[team]={
+      pressurePerGame:round(x.pressurePerGame),
+      leagueAverage:round(avg),
+      ratio:round(ratio),
+      edgePct:round(edge*100),
+      multiplier:1+edge,
+      confidence:x.currentGames>=3?"MEDIUM":"LOW",
+    };
   }
   return out;
 }
