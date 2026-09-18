@@ -28,5 +28,13 @@ assert.equal(
   scoreSleeperProjection({rec:8,rec_yd:100,rec_td:1},{rec:0.5,rec_yd:0.1,rec_td:6}),
   20
 );
+assert.equal(
+  scoreSleeperProjection(
+    {rec:8,rec_yd:100,rec_td:1},
+    {rec:0.5,rec_yd:0.1,rec_td:6,bonus_rec_te:0.5,bonus_rec_yd_100:2},
+    "TE"
+  ),
+  26
+);
 
 console.log("War Room V2 logic checks passed");
