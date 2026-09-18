@@ -5,14 +5,22 @@ import {
   getPlayersTrim,pInfo,slotPos,store,callClaude
 } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
-import lineup, { scoreSleeperProjection, optimize } from "./lineup.mjs";
+import lineup, {
+  scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean
+} from "./lineup.mjs";
 import { detectLeagueMode,validateActions } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 
+const NV="https://github.com/nflverse/nflverse-data/releases/download";
 async function j(url){
   const r=await fetch(url);
   if(!r.ok)throw new Error(`${url} -> ${r.status}`);
   return r.json();
+}
+async function txt(url){
+  const r=await fetch(url,{redirect:"follow"});
+  if(!r.ok)return null;
+  return r.text();
 }
 const n=v=>v==null||v===""||Number.isNaN(+v)?0:+v;
 const round=x=>Math.round(x*10)/10;
@@ -30,6 +38,86 @@ function parseJson(text){
   if(a<0||b<a)return null;
   try{return JSON.parse(clean.slice(a,b+1));}catch(e){return null;}
 }
+async function recentFormMap(season,week,league){
+  const [curTxt,priorTxt]=await Promise.all([
+    txt(`${NV}/stats_player/stats_player_week_${season}.csv`),
+    txt(`${NV}/stats_player/stats_player_week_${season-1}.csv`)
+  ]);
+  const wanted=[
+    "player_display_name","position","week","season_type",
+    "completions","attempts","passing_yards","passing_tds","passing_interceptions","passing_fumbles_lost",
+    "carries","rushing_yards","rushing_tds","rushing_fumbles_lost",
+    "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost",
+    "target_share","air_yards_share","wopr",
+    "passing_first_downs","rushing_first_downs","receiving_first_downs",
+    "passing_2pt_conversions","rushing_2pt_conversions","receiving_2pt_conversions"
+  ];
+  const group=rows=>{
+    const out={};
+    for(const r of rows){
+      if(r.season_type&&r.season_type!=="REG")continue;
+      const key=normName(r.player_display_name||"");
+      if(!key)continue;
+      (out[key]=out[key]||[]).push(r);
+    }
+    for(const rows of Object.values(out))rows.sort((a,b)=>n(a.week)-n(b.week));
+    return out;
+  };
+  const cur=group(parseCsv(curTxt,wanted).filter(r=>n(r.week)<=week));
+  const prior=group(parseCsv(priorTxt,wanted));
+  const names=new Set([...Object.keys(cur),...Object.keys(prior)]);
+  const out={};
+
+  for(const name of names){
+    const current=cur[name]||[], old=prior[name]||[];
+    const pos=(current.at(-1)?.position||old.at(-1)?.position||"UNK");
+    const recent=current.slice(-3);
+    const baseline=current.length>3?current.slice(-6,-3):old.slice(-5);
+    const recentPts=weightedMean(recent,r=>fantasyPoints(r,league.scoring_settings||{},pos));
+    const baselinePts=weightedMean(baseline,r=>fantasyPoints(r,league.scoring_settings||{},pos));
+    const recentUsage=weightedMean(recent,r=>usage(r,pos));
+    const baselineUsage=weightedMean(baseline,r=>usage(r,pos));
+    const roleRatio=recentUsage!=null&&baselineUsage>0
+      ? Math.max(.72,Math.min(1.32,recentUsage/baselineUsage))
+      : 1;
+    out[name]={
+      pos,currentGames:current.length,recentGames:recent.length,
+      recentPts:recentPts==null?null:round(recentPts),
+      baselinePts:baselinePts==null?null:round(baselinePts),
+      roleRatio:round(roleRatio),
+    };
+  }
+  return out;
+}
+
+export function blendedRosterForecast(providerAvg,form){
+  const provider=Number(providerAvg||0);
+  if(!form || form.recentPts==null)return {
+    forecast:round(provider),source:"provider",roleRatio:1,
+    recentPts:null,baselinePts:null,currentGames:0
+  };
+  const games=Number(form.currentGames||0);
+  // Real football earns weight slowly: 30% after one game, topping out at
+  // 62% once there is a meaningful current-season sample.
+  const actualWeight=Math.min(.62,.18+games*.12);
+  const baseline=form.baselinePts==null?form.recentPts:form.baselinePts;
+  const sampleBlend=games>=3
+    ? form.recentPts*.72+baseline*.28
+    : games===2
+      ? form.recentPts*.58+baseline*.42
+      : form.recentPts*.38+baseline*.62;
+  const roleMult=1+.20*((form.roleRatio||1)-1);
+  const blended=((provider*(1-actualWeight))+(sampleBlend*actualWeight))*roleMult;
+  return {
+    forecast:round(Math.max(0,blended)),
+    source:"blended_form",
+    roleRatio:form.roleRatio||1,
+    recentPts:form.recentPts,
+    baselinePts:form.baselinePts,
+    currentGames:games
+  };
+}
+
 async function projectionMap(season,week,league,db){
   const weeks=[week,week+1,week+2].filter(w=>w<=18);
   const rows=await Promise.all(weeks.map(w=>
@@ -54,11 +142,15 @@ async function projectionMap(season,week,league,db){
   }
   return out;
 }
-function playerView(pid,db,proj){
+function playerView(pid,db,proj,formMap={}){
   const p=pInfo(db,pid);
+  const provider=proj[pid]?.avg??0;
+  const form=blendedRosterForecast(provider,formMap[normName(p.name)]);
   return {
     pid,name:p.name,pos:slotPos(p),eligibleSlots:p.fps||[],team:p.team,age:p.age,injury:p.inj||null,
-    next3:proj[pid]?.avg??0,weeks:proj[pid]?.weeks||{}
+    next3:form.forecast,providerNext3:provider,weeks:proj[pid]?.weeks||{},
+    forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
+    baselinePts:form.baselinePts,currentGames:form.currentGames
   };
 }
 
@@ -155,8 +247,9 @@ export default async req=>{
     const usesFaab=faabTotal>0;
     const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const [proj,lineupData,market]=await Promise.all([
+    const [proj,formMap,lineupData,market]=await Promise.all([
       projectionMap(season,week,league,db),
+      recentFormMap(season,week,league),
       lineup(new Request(`${url.origin}/.netlify/functions/lineup?league=${encodeURIComponent(chosen.id)}`))
         .then(r=>r.json()).catch(()=>null),
       mode==="DYNASTY"?getDynastyMarket(s):Promise.resolve({players:{},picks:{},scrapeDate:null})
@@ -180,7 +273,7 @@ export default async req=>{
       .filter(pid=>pid&&!rostered.has(pid));
 
     let free=candidateIds.map(pid=>{
-      const p=playerView(pid,db,proj),trend=trendById[pid]||0;
+      const p=playerView(pid,db,proj,formMap),trend=trendById[pid]||0;
       const mv=mode==="DYNASTY"?marketValue(p.name):null;
       const ageBonus=mode==="DYNASTY"&&p.age?Math.max(-5,Math.min(6,(27-p.age)*1.1)):0;
       const score=mode==="DYNASTY"
@@ -190,8 +283,18 @@ export default async req=>{
     }).filter(p=>p.name&&p.team&&!hardInjured(p.injury))
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,24);
 
+    const enrichForecast=p=>{
+      const provider=proj[p.pid]?.avg??0;
+      const form=blendedRosterForecast(provider,formMap[normName(p.name)]);
+      return {
+        ...p,eligibleSlots:p.fps||[],
+        next3:form.forecast,providerNext3:provider,weeks:proj[p.pid]?.weeks||{},
+        forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
+        baselinePts:form.baselinePts,currentGames:form.currentGames
+      };
+    };
     const myRoster=me.players.map(p=>({
-      ...p,eligibleSlots:p.fps||[],next3:proj[p.pid]?.avg??0,weeks:proj[p.pid]?.weeks||{},
+      ...enrichForecast(p),
       market:mode==="DYNASTY"?marketValue(p.name):null
     }));
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
@@ -206,7 +309,10 @@ export default async req=>{
     const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>({
       name:t.name,record:`${t.wins}-${t.losses}`,stance:t.stance,
       holes:t.holes,surplus:t.surplus,
-      players:t.players.map(p=>({...p,eligibleSlots:p.fps||[],next3:proj[p.pid]?.avg??0,market:mode==="DYNASTY"?marketValue(p.name):null})),
+      players:t.players.map(p=>({
+        ...enrichForecast(p),
+        market:mode==="DYNASTY"?marketValue(p.name):null
+      })),
       picks:mode==="DYNASTY"?t.picks.map(enrichPick):[]
     }));
     const myPicks=mode==="DYNASTY"?me.picks.map(enrichPick):[];
@@ -232,7 +338,9 @@ export default async req=>{
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,weeklyDelta,marketDelta,
           score:round(score),addNext3:add.next3,dropNext3:drop.next3,
-          addMarket:add.market,dropMarket:drop.market,trending:add.trending
+          addMarket:add.market,dropMarket:drop.market,trending:add.trending,
+          addSource:add.forecastSource,dropSource:drop.forecastSource,
+          addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio
         });
       }
     }
@@ -250,7 +358,9 @@ export default async req=>{
         if(weeklyCeiling<=0.2 && mode!=="DYNASTY")continue;
         tradeTargets.push({
           partner:team.name,name:p.name,pos:p.pos,age:p.age,next3:p.next3,
-          market:p.market,weeklyCeiling,partnerHoles:team.holes,partnerSurplus:team.surplus
+          market:p.market,weeklyCeiling,forecastSource:p.forecastSource,
+          roleRatio:p.roleRatio,recentPts:p.recentPts,
+          partnerHoles:team.holes,partnerSurplus:team.surplus
         });
       }
     }
@@ -461,7 +571,13 @@ Return ONLY valid JSON:
         }),activeSlots);
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
-        return {...a,weeklyDelta,marketDelta};
+        return {
+          ...a,weeklyDelta,marketDelta,
+          forecastSource:add?.forecastSource||null,
+          roleRatio:add?.roleRatio??null,
+          recentPts:add?.recentPts??null,
+          providerNext3:add?.providerNext3??null,
+        };
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
         const partner=teamByName[a.partner];
@@ -489,7 +605,14 @@ Return ONLY valid JSON:
             marketDelta=receiveValue-sendValue;
           }
         }
-        return {...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta};
+        const primaryGet=gotPlayers[0]||null;
+        return {
+          ...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta,
+          forecastSource:primaryGet?.forecastSource||null,
+          roleRatio:primaryGet?.roleRatio??null,
+          recentPts:primaryGet?.recentPts??null,
+          providerNext3:primaryGet?.providerNext3??null,
+        };
       }
       return a;
     }).filter(a=>{
@@ -525,6 +648,7 @@ Return ONLY valid JSON:
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
+        forecastModel:"provider + recent league-scored production + workload trend",
       },
       reasoningMode:error?"deterministic":"live_news",
       reasoningAvailable:!error,

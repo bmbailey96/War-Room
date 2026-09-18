@@ -197,3 +197,24 @@ const faabFallback = deterministicRosterFallback({
 assert.ok(faabFallback.actions[0].faabPct<=7);
 
 console.log("Anthropic-offline fallback checks passed");
+
+
+const { blendedRosterForecast } = await import("../netlify/functions/roster-actions-background.mjs");
+
+const oneGameSpike = blendedRosterForecast(10,{
+  currentGames:1,recentPts:24,baselinePts:9,roleRatio:1.1
+});
+assert.ok(oneGameSpike.forecast>10);
+assert.ok(oneGameSpike.forecast<16);
+assert.equal(oneGameSpike.source,"blended_form");
+
+const establishedBreakout = blendedRosterForecast(10,{
+  currentGames:4,recentPts:16,baselinePts:10,roleRatio:1.2
+});
+assert.ok(establishedBreakout.forecast>oneGameSpike.forecast);
+
+const noForm = blendedRosterForecast(11,null);
+assert.equal(noForm.forecast,11);
+assert.equal(noForm.source,"provider");
+
+console.log("Roster blended-form forecast checks passed");
