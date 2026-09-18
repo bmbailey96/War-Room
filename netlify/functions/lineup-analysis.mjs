@@ -73,7 +73,7 @@ export function deterministicAnalysis(data) {
       : topLean
         ? `Hold the lineup. ${topLean.start} over ${topLean.sit||"the current option"} is only a lean.`
         : "Keep the lineup as it is.",
-    confidence:top?.confidence||"MEDIUM",
+    confidence:(topAction||topLean)?.confidence||"MEDIUM",
     calls,
     watch,
   };
