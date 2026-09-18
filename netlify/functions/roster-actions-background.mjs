@@ -571,7 +571,13 @@ Return ONLY valid JSON:
         }),activeSlots);
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
-        return {...a,weeklyDelta,marketDelta};
+        return {
+          ...a,weeklyDelta,marketDelta,
+          forecastSource:add?.forecastSource||null,
+          roleRatio:add?.roleRatio??null,
+          recentPts:add?.recentPts??null,
+          providerNext3:add?.providerNext3??null,
+        };
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
         const partner=teamByName[a.partner];
@@ -599,7 +605,14 @@ Return ONLY valid JSON:
             marketDelta=receiveValue-sendValue;
           }
         }
-        return {...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta};
+        const primaryGet=gotPlayers[0]||null;
+        return {
+          ...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta,
+          forecastSource:primaryGet?.forecastSource||null,
+          roleRatio:primaryGet?.roleRatio??null,
+          recentPts:primaryGet?.recentPts??null,
+          providerNext3:primaryGet?.providerNext3??null,
+        };
       }
       return a;
     }).filter(a=>{
