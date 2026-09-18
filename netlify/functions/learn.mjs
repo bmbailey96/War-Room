@@ -6,7 +6,7 @@
 // It also grades the live-news reasoning layer by driver. This is not model
 // fine-tuning. It is an explicit, inspectable feedback loop stored per league.
 
-import { blobs, MY_USER_ID, normName } from "./lib/ocho.mjs";
+import { store, MY_USER_ID, normName } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
 const DEFAULT = { role:0.28, matchup:0.25, environment:0.35 };
@@ -81,7 +81,7 @@ function finalizeDrivers(acc){
 }
 
 export default async () => {
-  const store=blobs();
+  const stateStore=store();
   const state=await j("https://api.sleeper.app/v1/state/nfl") || {};
   const season=Number(state.season)||new Date().getFullYear();
   const currentWeek=Number(state.week)||1;
@@ -99,8 +99,8 @@ export default async () => {
 
     for(let week=1;week<currentWeek;week++){
       const [log,analysis,matchups]=await Promise.all([
-        store.get(`v2_projection_${league.id}_${week}`,{type:"json"}).catch(()=>null),
-        store.get(`v2_lineup_analysis_${league.id}_${week}`,{type:"json"}).catch(()=>null),
+        stateStore.get(`projection_${league.id}_${week}`,{type:"json"}).catch(()=>null),
+        stateStore.get(`analysis_${league.id}_${week}`,{type:"json"}).catch(()=>null),
         j(`https://api.sleeper.app/v1/league/${league.id}/matchups/${week}`),
       ]);
       const row=(matchups||[]).find(m=>m.roster_id===mine.roster_id);
@@ -156,14 +156,14 @@ export default async () => {
         environment:signalReliability(samples,"environment"),
       },
     };
-    await store.setJSON(`v2_model_${league.id}`,model);
+    await stateStore.setJSON(`model_${league.id}`,model);
 
     const reasoning={
       at:Date.now(),leagueId:league.id,season,totalCalls:reasoningGrades.length,
       drivers:finalizeDrivers(driverStats),
       recent:reasoningGrades.slice(-20),
     };
-    await store.setJSON(`v2_reasoning_model_${league.id}`,reasoning);
+    await stateStore.setJSON(`reasoning_${league.id}`,reasoning);
 
     result.push({
       league:league.name,id:league.id,samples:samples.length,
