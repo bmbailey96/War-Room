@@ -4,115 +4,47 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>War Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0c0d0e;--panel:#141619;--line:#292d31;--text:#f1f1ee;--muted:#8f969d;--good:#a9e3bd;--warn:#e8c58c;--bad:#eaa2a2;--accent:#d7ff66}
-*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-main{max-width:920px;margin:0 auto;padding:24px 18px 70px} header{display:flex;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:28px}
-h1{font-size:15px;letter-spacing:.12em;margin:0;color:var(--accent)} .sub{color:var(--muted);font-size:12px;margin-top:5px}
-select,button{background:#101214;border:1px solid var(--line);color:var(--text);font:inherit;border-radius:5px;padding:8px 10px}
-button{cursor:pointer} button:hover{border-color:#596067}.top-controls{display:flex;gap:8px;align-items:center}
-.hero{border:1px solid var(--line);background:var(--panel);padding:20px;border-radius:8px;margin-bottom:14px}
-.eyebrow{font-size:11px;letter-spacing:.13em;color:var(--muted);margin-bottom:7px}.hero h2{font:600 26px/1.15 system-ui,sans-serif;margin:0 0 8px}
-.meta{color:var(--muted)} .metric{display:flex;gap:20px;margin-top:15px;flex-wrap:wrap}.metric b{font-size:19px;color:var(--text)}.metric span{color:var(--muted);font-size:11px;display:block}
-.call{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;padding:17px 0;border-top:1px solid var(--line)}.call:first-child{border-top:0}
-.start{font:650 20px/1.2 system-ui,sans-serif}.sit{color:var(--muted);margin-top:3px}.gain{font-weight:700;color:var(--good);white-space:nowrap}.why{margin-top:8px;color:#c7c9c8;font-family:system-ui,sans-serif}
-.tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.tag{border:1px solid var(--line);border-radius:999px;padding:2px 7px;color:var(--muted);font-size:10px}.high{color:var(--good)}.medium{color:var(--warn)}.low{color:var(--bad)}
-section{border:1px solid var(--line);background:var(--panel);padding:17px 20px;border-radius:8px;margin-top:14px}section h3{font-size:11px;letter-spacing:.12em;color:var(--muted);margin:0 0 10px}
-table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 4px;border-top:1px solid var(--line);font-size:12px}th{color:var(--muted);border-top:0;font-weight:400}.pts{text-align:right}
-.status{color:var(--muted);padding:18px 0}.watch{margin:7px 0 0;padding-left:20px;font-family:system-ui,sans-serif;color:#c7c9c8}
-footer{margin-top:25px;color:var(--muted);font-size:11px}a{color:var(--muted)}.source-note{margin-top:12px;font-size:10px;color:#686e73}
-@media(max-width:620px){header{align-items:flex-start;flex-direction:column}.top-controls{width:100%}select{flex:1}.hero h2{font-size:23px}.call{grid-template-columns:1fr}.gain{justify-self:start}td:nth-child(4),th:nth-child(4){display:none}}
+:root{--bg:#0c2033;--panel:#15304a;--panel2:#1b3a5c;--line:#3f6b8a;--bright:#7fc4e0;--paper:#e9eef2;--muted:#8fa8bc;--amber:#e8a33d;--green:#6fbf8b;--rust:#d9694f;--mono:"IBM Plex Mono",monospace;--display:"Oswald",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);background-image:linear-gradient(rgba(127,196,224,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(127,196,224,.045) 1px,transparent 1px);background-size:28px 28px;color:var(--paper);font:13px/1.55 var(--mono)}
+.wrap{max-width:940px;margin:0 auto;padding:20px 16px 80px}.title{border:2px solid var(--bright);padding:15px 17px;display:flex;justify-content:space-between;gap:14px;align-items:flex-end;position:relative}.title:after{content:"";position:absolute;inset:5px;border:1px solid rgba(127,196,224,.3);pointer-events:none}
+h1{font:700 29px/1 var(--display);letter-spacing:.04em;margin:0}.sub{color:var(--bright);font-size:10px;letter-spacing:.12em;margin-top:5px}.controls{display:flex;gap:8px;position:relative;z-index:2}select,button{background:var(--panel2);border:1px solid var(--bright);color:var(--bright);font:10px var(--mono);letter-spacing:.07em;padding:7px 10px}button{cursor:pointer}button:disabled{opacity:.45}.stamp{color:var(--amber);border:1px solid var(--amber);padding:3px 7px;display:inline-block;transform:rotate(-2deg);font:600 10px var(--mono);letter-spacing:.08em}
+.status{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:10px;padding:10px 2px 12px;flex-wrap:wrap}.status b{color:var(--bright);font-weight:500}
+.call{border:2px solid var(--amber);background:rgba(232,163,61,.08);padding:17px 18px;margin-bottom:14px}.label{font:600 12px var(--display);letter-spacing:.14em;color:var(--amber);margin-bottom:6px}.call h2{font:600 24px/1.2 var(--display);margin:0}.call-meta{color:var(--muted);font-size:10px;margin-top:6px}.numbers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin-top:15px}.num{background:rgba(12,32,51,.8);padding:10px 12px}.num b{display:block;font:500 22px var(--display)}.num span{font-size:9px;color:var(--muted);letter-spacing:.08em}
+.panel{background:var(--panel);border:1px solid var(--bright);padding:16px 17px;margin-top:14px}.panel-head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:7px;margin-bottom:5px}.panel-head h3{margin:0;font:500 13px var(--display);letter-spacing:.11em}.panel-head span{font-size:9px;color:var(--muted)}
+.swap{display:grid;grid-template-columns:1fr auto;gap:15px;padding:13px 2px;border-bottom:1px solid rgba(127,196,224,.14)}.swap:last-child{border-bottom:0}.swap strong{font:500 18px var(--display)}.sit{color:var(--muted);font-size:11px}.why{font-family:system-ui,sans-serif;color:#d7dfe5;margin-top:6px;max-width:720px}.gain{font:600 16px var(--display);color:var(--green);white-space:nowrap}.tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.tag{font-size:9px;border:1px solid var(--line);padding:2px 6px;color:var(--muted)}.hi{color:var(--green)}.med{color:var(--amber)}.lo{color:var(--rust)}
+.locked{background:rgba(217,105,79,.055)}.locked .gain{color:var(--rust)}.locked strong{color:#f0d9d4}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 5px;border-bottom:1px solid rgba(127,196,224,.13);font-size:10.5px}th{color:var(--muted);font-weight:400;letter-spacing:.06em}td:last-child,th:last-child{text-align:right}.slot{color:var(--bright)}.inj{color:var(--rust)}.actual{color:var(--amber)}
+.watch{font-family:system-ui,sans-serif;color:#d7dfe5;margin:8px 0 0;padding-left:20px}.watch li{margin:5px 0}.empty{padding:18px 2px;color:var(--muted)}
+.model{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}.model>div{border:1px solid var(--line);padding:8px 9px}.model b{display:block;font:500 16px var(--display);color:var(--bright)}.model span{font-size:9px;color:var(--muted)}
+footer{color:var(--muted);font-size:9px;margin-top:24px}footer a{color:var(--muted)}
+@media(max-width:620px){.title{align-items:flex-start;flex-direction:column}.controls{width:100%}select{flex:1}.call h2{font-size:21px}.numbers{grid-template-columns:1fr 1fr}.numbers .num:last-child{grid-column:1/-1}.swap{grid-template-columns:1fr}.gain{justify-self:start}.model{grid-template-columns:1fr}th:nth-child(4),td:nth-child(4){display:none}}
 </style>
 </head>
-<body><main>
-<header><div><h1>WAR ROOM</h1><div class="sub" id="weekline">loading the board</div></div>
-<div class="top-controls"><select id="league" aria-label="League"></select><button id="refresh">refresh</button></div></header>
-
-<div class="hero">
-<div class="eyebrow">THE CALL</div>
-<h2 id="headline">Reading the league...</h2>
-<div class="meta" id="opponent"></div>
-<div class="metric"><div><b id="current">-</b><span>CURRENT</span></div><div><b id="optimal">-</b><span>BEST LINEUP</span></div><div><b id="gain">-</b><span>POINTS LEFT</span></div></div>
+<body><div class="wrap">
+<div class="title"><div><div class="stamp">WEEKLY FIELD REPORT</div><h1>WAR ROOM</h1><div class="sub">LINEUP ENGINE / V2</div></div><div class="controls"><select id="league"></select><button id="refresh">REFRESH</button></div></div>
+<div class="status"><span id="week">CONNECTING TO SLEEPER</span><span id="learned"></span></div>
+<div class="call"><div class="label">THE CALL</div><h2 id="headline">Building the board…</h2><div class="call-meta" id="opponent"></div><div class="numbers"><div class="num"><b id="current">—</b><span>CURRENT / ACTUAL + PROJ</span></div><div class="num"><b id="best">—</b><span>BEST LEGAL LINEUP</span></div><div class="num"><b id="gain">—</b><span>POINTS STILL AVAILABLE</span></div></div></div>
+<div class="panel"><div class="panel-head"><h3>START / SIT</h3><span>ONLY MOVES YOU CAN STILL MAKE</span></div><div id="calls"><div class="empty">calculating…</div></div></div>
+<div class="panel" id="locked-panel" style="display:none"><div class="panel-head"><h3>ALREADY HAPPENED</h3><span>LOCKED IS LOCKED</span></div><div id="locked"></div></div>
+<div class="panel"><div class="panel-head"><h3>BEST LEGAL LINEUP</h3><span id="source"></span></div><div id="lineup"><div class="empty">loading…</div></div></div>
+<div class="panel"><div class="panel-head"><h3>BEFORE KICKOFF</h3><span>LIVE NEWS LAYER</span></div><div id="watch"><div class="empty">checking current reporting…</div></div></div>
+<div class="panel"><div class="panel-head"><h3>ENGINE LEARNING</h3><span>OUTCOMES, NOT SELF-CONGRATULATION</span></div><div class="model" id="model"></div></div>
+<footer><a href="/legacy.html">OPEN LEGACY WAR ROOM</a></footer>
 </div>
-
-<section><h3>START / SIT</h3><div id="calls"><div class="status">Building projections from actual weekly production...</div></div></section>
-<section id="locked-section" style="display:none"><h3>ALREADY HAPPENED</h3><div id="locked"></div></section>
-<section><h3>LINEUP</h3><div id="lineup"><div class="status">Loading...</div></div></section>
-<section><h3>BEFORE KICKOFF</h3><div id="watch" class="status">Checking current injury and role news...</div></section>
-
-<footer><a href="/legacy.html">open the full old war room</a><div class="source-note" id="source"></div></footer>
-</main>
 <script>
-const $=id=>document.getElementById(id);
-let currentLeague=null, baseData=null;
-
+const $=id=>document.getElementById(id);let league=null,base=null;
 function esc(v){const d=document.createElement("div");d.textContent=v==null?"":String(v);return d.innerHTML}
-function conf(c){return '<span class="'+String(c||"").toLowerCase()+'">'+esc(c||"")+'</span>'}
-function renderBase(d){
-  baseData=d; currentLeague=d.league.id;
-  $("weekline").textContent=d.league.name+" · WEEK "+d.week;
-  $("opponent").textContent="vs "+d.opponent;
-  $("current").textContent=(d.currentTotal??0).toFixed(1);
-  $("optimal").textContent=(d.optimalTotal??0).toFixed(1);
-  $("gain").textContent="+"+(d.gain??0).toFixed(1);
-  $("source").textContent=d.sourceNote||"";
-  if(!d.calls?.length){
-    $("headline").textContent="Keep the lineup.";
-    $("calls").innerHTML='<div class="status">No bench player clears a current starter on the projection model.</div>';
-  }else{
-    const top=d.calls[0];
-    $("headline").textContent="Start "+top.start.name+(top.sit?" over "+top.sit.name:"")+".";
-    $("calls").innerHTML=d.calls.map(c=>'<div class="call"><div><div class="start">START '+esc(c.start.name)+'</div><div class="sit">'+(c.sit?'sit '+esc(c.sit.name):'open slot')+' · '+esc(c.slot)+'</div><div class="tags"><span class="tag">'+conf(c.start.confidence)+' confidence</span><span class="tag">'+esc(c.start.opp?'vs '+c.start.opp:'opponent TBD')+'</span>'+(c.start.fallback?'<span class="tag low">provider fallback</span>':'')+'</div></div><div class="gain">+'+Number(c.gain||0).toFixed(1)+'</div></div>').join("");
-  }
-  const locked=d.lockedBench||[];
-  if(locked.length){
-    $("locked-section").style.display="block";
-    $("locked").innerHTML=locked.map(p=>'<div class="call"><div><div class="start">'+esc(p.name)+'</div><div class="sit">BENCH · LOCKED'+(p.team?' · '+esc(p.team):'')+'</div><div class="why">Those points are already final/locked for lineup purposes. The app will not recommend putting him into the lineup now.</div></div><div class="gain">'+Number(p.actual||0).toFixed(1)+' pts</div></div>').join("");
-  }else{
-    $("locked-section").style.display="none";
-    $("locked").innerHTML="";
-  }
-
-  const opt=d.optimal||[];
-  $("lineup").innerHTML='<table><thead><tr><th>SLOT</th><th>PLAYER</th><th>RANGE / STATUS</th><th>OPP</th><th class="pts">PTS</th></tr></thead><tbody>'+opt.map(x=>{
-    const p=x.player; if(!p)return '<tr><td>'+esc(x.slot)+'</td><td class="low">empty</td><td></td><td></td><td></td></tr>';
-    const status=p.locked?'LOCKED · '+Number(p.actual||0).toFixed(1)+' actual':Number(p.floor||0).toFixed(1)+'–'+Number(p.ceiling||0).toFixed(1);
-    const pts=p.locked?Number(p.actual||0).toFixed(1):Number(p.projection||0).toFixed(1);
-    return '<tr><td>'+esc(x.slot)+'</td><td>'+esc(p.name)+(p.injury?' <span class="low">['+esc(p.injury)+']</span>':'')+'</td><td>'+status+'</td><td>'+esc(p.opp||"")+'</td><td class="pts">'+pts+'</td></tr>';
-  }).join("")+'</tbody></table>';
-}
-function renderAnalysis(a){
-  if(!a?.analysis)return;
-  const x=a.analysis;
-  if(x.summary)$("headline").textContent=x.summary;
-  if(x.calls?.length){
-    $("calls").innerHTML=x.calls.map(c=>{
-      const fallback=baseData?.players?.find(p=>p.name===c.start)?.fallback;
-      return '<div class="call"><div><div class="start">'+esc(c.verdict||"START")+' '+esc(c.start||"")+'</div><div class="sit">'+(c.sit?'over '+esc(c.sit):esc(c.slot||""))+'</div><div class="why">'+esc(c.why||"")+'</div><div class="tags"><span class="tag">'+conf(c.confidence)+' confidence</span>'+(c.sourceDate?'<span class="tag">news '+esc(c.sourceDate)+'</span>':'')+(fallback?'<span class="tag low">provider fallback</span>':'')+'</div></div></div>';
-    }).join("");
-  }
-  $("watch").innerHTML=x.watch?.length?'<ul class="watch">'+x.watch.map(w=>'<li>'+esc(w)+'</li>').join("")+'</ul>':'<div class="status">Nothing specific to monitor.</div>';
-}
-async function load(force=false){
-  $("refresh").disabled=true;
-  try{
-    const q=currentLeague?'?league='+encodeURIComponent(currentLeague):'';
-    const r=await fetch('/.netlify/functions/lineup'+q); const d=await r.json();
-    if(!r.ok||d.error)throw new Error(d.error||"lineup failed");
-    const sel=$("league");
-    sel.innerHTML=d.leagues.map(l=>'<option value="'+esc(l.id)+'"'+(l.id===d.league.id?' selected':'')+'>'+esc(l.name)+'</option>').join("");
-    renderBase(d);
-    $("watch").innerHTML='<div class="status">Checking current injury, practice, and role news...</div>';
-    const sep=q?'&':'?';
-    fetch('/.netlify/functions/lineup-analysis'+q+sep+(force?'refresh=1':'refresh=0'))
-      .then(r=>r.json()).then(renderAnalysis)
-      .catch(e=>{$("watch").innerHTML='<div class="status">News check failed: '+esc(e.message)+'</div>'});
-  }catch(e){
-    $("headline").textContent="Could not build the lineup.";
-    $("calls").innerHTML='<div class="status">'+esc(e.message)+'</div>';
-  }finally{$("refresh").disabled=false}
-}
-$("league").addEventListener("change",e=>{currentLeague=e.target.value;load(false)});
-$("refresh").addEventListener("click",()=>load(true));
-load(false);
+function conf(v){const c=String(v||"").toUpperCase();return '<span class="'+(c==="HIGH"?"hi":c==="MEDIUM"?"med":"lo")+'">'+esc(c)+'</span>'}
+function renderBase(d){base=d;league=d.league.id;$("week").innerHTML='<b>'+esc(d.league.name)+'</b> // NFL WEEK '+esc(d.week)+' // '+esc(d.league.status||"");$("opponent").textContent="VS "+d.opponent;$("current").textContent=Number(d.currentTotal||0).toFixed(1);$("best").textContent=Number(d.optimalTotal||0).toFixed(1);$("gain").textContent="+"+Number(d.gain||0).toFixed(1);$("source").textContent="CUSTOM MODEL + LEAGUE SCORING";
+const m=d.model||{};$("learned").textContent=m.samples?"LEARNED FROM "+m.samples+" PLAYER-WEEKS":"LEARNING STARTS NOW";const w=m.weights||{};$("model").innerHTML='<div><b>'+Number(w.role??.28).toFixed(2)+'</b><span>ROLE / WORKLOAD WEIGHT</span></div><div><b>'+Number(w.matchup??.25).toFixed(2)+'</b><span>MATCHUP WEIGHT</span></div><div><b>'+Number(w.environment??.35).toFixed(2)+'</b><span>SCORING ENVIRONMENT WEIGHT</span></div>';
+if(!d.calls?.length){$("headline").textContent="Keep the lineup as it is.";$("calls").innerHTML='<div class="empty">No legal bench move improves the current lineup.</div>'}else{const x=d.calls[0];$("headline").textContent="Start "+x.start.name+(x.sit?" over "+x.sit.name:"")+". ";$("calls").innerHTML=d.calls.map(c=>'<div class="swap"><div><strong>START '+esc(c.start.name)+'</strong><div class="sit">'+(c.sit?'SIT '+esc(c.sit.name):'OPEN SLOT')+' // '+esc(c.slot)+'</div><div class="tags"><span class="tag">'+conf(c.start.confidence)+' CONFIDENCE</span><span class="tag">'+esc(c.start.opp?'VS '+c.start.opp:'OPP TBD')+'</span>'+(c.start.fallback?'<span class="tag lo">PROVIDER FALLBACK</span>':'')+'</div></div><div class="gain">+'+Number(c.gain||0).toFixed(1)+'</div></div>').join("")}
+const locked=d.lockedBench||[];if(locked.length){$("locked-panel").style.display="block";$("locked").innerHTML=locked.map(p=>'<div class="swap locked"><div><strong>'+esc(p.name)+'</strong><div class="sit">BENCH // GAME STARTED // CANNOT MOVE</div></div><div class="gain">'+Number(p.actual||0).toFixed(1)+' PTS</div></div>').join("")}else{$("locked-panel").style.display="none"}
+$("lineup").innerHTML='<table><thead><tr><th>SLOT</th><th>PLAYER</th><th>RANGE / STATUS</th><th>OPP</th><th>PTS</th></tr></thead><tbody>'+(d.optimal||[]).map(x=>{const p=x.player;if(!p)return'<tr><td class="slot">'+esc(x.slot)+'</td><td class="inj">EMPTY</td><td></td><td></td><td></td></tr>';const status=p.locked?'LOCKED / ACTUAL':Number(p.floor||0).toFixed(1)+'–'+Number(p.ceiling||0).toFixed(1);const pts=p.locked?Number(p.actual||0).toFixed(1):Number(p.projection||0).toFixed(1);return'<tr><td class="slot">'+esc(x.slot)+'</td><td>'+esc(p.name)+(p.injury?' <span class="inj">['+esc(p.injury)+']</span>':'')+'</td><td class="'+(p.locked?'actual':'')+'">'+status+'</td><td>'+esc(p.opp||"")+'</td><td>'+pts+'</td></tr>'}).join("")+'</tbody></table>'}
+function renderAnalysis(a){if(!a?.analysis)return;const x=a.analysis;if(x.summary)$("headline").textContent=x.summary;if(x.calls?.length)$("calls").innerHTML=x.calls.map(c=>'<div class="swap"><div><strong>'+esc(c.verdict||"START")+' '+esc(c.start||"")+'</strong><div class="sit">'+(c.sit?'OVER '+esc(c.sit):esc(c.slot||""))+'</div><div class="why">'+esc(c.why||"")+'</div><div class="tags"><span class="tag">'+conf(c.confidence)+' CONFIDENCE</span>'+(c.drivers||[]).map(d=>'<span class="tag">'+esc(d.toUpperCase())+'</span>').join("")+(c.sourceDate?'<span class="tag">NEWS '+esc(c.sourceDate)+'</span>':'')+'</div></div></div>').join("");$("watch").innerHTML=x.watch?.length?'<ul class="watch">'+x.watch.map(w=>'<li>'+esc(w)+'</li>').join("")+'</ul>':'<div class="empty">Nothing specific to monitor before kickoff.</div>'}
+async function load(force=false){$("refresh").disabled=true;try{const q=league?'?league='+encodeURIComponent(league):'';const r=await fetch('/.netlify/functions/lineup'+q,{cache:"no-store"});const d=await r.json();if(!r.ok||d.error)throw new Error(d.error||"lineup failed");const s=$("league");s.innerHTML=d.leagues.map(l=>'<option value="'+esc(l.id)+'"'+(l.id===d.league.id?' selected':'')+'>'+esc(l.name)+'</option>').join("");renderBase(d);$("watch").innerHTML='<div class="empty">checking injury, role, depth chart, scheme, and weather…</div>';const sep=q?'&':'?';fetch('/.netlify/functions/lineup-analysis'+q+sep+'refresh='+(force?'1':'0'),{cache:"no-store"}).then(r=>r.json()).then(renderAnalysis).catch(e=>{$("watch").innerHTML='<div class="empty">news layer unavailable: '+esc(e.message)+'</div>'})}catch(e){$("headline").textContent="Could not build the board.";$("calls").innerHTML='<div class="empty">'+esc(e.message)+'</div>'}finally{$("refresh").disabled=false}}
+$("league").onchange=e=>{league=e.target.value;load(false)};$("refresh").onclick=()=>load(true);load(false);
 </script></body></html>
