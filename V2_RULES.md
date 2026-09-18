@@ -65,3 +65,11 @@ The primary page should answer, in this order:
 4. What should I watch before kickoff?
 
 The legacy cockpit can exist at `/legacy.html`. Do not move its tabs back onto the front page.
+
+
+## Frozen training boundary
+- Opening or refreshing the website must never change the learner's training record.
+- `lineup` is a read/compute endpoint. Its live output is not historical truth.
+- Only the scheduled pregame refresh may freeze projection and reasoning snapshots.
+- Once either player in a start/sit decision is locked, later refreshes cannot rewrite that decision.
+- Live AI-analysis cache is UI-only and is never graded.

@@ -2,8 +2,8 @@
 // Arithmetic comes from lineup.mjs. This call only decides whether current
 // reporting gives us a concrete reason to distrust or override that number.
 
-import lineup from "./lineup.mjs";
-import { store, callClaude } from "./lib/war-v2.mjs";
+import lineup, { eligibility } from "./lineup.mjs";
+import { store, callClaude, normName } from "./lib/war-v2.mjs";
 
 function parseJson(text) {
   if (!text) return null;
@@ -13,10 +13,67 @@ function parseJson(text) {
   try { return JSON.parse(s.slice(a,b+1)); } catch(e) { return null; }
 }
 
+const DRIVER_KEYS=new Set(["injury","role","depth_chart","scheme","weather","matchup","projection_only"]);
+const CONFIDENCE=new Set(["HIGH","MEDIUM","LOW"]);
+
+export function sanitizeAnalysis(analysis,data){
+  if(!analysis || !data) return {summary:null,confidence:"LOW",calls:[],watch:[]};
+
+  const byName=new Map((data.players||[]).map(p=>[normName(p.name),p]));
+  const current=(data.current||[]).filter(x=>x.player);
+  const starterByPid=new Map(current.map(x=>[x.player.pid,x]));
+  const starterIds=new Set(starterByPid.keys());
+  const calls=[];
+
+  for(const raw of analysis.calls||[]){
+    const start=byName.get(normName(raw.start));
+    const sit=byName.get(normName(raw.sit));
+    if(!start || !sit) continue;
+    if(start.pid===sit.pid || start.locked || sit.locked) continue;
+
+    // A live-news override must still describe a move that can be made right
+    // now: bench -> current starter, in the starter's currently occupied slot.
+    if(starterIds.has(start.pid) || !starterIds.has(sit.pid)) continue;
+    const occupied=starterByPid.get(sit.pid);
+    if(!occupied || !eligibility(occupied.slot,start)) continue;
+
+    const drivers=[...new Set((raw.drivers||[]).filter(d=>DRIVER_KEYS.has(d)))];
+    calls.push({
+      start:start.name,
+      sit:sit.name,
+      slot:occupied.slot,
+      verdict:raw.verdict==="OVERRIDE"?"OVERRIDE":"START",
+      confidence:CONFIDENCE.has(raw.confidence)?raw.confidence:"LOW",
+      why:String(raw.why||"").slice(0,600),
+      sourceDate:/^\d{4}-\d{2}-\d{2}$/.test(raw.sourceDate||"")?raw.sourceDate:null,
+      drivers:drivers.length?drivers:["projection_only"],
+    });
+  }
+
+  const watch=(analysis.watch||[])
+    .filter(x=>typeof x==="string" && x.trim())
+    .slice(0,3)
+    .map(x=>x.trim().slice(0,240));
+
+  const summary=calls.length
+    ? String(analysis.summary||"Current news supports a lineup change.").slice(0,300)
+    : (data.calls?.length
+        ? "No current news invalidates the computed lineup changes."
+        : "Keep the lineup.");
+
+  return {
+    summary,
+    confidence:CONFIDENCE.has(analysis.confidence)?analysis.confidence:"LOW",
+    calls,
+    watch,
+  };
+}
+
 export default async req => {
+  let data=null;
   try {
     const baseResponse=await lineup(req);
-    const data=await baseResponse.json();
+    data=await baseResponse.json();
     if(!baseResponse.ok || data.error) {
       return new Response(JSON.stringify(data),{status:baseResponse.status||502,headers:{"content-type":"application/json"}});
     }
@@ -25,10 +82,13 @@ export default async req => {
     const force=url.searchParams.get("refresh")==="1";
     const stateStore=store();
     const reasoningModel=await stateStore.get(`reasoning_${data.league.id}`,{type:"json"}).catch(()=>null);
-    const cacheKey=`analysis_${data.league.id}_${data.week}`;
+    // This cache is for the live UI only. The learner never reads it.
+    // Scheduled pregame freezes live in a separate immutable-ish snapshot.
+    const cacheKey=`live_analysis_${data.league.id}_${data.week}`;
     const cached=await stateStore.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force && cached && Date.now()-cached.at < 4*60*60*1000) {
-      return new Response(JSON.stringify({...cached,projection:data}),{
+      const safeAnalysis=sanitizeAnalysis(cached.analysis,data);
+      return new Response(JSON.stringify({...cached,analysis:safeAnalysis,projection:data}),{
         headers:{"content-type":"application/json","cache-control":"no-store"}
       });
     }
@@ -38,6 +98,7 @@ export default async req => {
       opp:x.player.opp,injury:x.player.injury,confidence:x.player.confidence,fallback:x.player.fallback,reasons:x.player.reasons
     }));
     const bench=(data.players||[])
+      .filter(p=>!p.locked)
       .filter(p=>!(data.current||[]).some(x=>x.player?.pid===p.pid))
       .sort((a,b)=>(b.projection||0)-(a.projection||0))
       .slice(0,12)
@@ -78,7 +139,7 @@ Rules:
 3. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, or credible inactive news.
 4. If two players are within 1.5 projected points, treat it as a genuine decision. If MATCHUP STATE posture is protect_floor, prefer the stronger floor when evidence is otherwise close. If it is chase_ceiling, prefer the stronger ceiling. If neutral, do not force a risk-style tiebreak.
 5. Do not use matchup posture to override a gap larger than 1.5 projected points.
-6. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
+6. Use the graded track record above as calibration, not gospel. Prefer recentHitRate and recentAvgPointEdge over lifetime hitRate when they disagree, because roles and schemes change. If a driver has been losing lately, demand stronger evidence before using it as an override.
 7. If the model used Sleeper fallback for a player, say so and lower confidence.
 8. Never claim you found news you did not actually find.
 9. Keep this brutally scannable.
@@ -94,14 +155,18 @@ Return ONLY valid JSON:
 }`;
 
     const raw=await callClaude(prompt,{maxTokens:1500,useSearch:true});
-    const analysis=parseJson(raw);
-    if(!analysis) throw new Error("lineup reasoning returned invalid JSON");
+    const parsed=parseJson(raw);
+    if(!parsed) throw new Error("lineup reasoning returned invalid JSON");
+    const analysis=sanitizeAnalysis(parsed,data);
     const saved={at:Date.now(),leagueId:data.league.id,week:data.week,analysis};
     await stateStore.setJSON(cacheKey,saved);
     return new Response(JSON.stringify({...saved,projection:data}),{
       headers:{"content-type":"application/json","cache-control":"no-store"}
     });
   } catch(e) {
-    return new Response(JSON.stringify({error:e.message}),{status:502,headers:{"content-type":"application/json"}});
+    return new Response(JSON.stringify({
+      error:e.message,
+      projection:data && !data.error ? data : null,
+    }),{status:502,headers:{"content-type":"application/json"}});
   }
 };

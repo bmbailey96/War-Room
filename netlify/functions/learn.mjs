@@ -6,7 +6,7 @@
 // It also grades the live-news reasoning layer by driver. This is not model
 // fine-tuning. It is an explicit, inspectable feedback loop stored per league.
 
-import { store, MY_USER_ID, normName } from "./lib/war-v2.mjs";
+import { store, MY_USER_ID } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
 const DEFAULT = { role:0.28, matchup:0.25, environment:0.35 };
@@ -16,19 +16,28 @@ async function j(url) {
   try { const r=await fetch(url); return r.ok ? r.json() : null; }
   catch(e){ return null; }
 }
+const round2=x=>Math.round(x*100)/100;
+
+export function recencyWeight(week,maxWeek,decay=0.86){
+  if(!Number.isFinite(week) || !Number.isFinite(maxWeek)) return 1;
+  return Math.pow(decay,Math.max(0,maxWeek-week));
+}
+
 const mae=(samples,w)=> {
   if(!samples.length) return null;
-  let total=0;
+  const maxWeek=Math.max(...samples.map(s=>s.week||0));
+  let total=0,weightTotal=0;
   for(const s of samples){
     let p=s.base;
     p*=1+w.role*((s.signals?.roleRatio||1)-1);
     p*=1+w.matchup*((s.signals?.matchupRatio||1)-1);
     p*=1+w.environment*((s.signals?.environmentRatio||1)-1);
-    total+=Math.abs(p-s.actual);
+    const weight=recencyWeight(s.week,maxWeek);
+    total+=Math.abs(p-s.actual)*weight;
+    weightTotal+=weight;
   }
-  return total/samples.length;
+  return weightTotal?total/weightTotal:null;
 };
-const round2=x=>Math.round(x*100)/100;
 
 function fitPositionScales(samples){
   const scales={}, detail={};
@@ -38,10 +47,17 @@ function fitPositionScales(samples){
       scales[pos]=1; detail[pos]={n:rows.length,raw:1,scale:1};
       continue;
     }
-    const err=scale=>rows.reduce((sum,s)=>{
-      const b=s.rawBase??s.base;
-      return sum+Math.abs(b*scale-s.actual);
-    },0)/rows.length;
+    const maxWeek=Math.max(...rows.map(s=>s.week||0));
+    const err=scale=>{
+      let total=0,weightTotal=0;
+      for(const s of rows){
+        const weight=recencyWeight(s.week,maxWeek);
+        const b=s.rawBase??s.base;
+        total+=Math.abs(b*scale-s.actual)*weight;
+        weightTotal+=weight;
+      }
+      return weightTotal?total/weightTotal:Infinity;
+    };
     let raw=1,best=err(1);
     for(let x=.75;x<=1.2501;x+=.01){
       const e=err(x);
@@ -78,29 +94,45 @@ function fit(samples) {
 }
 
 function signalReliability(samples,key){
-  let n=0, hit=0;
+  let n=0,hit=0,weightedN=0,weightedHits=0;
   const ratioKey={role:"roleRatio",matchup:"matchupRatio",environment:"environmentRatio"}[key];
+  const maxWeek=samples.length?Math.max(...samples.map(s=>s.week||0)):0;
   for(const s of samples){
     const ratio=s.signals?.[ratioKey] ?? 1;
     if(Math.abs(ratio-1)<0.03) continue;
     const residual=s.actual-s.base;
     if(Math.abs(residual)<1) continue;
-    n++;
-    if((ratio>1 && residual>0)||(ratio<1 && residual<0)) hit++;
+    const weight=recencyWeight(s.week,maxWeek);
+    n++; weightedN+=weight;
+    const good=(ratio>1 && residual>0)||(ratio<1 && residual<0);
+    if(good){hit++;weightedHits+=weight;}
   }
-  return {n,hit,hitRate:n?round2(hit/n):null};
+  return {
+    n,hit,
+    hitRate:n?round2(hit/n):null,
+    recentHitRate:weightedN?round2(weightedHits/weightedN):null,
+  };
 }
 
-function addDriverStat(acc,driver,hit){
+function addDriverStat(acc,driver,hit,delta,week,maxWeek){
   const key=DRIVER_KEYS.includes(driver)?driver:"other";
-  const v=acc[key]||(acc[key]={n:0,hits:0});
-  v.n++; if(hit)v.hits++;
+  const v=acc[key]||(acc[key]={n:0,hits:0,weightedN:0,weightedHits:0,weightedDelta:0});
+  const weight=recencyWeight(week,maxWeek);
+  v.n++;
+  v.weightedN+=weight;
+  v.weightedDelta+=delta*weight;
+  if(hit){v.hits++;v.weightedHits+=weight;}
 }
 function finalizeDrivers(acc){
   const out={};
   for(const k of DRIVER_KEYS){
-    const v=acc[k]||{n:0,hits:0};
-    out[k]={...v,hitRate:v.n?round2(v.hits/v.n):null};
+    const v=acc[k]||{n:0,hits:0,weightedN:0,weightedHits:0,weightedDelta:0};
+    out[k]={
+      n:v.n,hits:v.hits,
+      hitRate:v.n?round2(v.hits/v.n):null,
+      recentHitRate:v.weightedN?round2(v.weightedHits/v.weightedN):null,
+      recentAvgPointEdge:v.weightedN?round2(v.weightedDelta/v.weightedN):null,
+    };
   }
   return out;
 }
@@ -123,9 +155,9 @@ export default async () => {
     const reasoningGrades=[];
 
     for(let week=1;week<currentWeek;week++){
-      const [log,analysis,matchups]=await Promise.all([
+      const [log,reasoningSnapshot,matchups]=await Promise.all([
         stateStore.get(`projection_${league.id}_${week}`,{type:"json"}).catch(()=>null),
-        stateStore.get(`analysis_${league.id}_${week}`,{type:"json"}).catch(()=>null),
+        stateStore.get(`reasoning_snapshot_${league.id}_${week}`,{type:"json"}).catch(()=>null),
         j(`https://api.sleeper.app/v1/league/${league.id}/matchups/${week}`),
       ]);
       const row=(matchups||[]).find(m=>m.roster_id===mine.roster_id);
@@ -147,21 +179,18 @@ export default async () => {
         }
       }
 
-      if(analysis?.analysis?.calls?.length && log?.players){
-        const byName={};
-        for(const p of Object.values(log.players)) byName[normName(p.name)]=p;
-        for(const call of analysis.analysis.calls){
-          if(!call.start || !call.sit) continue;
-          const a=byName[normName(call.start)], b=byName[normName(call.sit)];
-          if(!a || !b) continue;
-          const aPts=actualByPid[a.pid], bPts=actualByPid[b.pid];
+      if(reasoningSnapshot?.calls){
+        for(const call of Object.values(reasoningSnapshot.calls)){
+          if(!call.startPid || !call.sitPid) continue;
+          const aPts=actualByPid[call.startPid], bPts=actualByPid[call.sitPid];
           if(typeof aPts!=="number" || typeof bPts!=="number") continue;
-          const hit=aPts>bPts;
+          const delta=aPts-bPts;
+          const hit=delta>0;
           const drivers=Array.isArray(call.drivers)&&call.drivers.length?call.drivers:["other"];
-          drivers.forEach(d=>addDriverStat(driverStats,d,hit));
+          drivers.forEach(d=>addDriverStat(driverStats,d,hit,delta,week,currentWeek-1));
           reasoningGrades.push({
-            week,start:call.start,sit:call.sit,startPts:aPts,sitPts:bPts,hit,
-            verdict:call.verdict||null,drivers,
+            week,start:call.start,sit:call.sit,startPts:aPts,sitPts:bPts,delta:round2(delta),hit,
+            verdict:call.verdict||null,drivers,frozenAt:call.frozenAt||null,
           });
         }
       }
