@@ -324,3 +324,13 @@ assert.ok(rush.NYJ.edgePct>0);
 assert.ok(Math.abs(rush.NE.edgePct)<=1.5);
 
 console.log("QB pass-rush micro-edge checks passed");
+
+
+assert.equal(matchupExposureFor("WR",.22),1);
+assert.ok(matchupExposureFor("WR",.33)>1);
+assert.equal(matchupExposureFor("WR",.05),.45);
+assert.equal(matchupExposureFor("RB",.45),1);
+assert.ok(matchupExposureFor("RB",.60)>1);
+assert.ok(matchupExposureFor("TE",.10)<1);
+
+console.log("Opportunity-scaled matchup exposure checks passed");
