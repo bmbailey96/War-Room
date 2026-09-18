@@ -5,14 +5,22 @@ import {
   getPlayersTrim,pInfo,slotPos,store,callClaude
 } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
-import lineup, { scoreSleeperProjection, optimize } from "./lineup.mjs";
+import lineup, {
+  scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean
+} from "./lineup.mjs";
 import { detectLeagueMode,validateActions } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 
+const NV="https://github.com/nflverse/nflverse-data/releases/download";
 async function j(url){
   const r=await fetch(url);
   if(!r.ok)throw new Error(`${url} -> ${r.status}`);
   return r.json();
+}
+async function txt(url){
+  const r=await fetch(url,{redirect:"follow"});
+  if(!r.ok)return null;
+  return r.text();
 }
 const n=v=>v==null||v===""||Number.isNaN(+v)?0:+v;
 const round=x=>Math.round(x*10)/10;
@@ -30,6 +38,86 @@ function parseJson(text){
   if(a<0||b<a)return null;
   try{return JSON.parse(clean.slice(a,b+1));}catch(e){return null;}
 }
+async function recentFormMap(season,week,league){
+  const [curTxt,priorTxt]=await Promise.all([
+    txt(`${NV}/stats_player/stats_player_week_${season}.csv`),
+    txt(`${NV}/stats_player/stats_player_week_${season-1}.csv`)
+  ]);
+  const wanted=[
+    "player_display_name","position","week","season_type",
+    "completions","attempts","passing_yards","passing_tds","passing_interceptions","passing_fumbles_lost",
+    "carries","rushing_yards","rushing_tds","rushing_fumbles_lost",
+    "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost",
+    "target_share","air_yards_share","wopr",
+    "passing_first_downs","rushing_first_downs","receiving_first_downs",
+    "passing_2pt_conversions","rushing_2pt_conversions","receiving_2pt_conversions"
+  ];
+  const group=rows=>{
+    const out={};
+    for(const r of rows){
+      if(r.season_type&&r.season_type!=="REG")continue;
+      const key=normName(r.player_display_name||"");
+      if(!key)continue;
+      (out[key]=out[key]||[]).push(r);
+    }
+    for(const rows of Object.values(out))rows.sort((a,b)=>n(a.week)-n(b.week));
+    return out;
+  };
+  const cur=group(parseCsv(curTxt,wanted).filter(r=>n(r.week)<=week));
+  const prior=group(parseCsv(priorTxt,wanted));
+  const names=new Set([...Object.keys(cur),...Object.keys(prior)]);
+  const out={};
+
+  for(const name of names){
+    const current=cur[name]||[], old=prior[name]||[];
+    const pos=(current.at(-1)?.position||old.at(-1)?.position||"UNK");
+    const recent=current.slice(-3);
+    const baseline=current.length>3?current.slice(-6,-3):old.slice(-5);
+    const recentPts=weightedMean(recent,r=>fantasyPoints(r,league.scoring_settings||{},pos));
+    const baselinePts=weightedMean(baseline,r=>fantasyPoints(r,league.scoring_settings||{},pos));
+    const recentUsage=weightedMean(recent,r=>usage(r,pos));
+    const baselineUsage=weightedMean(baseline,r=>usage(r,pos));
+    const roleRatio=recentUsage!=null&&baselineUsage>0
+      ? Math.max(.72,Math.min(1.32,recentUsage/baselineUsage))
+      : 1;
+    out[name]={
+      pos,currentGames:current.length,recentGames:recent.length,
+      recentPts:recentPts==null?null:round(recentPts),
+      baselinePts:baselinePts==null?null:round(baselinePts),
+      roleRatio:round(roleRatio),
+    };
+  }
+  return out;
+}
+
+export function blendedRosterForecast(providerAvg,form){
+  const provider=Number(providerAvg||0);
+  if(!form || form.recentPts==null)return {
+    forecast:round(provider),source:"provider",roleRatio:1,
+    recentPts:null,baselinePts:null,currentGames:0
+  };
+  const games=Number(form.currentGames||0);
+  // Real football earns weight slowly: 30% after one game, topping out at
+  // 62% once there is a meaningful current-season sample.
+  const actualWeight=Math.min(.62,.18+games*.12);
+  const baseline=form.baselinePts==null?form.recentPts:form.baselinePts;
+  const sampleBlend=games>=3
+    ? form.recentPts*.72+baseline*.28
+    : games===2
+      ? form.recentPts*.58+baseline*.42
+      : form.recentPts*.38+baseline*.62;
+  const roleMult=1+.20*((form.roleRatio||1)-1);
+  const blended=((provider*(1-actualWeight))+(sampleBlend*actualWeight))*roleMult;
+  return {
+    forecast:round(Math.max(0,blended)),
+    source:"blended_form",
+    roleRatio:form.roleRatio||1,
+    recentPts:form.recentPts,
+    baselinePts:form.baselinePts,
+    currentGames:games
+  };
+}
+
 async function projectionMap(season,week,league,db){
   const weeks=[week,week+1,week+2].filter(w=>w<=18);
   const rows=await Promise.all(weeks.map(w=>
@@ -54,11 +142,15 @@ async function projectionMap(season,week,league,db){
   }
   return out;
 }
-function playerView(pid,db,proj){
+function playerView(pid,db,proj,formMap={}){
   const p=pInfo(db,pid);
+  const provider=proj[pid]?.avg??0;
+  const form=blendedRosterForecast(provider,formMap[normName(p.name)]);
   return {
     pid,name:p.name,pos:slotPos(p),eligibleSlots:p.fps||[],team:p.team,age:p.age,injury:p.inj||null,
-    next3:proj[pid]?.avg??0,weeks:proj[pid]?.weeks||{}
+    next3:form.forecast,providerNext3:provider,weeks:proj[pid]?.weeks||{},
+    forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
+    baselinePts:form.baselinePts,currentGames:form.currentGames
   };
 }
 
