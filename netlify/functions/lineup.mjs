@@ -49,6 +49,30 @@ const avg=a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
 const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 const round=x=>Math.round(x*10)/10;
 
+function easternKickoffMs(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return null;
+  const [y,m,d]=dateStr.split("-").map(Number);
+  const [hh,mm]=timeStr.split(":").map(Number);
+  if (![y,m,d,hh,mm].every(Number.isFinite)) return null;
+
+  // nflverse game times are Eastern. Convert that wall-clock time to UTC
+  // without hard-coding EST/EDT, so November's DST transition is correct.
+  const guess=Date.UTC(y,m-1,d,hh,mm);
+  const parts=new Intl.DateTimeFormat("en-US",{
+    timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",hourCycle:"h23"
+  }).formatToParts(new Date(guess));
+  const p=Object.fromEntries(parts.map(x=>[x.type,x.value]));
+  const rendered=Date.UTC(+p.year,+p.month-1,+p.day,+p.hour,+p.minute);
+  const offset=rendered-guess;
+  return guess-offset;
+}
+
+function playerValue(p) {
+  if (!p) return 0;
+  return p.locked && p.actual != null ? p.actual : (p.projection || 0);
+}
+
 function fantasyPoints(r, s={}) {
   const w=(key, fallback=0)=> typeof s[key] === "number" ? s[key] : fallback;
   let p=0;
@@ -92,15 +116,29 @@ function eligibility(slot, pos) {
   return slot===pos;
 }
 
-function optimize(players, slots) {
-  // Additive point projections do not need a combinatorial search here.
-  // Fill required positions first, then flexible slots from most restrictive
-  // to least restrictive. This avoids an exponential DFS on deep dynasty
-  // rosters while still preserving the scarce exact-position starters.
-  const pool=players.filter(p=>p.projection!=null && !p.out).sort((a,b)=>b.projection-a.projection);
+function optimize(players, slots, current=[]) {
+  // A player whose NFL game has started is immovable. If he was already in
+  // the fantasy lineup, preserve him in that exact occupied slot. If he was
+  // on the bench, he is unavailable to the optimizer. No time travel.
   const used=new Set();
   const assigned=slots.map((slot,index)=>({slot,index,player:null}));
+  for (let i=0;i<assigned.length;i++) {
+    const p=current[i]?.player;
+    if (p?.locked) {
+      assigned[i].player=p;
+      used.add(p.pid);
+    }
+  }
+
+  // Additive point projections do not need a combinatorial search here.
+  // Fill required positions first, then flexible slots from most restrictive
+  // to least restrictive. Only players whose games have not started are
+  // candidates for remaining slots.
+  const pool=players
+    .filter(p=>p.projection!=null && !p.out && !p.locked)
+    .sort((a,b)=>b.projection-a.projection);
   const take=(entry)=>{
+    if (entry.player) return;
     const p=pool.find(x=>!used.has(x.pid) && eligibility(entry.slot,x.slot));
     if(p){ entry.player=p; used.add(p.pid); }
   };
@@ -109,7 +147,7 @@ function optimize(players, slots) {
   for(const kind of ["REC_FLEX","FLEX","SUPER_FLEX"]) assigned.filter(x=>x.slot===kind).forEach(take);
   assigned.sort((a,b)=>a.index-b.index);
   return {
-    total:assigned.reduce((s,x)=>s+(x.player?.projection||0),0),
+    total:assigned.reduce((s,x)=>s+playerValue(x.player),0),
     picked:assigned.map(({slot,player})=>({slot,player})),
   };
 }
@@ -207,20 +245,28 @@ export default async req => {
     for(const pos of ["QB","RB","WR","TE"]) leagueAllowed[pos]=avg(Object.values(defense).map(d=>d[pos]).filter(x=>x!=null));
 
     // NFL game context.
-    const gameRows=parseCsv(gamesCsv,["season","week","game_type","home_team","away_team","spread_line","total_line"]);
+    const gameRows=parseCsv(gamesCsv,["season","week","game_type","home_team","away_team","gameday","gametime","spread_line","total_line"]);
     const gameByTeam={};
+    const nowMs=Date.now();
     for(const g of gameRows){
       if(num(g.season)!==season || num(g.week)!==week || (g.game_type && g.game_type!=="REG")) continue;
       const h=normTeam(g.home_team), a=normTeam(g.away_team), total=num(g.total_line), spread=num(g.spread_line);
       const hi=total ? total/2 + spread/2 : null, ai=total ? total/2 - spread/2 : null;
-      gameByTeam[h]={opp:a,implied:hi}; gameByTeam[a]={opp:h,implied:ai};
+      const kickoffMs=easternKickoffMs(g.gameday,g.gametime);
+      const locked=kickoffMs!=null && nowMs>=kickoffMs;
+      const likelyComplete=kickoffMs!=null && nowMs>=kickoffMs+(5*60*60*1000);
+      const shared={kickoffAt:kickoffMs?new Date(kickoffMs).toISOString():null,locked,likelyComplete};
+      gameByTeam[h]={opp:a,implied:hi,...shared};
+      gameByTeam[a]={opp:h,implied:ai,...shared};
     }
     const impliedAvg=avg(Object.values(gameByTeam).map(x=>x.implied).filter(x=>x!=null))||22;
     const sleeperById=Object.fromEntries((sleeperProj||[]).map(r=>[r.player_id,r]));
 
     const rosterPlayers=(mine.players||[]).map(pid=>{
       const info=pInfo(playersDB,pid), slot=slotPos(info), key=normName(info.name);
-      const c=(cur[key]||[]).filter(r=>num(r.week)<week), p=(prior[key]||[]).slice(-8);
+      const allCurrent=(cur[key]||[]);
+      const c=allCurrent.filter(r=>num(r.week)<week), played=allCurrent.find(r=>num(r.week)===week) || null;
+      const p=(prior[key]||[]).slice(-8);
       const hist=[...p,...c];
       const currentMean=weightedMean(c,r=>fantasyPoints(r,league.scoring_settings||{}));
       const priorMean=weightedMean(p,r=>fantasyPoints(r,league.scoring_settings||{}));
@@ -238,6 +284,13 @@ export default async req => {
       let projection=base, reasons=[];
       const game=gameByTeam[normTeam(info.team)];
       const opp=game?.opp || c.at(-1)?.opponent_team || sp?.opponent || null;
+      const locked=!!game?.locked;
+      const matchupActual=myMatch?.players_points && typeof myMatch.players_points[pid] === "number"
+        ? myMatch.players_points[pid] : null;
+      const statActual=played ? fantasyPoints(played,league.scoring_settings||{}) : null;
+      const actual=locked
+        ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
+        : null;
       if(projection!=null && !fallback && ["QB","RB","WR","TE"].includes(slot)){
         const recentUsage=weightedMean(c.slice(-3),r=>usage(r,slot));
         const priorUsage=weightedMean((c.length>3?c.slice(0,-3):p.slice(-5)),r=>usage(r,slot));
@@ -272,22 +325,32 @@ export default async req => {
         ceiling:projection==null?null:round(projection+(sigma||0)*0.9),
         sample:c.length,priorSample:p.length,confidence:confidence(c.length,info.inj,fallback),
         fallback,sleeper:typeof sleeper==="number"?round(sleeper):null,reasons,out,
+        locked,actual,kickoffAt:game?.kickoffAt||null,likelyComplete:!!game?.likelyComplete,
       };
     });
 
     const slots=(league.roster_positions||[]).filter(s=>s!=="BN" && s!=="IR" && s!=="TAXI");
     const current=currentStarters(myMatch,rosterPlayers,slots);
-    const optimal=optimize(rosterPlayers,slots);
+    const optimal=optimize(rosterPlayers,slots,current);
     const changes=calls(current,optimal);
+    const currentIds=new Set(current.map(x=>x.player?.pid).filter(Boolean));
+    const lockedBench=rosterPlayers
+      .filter(p=>p.locked && !currentIds.has(p.pid))
+      .sort((a,b)=>(b.actual||0)-(a.actual||0));
+    const lockedStarters=current
+      .filter(x=>x.player?.locked)
+      .map(x=>({slot:x.slot,player:x.player}));
+    const currentTotal=current.reduce((s,x)=>s+playerValue(x.player),0);
 
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
       sourceNote:"QB/RB/WR/TE use actual nflverse weekly production and workload plus matchup/game context. Sleeper is comparison/fallback only. K/DEF/IDP currently use fallback.",
-      currentTotal:round(current.reduce((s,x)=>s+(x.player?.projection||0),0)),
+      currentTotal:round(currentTotal),
       optimalTotal:round(optimal.total),
-      gain:round(optimal.total-current.reduce((s,x)=>s+(x.player?.projection||0),0)),
+      gain:round(optimal.total-currentTotal),
       calls:changes,
+      lockedBench,lockedStarters,
       current,optimal:optimal.picked,players:rosterPlayers,
     }), { headers:{"content-type":"application/json","cache-control":"no-store"} });
   } catch(e) {
