@@ -105,4 +105,4 @@ export default async () => {
   });
 };
 
-export const config = { schedule: "30 15 * * 3" };
+// Legacy V1: intentionally unscheduled. Kept for manual reference/rollback.
