@@ -162,3 +162,38 @@ assert.ok(pickTierFactor("early")>pickTierFactor("mid"));
 assert.ok(pickTierFactor("late")<pickTierFactor("mid"));
 
 console.log("Roster background and dynasty market checks passed");
+
+
+const { deterministicAnalysis } = await import("../netlify/functions/lineup-analysis.mjs");
+const offlineLineup = deterministicAnalysis({
+  calls:[{
+    slot:"FLEX",edge:2.4,beatProbability:64,decisionConfidence:"MEDIUM",
+    start:{name:"Healthy Starter",confidence:"MEDIUM",injury:null},
+    sit:{name:"Bench Option"}
+  }],
+  players:[
+    {name:"Questionable Player",injury:"Questionable",practiceStatus:"Limited Participation"},
+    {name:"Healthy Starter",injury:null}
+  ]
+});
+assert.equal(offlineLineup.calls[0].start,"Healthy Starter");
+assert.equal(offlineLineup.calls[0].drivers[0],"projection_only");
+assert.ok(offlineLineup.watch[0].includes("Questionable Player"));
+
+const { deterministicRosterFallback } = await import("../netlify/functions/roster-actions-background.mjs");
+const priorityFallback = deterministicRosterFallback({
+  mode:"REDRAFT",usesFaab:false,
+  waivers:[{add:"Free Agent",drop:"Bench Guy",weeklyDelta:1.8,marketDelta:null,trending:250}],
+  trades:[]
+});
+assert.equal(priorityFallback.actions[0].type,"ADD_DROP");
+assert.equal(priorityFallback.actions[0].faabPct,null);
+
+const faabFallback = deterministicRosterFallback({
+  mode:"DYNASTY",usesFaab:true,faabRemainingPct:7,
+  waivers:[{add:"Young Flyer",drop:"Old Bench",weeklyDelta:.4,marketDelta:12,trending:100}],
+  trades:[]
+});
+assert.ok(faabFallback.actions[0].faabPct<=7);
+
+console.log("Anthropic-offline fallback checks passed");

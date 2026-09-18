@@ -81,17 +81,52 @@ function rosterAfter(roster,{removeNames=[],addPlayers=[]}={}){
 }
 function assetName(x){return x?.name||String(x||"");}
 
-function fallbackAction(free,drops){
-  if(!free.length)return {summary:"No urgent roster move.",actions:[{type:"HOLD",priority:1,confidence:"LOW",headline:"Hold",why:"No available player cleared the deterministic screen."}],watch:[]};
+export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
+  const actions=[];
+  for(const [i,w] of waivers.slice(0,3).entries()){
+    const impact=Math.max(Number(w.weeklyDelta||0),mode==="DYNASTY"?Number(w.marketDelta||0)/8:0);
+    const confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
+    const faabBase=mode==="DYNASTY"
+      ? Math.min(22,Math.max(2,Math.round((w.marketDelta||0)*.7+(w.weeklyDelta||0)*4)))
+      : Math.min(28,Math.max(2,Math.round((w.weeklyDelta||0)*6+Math.log10(1+(w.trending||0))*3)));
+    const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
+    actions.push({
+      type:"ADD_DROP",priority:i+1,confidence,
+      headline:`Add ${w.add}, drop ${w.drop}`,
+      why:mode==="DYNASTY"
+        ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
+        : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
+      window:"BEFORE WAIVERS",
+      add:{name:w.add},drop:{name:w.drop},faabPct,
+      drivers:["depth","schedule",...(mode==="DYNASTY"?["market"]:[])],
+      weeklyDelta:w.weeklyDelta,marketDelta:w.marketDelta??null,
+    });
+  }
+  for(const [i,t] of trades.slice(0,Math.max(0,3-actions.length)).entries()){
+    actions.push({
+      type:"TRADE_FOR",priority:actions.length+1,
+      confidence:t.confidence||"MEDIUM",
+      headline:`Offer for ${t.target}`,
+      why:t.why,
+      window:"THIS WEEK",partner:t.partner,
+      send:t.send,receive:[{type:"player",name:t.target}],
+      faabPct:null,drivers:["consolidation",...(mode==="DYNASTY"?["market","pick_value"]:[])],
+      weeklyDelta:t.weeklyDelta,partnerWeeklyDelta:t.partnerWeeklyDelta,
+      sendValue:t.sendValue??null,receiveValue:t.receiveValue??null,
+      marketDelta:t.marketDelta??null,
+    });
+  }
+  if(!actions.length){
+    actions.push({
+      type:"HOLD",priority:1,confidence:"MEDIUM",headline:"Hold the roster",
+      why:"No deterministic waiver swap or trade package cleared the improvement and plausibility screens.",
+      window:"WATCH",drivers:["depth"]
+    });
+  }
   return {
-    summary:`Best available screen: ${free[0].name}.`,
-    actions:[{
-      type:"ADD_DROP",priority:1,confidence:"LOW",
-      headline:`Add ${free[0].name}${drops[0]?`, drop ${drops[0].name}`:""}`,
-      why:"Fallback recommendation because the live reasoning layer did not return valid structured output.",
-      add:{name:free[0].name},drop:drops[0]?{name:drops[0].name}:null,window:"WATCH",drivers:["depth"]
-    }],
-    watch:[]
+    summary:actions[0].headline,
+    actions,
+    watch:trades.length?trades.slice(0,2).map(t=>`Trade market: ${t.target} on ${t.partner}`):[]
   };
 }
 
@@ -114,6 +149,11 @@ export default async req=>{
     const me=snapshot.teams.find(t=>t.isMe);
     if(!me)throw new Error("my roster missing");
     const mode=detectLeagueMode(league);
+    const faabTotal=Number(league.settings?.waiver_budget||0);
+    const faabUsed=Number(me.waiverBudgetUsed||0);
+    const faabRemaining=Math.max(0,faabTotal-faabUsed);
+    const usesFaab=faabTotal>0;
+    const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
     const [proj,lineupData,market]=await Promise.all([
       projectionMap(season,week,league,db),
@@ -243,6 +283,77 @@ export default async req=>{
       return playerAssetValue(assetName(x));
     };
 
+    // Build a few exact, plausible trade packages without AI. These are not
+    // generated from prose: both teams are re-optimized and dynasty packages
+    // must land inside a reasonable market-value band.
+    const deterministicTrades=[];
+    const myBench=myRoster
+      .filter(p=>!starterSet.has(p.name)&&!p.onIR&&!hardInjured(p.injury))
+      .sort((a,b)=>(mode==="DYNASTY"?(a.market??0)-(b.market??0):(a.next3||0)-(b.next3||0)));
+    const sendAssets=[
+      ...myBench.map(p=>({type:"player",name:p.name,value:mode==="DYNASTY"?p.market:(p.next3||0),player:p})),
+      ...(mode==="DYNASTY"?myPicks.map(p=>({type:"pick",name:p.name,value:p.value,pick:p})):[])
+    ].filter(x=>x.value!=null);
+
+    for(const target of bestTradeTargets.slice(0,12)){
+      const partner=teamByName[target.partner];
+      const targetPlayer=partner?.players.find(p=>normName(p.name)===normName(target.name));
+      if(!partner||!targetPlayer)continue;
+      const partnerBase=simTotal(partner.players,activeSlots);
+      const targetValue=mode==="DYNASTY"?(target.market??null):(target.next3||0);
+      const combos=[];
+      for(const a of sendAssets)combos.push([a]);
+      for(let i=0;i<Math.min(sendAssets.length,12);i++){
+        for(let j=i+1;j<Math.min(sendAssets.length,12);j++)combos.push([sendAssets[i],sendAssets[j]]);
+      }
+
+      let best=null;
+      for(const combo of combos){
+        const sentPlayers=combo.filter(x=>x.type==="player").map(x=>x.player);
+        const sendValue=combo.reduce((s,x)=>s+Number(x.value||0),0);
+        if(mode==="DYNASTY" && targetValue!=null){
+          const ratio=targetValue/Math.max(1,sendValue);
+          if(ratio<.72||ratio>1.38)continue;
+        }
+        const myAfter=simTotal(rosterAfter(myRoster,{
+          removeNames:sentPlayers.map(p=>p.name),addPlayers:[targetPlayer]
+        }),activeSlots);
+        const partnerAfter=simTotal(rosterAfter(partner.players,{
+          removeNames:[targetPlayer.name],addPlayers:sentPlayers
+        }),activeSlots);
+        const weeklyDelta=round(myAfter-baselineRosterTotal);
+        const partnerWeeklyDelta=round(partnerAfter-partnerBase);
+        if(weeklyDelta<=.2)continue;
+        if(mode==="REDRAFT" && partnerWeeklyDelta<-1.5)continue;
+        if(mode==="DYNASTY" && partnerWeeklyDelta<-3)continue;
+
+        const receiveValue=mode==="DYNASTY"?targetValue:null;
+        const marketDelta=mode==="DYNASTY"&&receiveValue!=null?round(receiveValue-sendValue):null;
+        const fairnessPenalty=mode==="DYNASTY"&&receiveValue!=null
+          ? Math.abs(receiveValue-sendValue)*.18
+          : Math.abs(Math.min(0,partnerWeeklyDelta))*1.2;
+        const score=weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty;
+        if(!best||score>best.score){
+          best={
+            score,partner:target.partner,target:target.name,
+            send:combo.map(x=>({type:x.type,name:x.name})),
+            weeklyDelta,partnerWeeklyDelta,
+            sendValue:mode==="DYNASTY"?round(sendValue):null,
+            receiveValue:mode==="DYNASTY"&&receiveValue!=null?round(receiveValue):null,
+            marketDelta,
+          };
+        }
+      }
+      if(best){
+        best.confidence=best.weeklyDelta>=2&&best.partnerWeeklyDelta>=-1?"HIGH":"MEDIUM";
+        best.why=mode==="DYNASTY"
+          ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, with market ${best.sendValue} → ${best.receiveValue}.`
+          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup and ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs.`;
+        deterministicTrades.push(best);
+      }
+    }
+    deterministicTrades.sort((a,b)=>b.score-a.score);
+
     const lineupSummary=(lineupData?.optimal||[]).filter(x=>x.player).map(x=>({
       slot:x.slot,name:x.player.name,projection:x.player.projection,
       floor:x.player.floor,ceiling:x.player.ceiling,injury:x.player.injury
@@ -279,6 +390,9 @@ ${JSON.stringify(free,null,2)}
 DETERMINISTIC TRADE TARGET SCREEN (weeklyCeiling = max three-week lineup gain before acquisition cost):
 ${JSON.stringify(bestTradeTargets,null,2)}
 
+DETERMINISTIC EXACT TRADE PACKAGES (already re-solved for both teams):
+${JSON.stringify(deterministicTrades.slice(0,10),null,2)}
+
 ${mode==="DYNASTY"?`MY ACTUAL PICKS (only these may be spent):
 ${JSON.stringify(myPicks,null,2)}`:""}
 
@@ -296,7 +410,7 @@ Hard rules:
 - In dynasty, only use the exact pick labels listed under MY ACTUAL PICKS.
 - In redraft, never use draft picks.
 - Give at most 5 actions, ordered by importance.
-- Prefer trade targets from the deterministic TRADE TARGET SCREEN.
+- Prefer exact packages from DETERMINISTIC EXACT TRADE PACKAGES when one exists. Otherwise use the deterministic target screen.
 - For a trade, explain briefly why the other manager might accept.
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
@@ -330,7 +444,9 @@ Return ONLY valid JSON:
       parsed=parseJson(raw);
       if(!parsed)throw new Error("invalid roster-actions JSON");
     }catch(e){error=e.message;}
-    if(!parsed)parsed=fallbackAction(free,drops);
+    if(!parsed)parsed=deterministicRosterFallback({
+      waivers:bestWaiverPairs,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
+    });
 
     let actions=validateActions(parsed.actions,{
       myNames,freeNames,teamPlayers,teamPicks,myPicks:myPickNames,dynasty:mode==="DYNASTY"
@@ -395,18 +511,25 @@ Return ONLY valid JSON:
     const result={
       at:Date.now(),league:{id:chosen.id,name:league.name,mode,week,season},
       summary:parsed.summary||actions[0]?.headline||"No urgent roster move.",
-      actions:actions.length?actions:fallbackAction(free,drops).actions,
+      actions:actions.length?actions:deterministicRosterFallback({
+        waivers:bestWaiverPairs,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
+      }).actions,
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
+        waiver:{usesFaab,total:faabTotal,used:faabUsed,remaining:faabRemaining},
         myPicks,
         marketDate:market.scrapeDate||null,
         baselineNext3Lineup:baselineRosterTotal,
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
+        deterministicTrades:deterministicTrades.slice(0,5),
       },
-      error
+      reasoningMode:error?"deterministic":"live_news",
+      reasoningAvailable:!error,
+      reasoningError:error||null,
+      error:null
     };
 
     await s.setJSON(cacheKey,result);
