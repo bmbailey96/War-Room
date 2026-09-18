@@ -2,7 +2,7 @@
 // Offense is projected from actual nflverse weekly production and workload.
 // Sleeper projection is kept only as a transparent fallback/comparison.
 
-import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam, blobs } from "./lib/ocho.mjs";
+import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam, store } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
@@ -198,8 +198,8 @@ export default async req => {
       getPlayersTrim(),
     ]);
     const week=Number(state.week)||1, season=Number(state.season)||chosen.season;
-    const store=blobs();
-    const learnedModel=await store.get(`v2_model_${chosen.id}`,{type:"json"}).catch(()=>null);
+    const stateStore=store();
+    const learnedModel=await stateStore.get(`model_${chosen.id}`,{type:"json"}).catch(()=>null);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const [matchups,currentCsv,priorCsv,gamesCsv,sleeperProj] = await Promise.all([
       j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${week}`).catch(()=>[]),
@@ -357,8 +357,8 @@ export default async req => {
     // grades these against actual league-scored points. Locked players are
     // never overwritten after kickoff, which prevents hindsight from leaking
     // into the training record.
-    const projectionKey=`v2_projection_${chosen.id}_${week}`;
-    const priorLog=await store.get(projectionKey,{type:"json"}).catch(()=>null);
+    const projectionKey=`projection_${chosen.id}_${week}`;
+    const priorLog=await stateStore.get(projectionKey,{type:"json"}).catch(()=>null);
     const byPid={...(priorLog?.players||{})};
     for(const p of rosterPlayers){
       if(p.locked) continue;
@@ -368,7 +368,7 @@ export default async req => {
         savedAt:Date.now(),kickoffAt:p.kickoffAt,
       };
     }
-    await store.setJSON(projectionKey,{
+    await stateStore.setJSON(projectionKey,{
       leagueId:chosen.id,season,week,updatedAt:Date.now(),players:byPid,
     }).catch(()=>{});
 
