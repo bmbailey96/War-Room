@@ -85,6 +85,8 @@ export default async req => {
       opp:x.player.opp,injury:x.player.injury,confidence:x.player.confidence,confidenceScore:x.player.confidenceScore,
       source:x.player.source,rangeSource:x.player.rangeSource,reasons:x.player.reasons,
       coverageMatchup:x.player.signals?.coverageMatchup||null,
+      passRush:x.player.signals?.passRush||null,
+      coverageMatchup:x.player.signals?.coverageMatchup||null,
       passRush:x.player.signals?.passRush||null
     }));
     const bench=(data.players||[])
