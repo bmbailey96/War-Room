@@ -74,15 +74,19 @@ function playerValue(p) {
   return p.locked && p.actual != null ? p.actual : (p.projection || 0);
 }
 
-function fantasyPoints(r, s={}) {
+function fantasyPoints(r, s={}, pos=null) {
   const w=(key,fallback=0)=>typeof s[key]==="number"?s[key]:fallback;
   let p=0;
   p+=num(r.passing_yards)*w("pass_yd",0.04);
   p+=num(r.passing_tds)*w("pass_td",4);
   p+=num(r.passing_interceptions)*w("pass_int",-2);
+  p+=num(r.completions)*w("pass_cmp",0);
+  p+=num(r.attempts)*w("pass_att",0);
   p+=num(r.rushing_yards)*w("rush_yd",0.1);
   p+=num(r.rushing_tds)*w("rush_td",6);
+  p+=num(r.carries)*w("rush_att",0);
   p+=num(r.receptions)*w("rec",1);
+  p+=num(r.targets)*w("rec_tgt",0);
   p+=num(r.receiving_yards)*w("rec_yd",0.1);
   p+=num(r.receiving_tds)*w("rec_td",6);
   p+=num(r.passing_first_downs)*w("pass_fd",0);
@@ -91,6 +95,16 @@ function fantasyPoints(r, s={}) {
   p+=num(r.passing_2pt_conversions)*w("pass_2pt",0);
   p+=num(r.rushing_2pt_conversions)*w("rush_2pt",0);
   p+=num(r.receiving_2pt_conversions)*w("rec_2pt",0);
+  if(pos==="TE") p+=num(r.receptions)*w("bonus_rec_te",0);
+
+  const py=num(r.passing_yards), ry=num(r.rushing_yards), recy=num(r.receiving_yards);
+  if(py>=300)p+=w("bonus_pass_yd_300",0);
+  if(py>=400)p+=w("bonus_pass_yd_400",0);
+  if(ry>=100)p+=w("bonus_rush_yd_100",0);
+  if(ry>=200)p+=w("bonus_rush_yd_200",0);
+  if(recy>=100)p+=w("bonus_rec_yd_100",0);
+  if(recy>=200)p+=w("bonus_rec_yd_200",0);
+
   const lost=num(r.rushing_fumbles_lost)+num(r.receiving_fumbles_lost)+num(r.passing_fumbles_lost);
   p+=lost*w("fum_lost",-2);
   return p;
@@ -256,7 +270,7 @@ export default async req => {
 
     const wanted=[
       "player_display_name","position","week","team","opponent_team","season_type",
-      "attempts","passing_yards","passing_tds","passing_interceptions","passing_fumbles_lost",
+      "completions","attempts","passing_yards","passing_tds","passing_interceptions","passing_fumbles_lost",
       "carries","rushing_yards","rushing_tds","rushing_fumbles_lost",
       "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost",
       "passing_first_downs","rushing_first_downs","receiving_first_downs",
@@ -276,7 +290,7 @@ export default async req => {
       const pos=r.position, def=normTeam(r.opponent_team);
       if(!def || !["QB","RB","WR","TE"].includes(pos)) continue;
       const d=(allowed[def]=allowed[def]||{}), b=(d[pos]=d[pos]||{pts:0,weeks:new Set()});
-      b.pts+=fantasyPoints(r,league.scoring_settings||{}); b.weeks.add(num(r.week));
+      b.pts+=fantasyPoints(r,league.scoring_settings||{},pos); b.weeks.add(num(r.week));
     }
     const defense={};
     for(const [team,v] of Object.entries(allowed)){
@@ -309,8 +323,8 @@ export default async req => {
       const c=allCurrent.filter(r=>num(r.week)<week), played=allCurrent.find(r=>num(r.week)===week) || null;
       const p=(prior[key]||[]).slice(-8);
       const hist=[...p,...c];
-      const currentMean=weightedMean(c,r=>fantasyPoints(r,league.scoring_settings||{}));
-      const priorMean=weightedMean(p,r=>fantasyPoints(r,league.scoring_settings||{}));
+      const currentMean=weightedMean(c,r=>fantasyPoints(r,league.scoring_settings||{},slot));
+      const priorMean=weightedMean(p,r=>fantasyPoints(r,league.scoring_settings||{},slot));
       let base=null;
       if(c.length>=3) base=(currentMean*0.72)+(priorMean!=null?priorMean*0.28:currentMean*0.28);
       else if(c.length===2) base=(currentMean*0.58)+(priorMean!=null?priorMean*0.42:currentMean*0.42);
@@ -328,7 +342,7 @@ export default async req => {
       const locked=!!game?.locked;
       const matchupActual=matchRow?.players_points && typeof matchRow.players_points[pid] === "number"
         ? matchRow.players_points[pid] : null;
-      const statActual=played ? fantasyPoints(played,league.scoring_settings||{}) : null;
+      const statActual=played ? fantasyPoints(played,league.scoring_settings||{},slot) : null;
       const actual=locked
         ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
         : null;
@@ -363,7 +377,7 @@ export default async req => {
       else if(/doubt/.test(inj) && projection!=null){ projection*=0.45; reasons.push("-55% injury status"); }
       else if(/question/.test(inj) && projection!=null){ projection*=0.93; reasons.push("-7% injury uncertainty"); }
 
-      const vals=hist.slice(-8).map(r=>fantasyPoints(r,league.scoring_settings||{}));
+      const vals=hist.slice(-8).map(r=>fantasyPoints(r,league.scoring_settings||{},slot));
       const sigma=sd(vals) ?? (projection!=null?projection*0.5:null);
       return {
         pid,name:info.name,slot,eligibleSlots:info.fps||[],team:info.team,injury:info.inj||null,opp:opp?normTeam(opp):null,
