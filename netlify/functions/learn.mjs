@@ -9,7 +9,7 @@
 import { store, MY_USER_ID, normName } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
-const DEFAULT = { role:0.28, matchup:0.25, environment:0.35 };
+const DEFAULT = { role:0.28, matchup:0.25, environment:0.35, scheme:0.22 };
 const DRIVER_KEYS = ["injury","role","depth_chart","scheme","weather","matchup","projection_only","other"];
 
 async function j(url) {
@@ -24,6 +24,7 @@ const mae=(samples,w)=> {
     p*=1+w.role*((s.signals?.roleRatio||1)-1);
     p*=1+w.matchup*((s.signals?.matchupRatio||1)-1);
     p*=1+w.environment*((s.signals?.environmentRatio||1)-1);
+    p*=1+w.scheme*((s.signals?.schemeRatio||1)-1);
     total+=Math.abs(p-s.actual);
   }
   return total/samples.length;
@@ -63,9 +64,11 @@ function fit(samples) {
   for(let role=0;role<=0.6001;role+=0.05){
     for(let matchup=0;matchup<=0.6001;matchup+=0.05){
       for(let environment=0;environment<=0.7001;environment+=0.05){
-        const w={role:round2(role),matchup:round2(matchup),environment:round2(environment)};
-        const err=mae(samples,w);
-        if(err<bestErr){best=w;bestErr=err;}
+        for(let scheme=0;scheme<=0.5001;scheme+=0.10){
+          const w={role:round2(role),matchup:round2(matchup),environment:round2(environment),scheme:round2(scheme)};
+          const err=mae(samples,w);
+          if(err<bestErr){best=w;bestErr=err;}
+        }
       }
     }
   }
@@ -79,7 +82,7 @@ function fit(samples) {
 
 function signalReliability(samples,key){
   let n=0, hit=0;
-  const ratioKey={role:"roleRatio",matchup:"matchupRatio",environment:"environmentRatio"}[key];
+  const ratioKey={role:"roleRatio",matchup:"matchupRatio",environment:"environmentRatio",scheme:"schemeRatio"}[key];
   for(const s of samples){
     const ratio=s.signals?.[ratioKey] ?? 1;
     if(Math.abs(ratio-1)<0.03) continue;
@@ -208,6 +211,7 @@ export default async () => {
         role:signalReliability(calibratedSamples,"role"),
         matchup:signalReliability(calibratedSamples,"matchup"),
         environment:signalReliability(calibratedSamples,"environment"),
+        scheme:signalReliability(calibratedSamples,"scheme"),
       },
     };
     await stateStore.setJSON(`model_${league.id}`,model);
