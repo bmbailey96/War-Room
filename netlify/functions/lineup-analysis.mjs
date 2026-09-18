@@ -24,6 +24,7 @@ export default async req => {
     const url=new URL(req.url);
     const force=url.searchParams.get("refresh")==="1";
     const store=blobs();
+    const reasoningModel=await store.get(`v2_reasoning_model_${data.league.id}`,{type:"json"}).catch(()=>null);
     const cacheKey=`v2_lineup_analysis_${data.league.id}_${data.week}`;
     const cached=await store.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force && cached && Date.now()-cached.at < 4*60*60*1000) {
@@ -45,6 +46,10 @@ export default async req => {
       start:c.start?.name,sit:c.sit?.name,slot:c.slot,gain:c.gain,
       startProjection:c.start?.projection,sitProjection:c.sit?.projection
     }));
+    const lockedBench=(data.lockedBench||[]).map(p=>({
+      name:p.name,actual:p.actual,team:p.team,kickoffAt:p.kickoffAt
+    }));
+    const learnedDrivers=reasoningModel?.drivers||{};
 
     const prompt=`You are the final sit/start editor for one fantasy football roster. The projection engine below is deterministic and is the default answer. Your job is NOT to make a second projection model or invent a different number. Use web search for current, dated information from this week: injury/practice reports, confirmed role or depth-chart changes, coach statements, expected limitations, inactives, and major scheme changes.
 
@@ -58,20 +63,28 @@ ${JSON.stringify(computed,null,2)}
 Highest projected bench options:
 ${JSON.stringify(bench,null,2)}
 
+PLAYERS ALREADY LOCKED ON THE BENCH:
+${JSON.stringify(lockedBench,null,2)}
+
+YOUR GRADED REASONING TRACK RECORD IN THIS LEAGUE:
+${JSON.stringify(learnedDrivers,null,2)}
+
 Rules:
 1. Start from the computed lineup. Do not override it for generic matchup talk, reputation, consensus rankings, or vibes.
-2. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, or credible inactive news.
-3. If two players are within 1.5 projected points, treat it as a genuine decision and use current evidence to break the tie.
-4. If the model used Sleeper fallback for a player, say so and lower confidence.
-5. Never claim you found news you did not actually find.
-6. Keep this brutally scannable.
+2. NEVER recommend moving a player whose game has started. A player listed under PLAYERS ALREADY LOCKED ON THE BENCH is history, not an option.
+3. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, or credible inactive news.
+4. If two players are within 1.5 projected points, treat it as a genuine decision and use current evidence to break the tie.
+5. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
+6. If the model used Sleeper fallback for a player, say so and lower confidence.
+7. Never claim you found news you did not actually find.
+8. Keep this brutally scannable.
 
 Return ONLY valid JSON:
 {
   "summary":"one sentence with the lineup action that matters most, or 'Keep the lineup' if no change matters",
   "confidence":"HIGH|MEDIUM|LOW",
   "calls":[
-    {"start":"name","sit":"name or null","slot":"slot","verdict":"START|HOLD|OVERRIDE","confidence":"HIGH|MEDIUM|LOW","why":"1-2 concrete sentences","sourceDate":"YYYY-MM-DD or null"}
+    {"start":"name","sit":"name or null","slot":"slot","verdict":"START|HOLD|OVERRIDE","confidence":"HIGH|MEDIUM|LOW","why":"1-2 concrete sentences","sourceDate":"YYYY-MM-DD or null","drivers":["injury|role|depth_chart|scheme|weather|matchup|projection_only"]}
   ],
   "watch":["up to 3 short things to check before kickoff"]
 }`;
