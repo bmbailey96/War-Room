@@ -433,24 +433,9 @@ export default async req => {
     const projectedMargin=round(optimal.total-opponentOptimal.total);
     const posture=projectedMargin>=8?"protect_floor":projectedMargin<=-8?"chase_ceiling":"neutral";
 
-    // Keep the last pre-kickoff projection for each player. Tuesday's learner
-    // grades these against actual league-scored points. Locked players are
-    // never overwritten after kickoff, which prevents hindsight from leaking
-    // into the training record.
-    const projectionKey=`projection_${chosen.id}_${week}`;
-    const priorLog=await stateStore.get(projectionKey,{type:"json"}).catch(()=>null);
-    const byPid={...(priorLog?.players||{})};
-    for(const p of rosterPlayers){
-      if(p.locked) continue;
-      byPid[p.pid]={
-        pid:p.pid,name:p.name,slot:p.slot,team:p.team,rawBase:p.rawBase,base:p.base,projection:p.projection,
-        signals:p.signals,fallback:p.fallback,injury:p.injury,confidence:p.confidence,
-        savedAt:Date.now(),kickoffAt:p.kickoffAt,
-      };
-    }
-    await stateStore.setJSON(projectionKey,{
-      leagueId:chosen.id,season,week,updatedAt:Date.now(),players:byPid,
-    }).catch(()=>{});
+    // Read path only. Pregame training snapshots are frozen exclusively by
+    // lineup-refresh.mjs so opening or refreshing the website cannot alter
+    // what Tuesday's learner thinks the model believed before kickoff.
 
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
