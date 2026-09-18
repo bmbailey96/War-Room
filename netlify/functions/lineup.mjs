@@ -48,7 +48,7 @@ const num=v => (v==null || v==="" || v==="NA" || Number.isNaN(+v)) ? 0 : +v;
 const avg=a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
 const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 const round=x=>Math.round(x*10)/10;
-const DEFAULT_MODEL = { role: 0.28, matchup: 0.25, environment: 0.35, learned: false };
+const DEFAULT_MODEL = { role: 0.28, matchup: 0.25, environment: 0.35, scheme: 0.22, learned: false };
 
 function easternKickoffMs(dateStr, timeStr) {
   if (!dateStr || !timeStr) return null;
@@ -133,8 +133,12 @@ function scoreSleeperProjection(stats, scoring, pos=null) {
 
 function usage(r,pos) {
   if (pos==="QB") return num(r.attempts) + num(r.carries)*1.5;
-  if (pos==="RB") return num(r.carries) + num(r.targets)*1.25;
-  if (pos==="WR" || pos==="TE") return num(r.targets)*1.25 + num(r.carries);
+  if (pos==="RB") return num(r.carries) + num(r.targets)*1.35;
+  if (pos==="WR" || pos==="TE") {
+    const wopr=num(r.wopr);
+    if(wopr>0) return wopr*100;
+    return num(r.targets)*1.25 + num(r.carries);
+  }
   return 0;
 }
 
@@ -319,10 +323,11 @@ export default async req => {
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const positionScale=learnedModel?.positionScale||{};
-    const [matchups,currentCsv,priorCsv,gamesCsv,sleeperProj] = await Promise.all([
+    const [matchups,currentCsv,priorCsv,snapCsv,gamesCsv,sleeperProj] = await Promise.all([
       j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${week}`).catch(()=>[]),
       text(`${NV}/stats_player/stats_player_week_${season}.csv`),
       text(`${NV}/stats_player/stats_player_week_${season-1}.csv`),
+      text(`${NV}/snap_counts/snap_counts_${season}.csv`),
       text("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
       j(`https://api.sleeper.app/projections/nfl/${season}/${week}?season_type=regular&order_by=ppr`).catch(()=>[]),
     ]);
@@ -342,6 +347,7 @@ export default async req => {
       "completions","attempts","passing_yards","passing_tds","passing_interceptions","passing_fumbles_lost",
       "carries","rushing_yards","rushing_tds","rushing_fumbles_lost",
       "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost",
+      "target_share","air_yards_share","wopr",
       "passing_first_downs","rushing_first_downs","receiving_first_downs",
       "passing_2pt_conversions","rushing_2pt_conversions","receiving_2pt_conversions"
     ];
@@ -352,6 +358,53 @@ export default async req => {
       for(const a of Object.values(m)) a.sort((x,y)=>num(x.week)-num(y.week)); return m;
     };
     const cur=byName(currentRows), prior=byName(priorRows);
+
+    // Offensive snap share is a leading indicator for role changes. The
+    // nflverse snap feed updates throughout the week; only use games from
+    // before the current fantasy week so Thursday results cannot leak into
+    // a Sunday projection.
+    const snapByName={};
+    for(const r of parseCsv(snapCsv,["player","position","team","week","offense_pct","game_type"])){
+      if(r.game_type && r.game_type!=="REG") continue;
+      if(num(r.week)>=week) continue;
+      const key=normName(r.player||"");
+      if(!key) continue;
+      let pct=num(r.offense_pct);
+      if(pct<=1.01) pct*=100;
+      (snapByName[key]=snapByName[key]||[]).push({week:num(r.week),pct});
+    }
+    for(const rows of Object.values(snapByName)) rows.sort((a,b)=>a.week-b.week);
+
+    // Team pass/run tendency is kept separate from player workload so the
+    // learner can discover whether genuine scheme movement matters in this
+    // league instead of treating every change as "role."
+    const teamWeeks={};
+    for(const r of currentRows){
+      const wk=num(r.week);
+      if(wk>=week || !r.team) continue;
+      const tm=normTeam(r.team);
+      const k=`${tm}|${wk}`;
+      const row=teamWeeks[k]||(teamWeeks[k]={team:tm,week:wk,att:0,car:0});
+      row.att+=num(r.attempts);
+      row.car+=num(r.carries);
+    }
+    const formByTeam={};
+    for(const row of Object.values(teamWeeks)){
+      (formByTeam[row.team]=formByTeam[row.team]||[]).push(row);
+    }
+    const teamForm={};
+    for(const [tm,rows] of Object.entries(formByTeam)){
+      rows.sort((a,b)=>a.week-b.week);
+      const calc=arr=>{
+        const att=arr.reduce((s,x)=>s+x.att,0), car=arr.reduce((s,x)=>s+x.car,0);
+        const plays=att+car;
+        return plays?att/plays:null;
+      };
+      const seasonRate=calc(rows), recentRate=calc(rows.slice(-3));
+      if(seasonRate!=null && recentRate!=null){
+        teamForm[tm]={seasonPassRate:seasonRate,recentPassRate:recentRate,games:rows.length};
+      }
+    }
 
     // League-wide defense allowed by position, current season only.
     const allowed={};
@@ -422,17 +475,44 @@ export default async req => {
       const actual=locked
         ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
         : null;
-      const signals={ roleRatio:1, matchupRatio:1, environmentRatio:1 };
+      const signals={ roleRatio:1, matchupRatio:1, environmentRatio:1, schemeRatio:1, opportunityRatio:1, snapRatio:1 };
       if(projection!=null && !fallback && ["QB","RB","WR","TE"].includes(slot)){
         const recentUsage=weightedMean(c.slice(-3),r=>usage(r,slot));
         const priorUsage=weightedMean((c.length>3?c.slice(0,-3):p.slice(-5)),r=>usage(r,slot));
+        const roleParts=[];
         if(recentUsage!=null && priorUsage>0){
           const ratio=clamp(recentUsage/priorUsage,0.72,1.28);
+          signals.opportunityRatio=ratio;
+          roleParts.push({ratio,weight:.72});
+        }
+        const snaps=snapByName[key]||[];
+        const recentSnap=weightedMean(snaps.slice(-3),r=>r.pct);
+        const priorSnap=weightedMean(snaps.length>3?snaps.slice(-6,-3):[],r=>r.pct);
+        if(recentSnap!=null && priorSnap>10){
+          const ratio=clamp(recentSnap/priorSnap,0.75,1.25);
+          signals.snapRatio=ratio;
+          roleParts.push({ratio,weight:.28});
+        }
+        if(roleParts.length){
+          const den=roleParts.reduce((s,x)=>s+x.weight,0);
+          const ratio=roleParts.reduce((s,x)=>s+x.ratio*x.weight,0)/den;
           signals.roleRatio=ratio;
           const mult=1+model.role*(ratio-1);
           projection*=mult;
           if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% role/workload`);
         }
+
+        const form=teamForm[normTeam(info.team)];
+        if(form && form.games>=2){
+          const delta=form.recentPassRate-form.seasonPassRate;
+          const lean=slot==="RB"?-1:1;
+          const ratio=clamp(1+lean*delta,0.86,1.14);
+          signals.schemeRatio=ratio;
+          const mult=1+model.scheme*(ratio-1);
+          projection*=mult;
+          if(Math.abs(mult-1)>=0.018) reasons.push(`${round((mult-1)*100)}% recent scheme`);
+        }
+
         if(opp && defense[normTeam(opp)]?.[slot]!=null && leagueAllowed[slot]){
           const ratio=clamp(defense[normTeam(opp)][slot]/leagueAllowed[slot],0.7,1.3);
           signals.matchupRatio=ratio;
