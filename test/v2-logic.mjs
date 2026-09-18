@@ -152,3 +152,13 @@ const rosterActionsModule = await import("../netlify/functions/roster-actions.mj
 assert.equal(typeof rosterActionsModule.default,"function");
 
 console.log("Roster actions endpoint import check passed");
+
+
+const rosterBackgroundModule = await import("../netlify/functions/roster-actions-background.mjs");
+assert.equal(typeof rosterBackgroundModule.default,"function");
+
+const { pickTierFactor } = await import("../netlify/functions/lib/market-v2.mjs");
+assert.ok(pickTierFactor("early")>pickTierFactor("mid"));
+assert.ok(pickTierFactor("late")<pickTierFactor("mid"));
+
+console.log("Roster background and dynasty market checks passed");
