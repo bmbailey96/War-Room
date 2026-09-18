@@ -247,8 +247,9 @@ export default async req=>{
     const usesFaab=faabTotal>0;
     const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const [proj,lineupData,market]=await Promise.all([
+    const [proj,formMap,lineupData,market]=await Promise.all([
       projectionMap(season,week,league,db),
+      recentFormMap(season,week,league),
       lineup(new Request(`${url.origin}/.netlify/functions/lineup?league=${encodeURIComponent(chosen.id)}`))
         .then(r=>r.json()).catch(()=>null),
       mode==="DYNASTY"?getDynastyMarket(s):Promise.resolve({players:{},picks:{},scrapeDate:null})
@@ -272,7 +273,7 @@ export default async req=>{
       .filter(pid=>pid&&!rostered.has(pid));
 
     let free=candidateIds.map(pid=>{
-      const p=playerView(pid,db,proj),trend=trendById[pid]||0;
+      const p=playerView(pid,db,proj,formMap),trend=trendById[pid]||0;
       const mv=mode==="DYNASTY"?marketValue(p.name):null;
       const ageBonus=mode==="DYNASTY"&&p.age?Math.max(-5,Math.min(6,(27-p.age)*1.1)):0;
       const score=mode==="DYNASTY"
@@ -282,8 +283,18 @@ export default async req=>{
     }).filter(p=>p.name&&p.team&&!hardInjured(p.injury))
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,24);
 
+    const enrichForecast=p=>{
+      const provider=proj[p.pid]?.avg??0;
+      const form=blendedRosterForecast(provider,formMap[normName(p.name)]);
+      return {
+        ...p,eligibleSlots:p.fps||[],
+        next3:form.forecast,providerNext3:provider,weeks:proj[p.pid]?.weeks||{},
+        forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
+        baselinePts:form.baselinePts,currentGames:form.currentGames
+      };
+    };
     const myRoster=me.players.map(p=>({
-      ...p,eligibleSlots:p.fps||[],next3:proj[p.pid]?.avg??0,weeks:proj[p.pid]?.weeks||{},
+      ...enrichForecast(p),
       market:mode==="DYNASTY"?marketValue(p.name):null
     }));
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
@@ -298,7 +309,10 @@ export default async req=>{
     const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>({
       name:t.name,record:`${t.wins}-${t.losses}`,stance:t.stance,
       holes:t.holes,surplus:t.surplus,
-      players:t.players.map(p=>({...p,eligibleSlots:p.fps||[],next3:proj[p.pid]?.avg??0,market:mode==="DYNASTY"?marketValue(p.name):null})),
+      players:t.players.map(p=>({
+        ...enrichForecast(p),
+        market:mode==="DYNASTY"?marketValue(p.name):null
+      })),
       picks:mode==="DYNASTY"?t.picks.map(enrichPick):[]
     }));
     const myPicks=mode==="DYNASTY"?me.picks.map(enrichPick):[];
@@ -324,7 +338,9 @@ export default async req=>{
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,weeklyDelta,marketDelta,
           score:round(score),addNext3:add.next3,dropNext3:drop.next3,
-          addMarket:add.market,dropMarket:drop.market,trending:add.trending
+          addMarket:add.market,dropMarket:drop.market,trending:add.trending,
+          addSource:add.forecastSource,dropSource:drop.forecastSource,
+          addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio
         });
       }
     }
@@ -342,7 +358,9 @@ export default async req=>{
         if(weeklyCeiling<=0.2 && mode!=="DYNASTY")continue;
         tradeTargets.push({
           partner:team.name,name:p.name,pos:p.pos,age:p.age,next3:p.next3,
-          market:p.market,weeklyCeiling,partnerHoles:team.holes,partnerSurplus:team.surplus
+          market:p.market,weeklyCeiling,forecastSource:p.forecastSource,
+          roleRatio:p.roleRatio,recentPts:p.recentPts,
+          partnerHoles:team.holes,partnerSurplus:team.surplus
         });
       }
     }
@@ -617,6 +635,7 @@ Return ONLY valid JSON:
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
+        forecastModel:"provider + recent league-scored production + workload trend",
       },
       reasoningMode:error?"deterministic":"live_news",
       reasoningAvailable:!error,
