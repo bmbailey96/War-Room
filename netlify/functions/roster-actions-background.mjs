@@ -81,7 +81,7 @@ function rosterAfter(roster,{removeNames=[],addPlayers=[]}={}){
 }
 function assetName(x){return x?.name||String(x||"");}
 
-function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
+export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
   const actions=[];
   for(const [i,w] of waivers.slice(0,3).entries()){
     const impact=Math.max(Number(w.weeklyDelta||0),mode==="DYNASTY"?Number(w.marketDelta||0)/8:0);
@@ -528,7 +528,8 @@ Return ONLY valid JSON:
       },
       reasoningMode:error?"deterministic":"live_news",
       reasoningAvailable:!error,
-      error
+      reasoningError:error||null,
+      error:null
     };
 
     await s.setJSON(cacheKey,result);
