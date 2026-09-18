@@ -36,6 +36,7 @@ footer{margin-top:25px;color:var(--muted);font-size:11px}a{color:var(--muted)}.s
 </div>
 
 <section><h3>START / SIT</h3><div id="calls"><div class="status">Building projections from actual weekly production...</div></div></section>
+<section id="locked-section" style="display:none"><h3>ALREADY HAPPENED</h3><div id="locked"></div></section>
 <section><h3>LINEUP</h3><div id="lineup"><div class="status">Loading...</div></div></section>
 <section><h3>BEFORE KICKOFF</h3><div id="watch" class="status">Checking current injury and role news...</div></section>
 
@@ -63,10 +64,21 @@ function renderBase(d){
     $("headline").textContent="Start "+top.start.name+(top.sit?" over "+top.sit.name:"")+".";
     $("calls").innerHTML=d.calls.map(c=>'<div class="call"><div><div class="start">START '+esc(c.start.name)+'</div><div class="sit">'+(c.sit?'sit '+esc(c.sit.name):'open slot')+' · '+esc(c.slot)+'</div><div class="tags"><span class="tag">'+conf(c.start.confidence)+' confidence</span><span class="tag">'+esc(c.start.opp?'vs '+c.start.opp:'opponent TBD')+'</span>'+(c.start.fallback?'<span class="tag low">provider fallback</span>':'')+'</div></div><div class="gain">+'+Number(c.gain||0).toFixed(1)+'</div></div>').join("");
   }
+  const locked=d.lockedBench||[];
+  if(locked.length){
+    $("locked-section").style.display="block";
+    $("locked").innerHTML=locked.map(p=>'<div class="call"><div><div class="start">'+esc(p.name)+'</div><div class="sit">BENCH · LOCKED'+(p.team?' · '+esc(p.team):'')+'</div><div class="why">Those points are already final/locked for lineup purposes. The app will not recommend putting him into the lineup now.</div></div><div class="gain">'+Number(p.actual||0).toFixed(1)+' pts</div></div>').join("");
+  }else{
+    $("locked-section").style.display="none";
+    $("locked").innerHTML="";
+  }
+
   const opt=d.optimal||[];
-  $("lineup").innerHTML='<table><thead><tr><th>SLOT</th><th>PLAYER</th><th>RANGE</th><th>OPP</th><th class="pts">PROJ</th></tr></thead><tbody>'+opt.map(x=>{
+  $("lineup").innerHTML='<table><thead><tr><th>SLOT</th><th>PLAYER</th><th>RANGE / STATUS</th><th>OPP</th><th class="pts">PTS</th></tr></thead><tbody>'+opt.map(x=>{
     const p=x.player; if(!p)return '<tr><td>'+esc(x.slot)+'</td><td class="low">empty</td><td></td><td></td><td></td></tr>';
-    return '<tr><td>'+esc(x.slot)+'</td><td>'+esc(p.name)+(p.injury?' <span class="low">['+esc(p.injury)+']</span>':'')+'</td><td>'+Number(p.floor||0).toFixed(1)+'–'+Number(p.ceiling||0).toFixed(1)+'</td><td>'+esc(p.opp||"")+'</td><td class="pts">'+Number(p.projection||0).toFixed(1)+'</td></tr>';
+    const status=p.locked?'LOCKED · '+Number(p.actual||0).toFixed(1)+' actual':Number(p.floor||0).toFixed(1)+'–'+Number(p.ceiling||0).toFixed(1);
+    const pts=p.locked?Number(p.actual||0).toFixed(1):Number(p.projection||0).toFixed(1);
+    return '<tr><td>'+esc(x.slot)+'</td><td>'+esc(p.name)+(p.injury?' <span class="low">['+esc(p.injury)+']</span>':'')+'</td><td>'+status+'</td><td>'+esc(p.opp||"")+'</td><td class="pts">'+pts+'</td></tr>';
   }).join("")+'</tbody></table>';
 }
 function renderAnalysis(a){
