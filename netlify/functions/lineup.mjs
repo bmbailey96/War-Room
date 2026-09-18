@@ -793,10 +793,13 @@ export default async req => {
             unavailableNames:unavailableDefenders
           });
           if(coverageMatchup){
-            signals.coverageMatchup=coverageMatchup;
-            const mult=coverageMatchup.multiplier||1;
+            const applyCoverage=
+              Number(coverageMatchup.assignmentConfidence||0)>=55 &&
+              Number(coverageMatchup.coverageReliability||0)>=25;
+            signals.coverageMatchup={...coverageMatchup,applied:applyCoverage};
+            const mult=applyCoverage?(coverageMatchup.multiplier||1):1;
             projection*=mult;
-            if(Math.abs(mult-1)>=0.01){
+            if(applyCoverage && Math.abs(mult-1)>=0.01){
               const side=mult>1?"coverage edge":"coverage drag";
               reasons.push(`${round((mult-1)*100)}% ${side} vs ${coverageMatchup.defender}`);
             }
@@ -805,10 +808,11 @@ export default async req => {
 
         if(slot==="QB" && opp && teamPassRush[normTeam(opp)]){
           const passRush=teamPassRush[normTeam(opp)];
-          signals.passRush=passRush;
-          const mult=passRush.multiplier||1;
+          const applyRush=passRush.confidence!=="LOW";
+          signals.passRush={...passRush,applied:applyRush};
+          const mult=applyRush?(passRush.multiplier||1):1;
           projection*=mult;
-          if(Math.abs(mult-1)>=0.007){
+          if(applyRush && Math.abs(mult-1)>=0.007){
             reasons.push(`${round((mult-1)*100)}% pass-rush edge`);
           }
         }
