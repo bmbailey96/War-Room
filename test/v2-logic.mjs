@@ -93,3 +93,56 @@ assert.equal(hardUnavailable("Questionable", "Limited Participation"), false);
 assert.equal(hardUnavailable("", "Full Participation"), false);
 
 console.log("Hard availability checks passed");
+
+
+import {
+  detectLeagueMode,buildPickLedger,pickLabel,validateActions
+} from "../netlify/functions/lib/roster-v2.mjs";
+
+assert.equal(detectLeagueMode({settings:{type:2,draft_rounds:3,pick_trading:1}}),"DYNASTY");
+assert.equal(detectLeagueMode({settings:{type:0,draft_rounds:0,pick_trading:0}}),"REDRAFT");
+
+const mockRosters=[
+  {roster_id:1,owner_id:"me",settings:{wins:2,losses:0,fpts:250},players:["p1"]},
+  {roster_id:2,owner_id:"them",settings:{wins:0,losses:2,fpts:180},players:["p2"]},
+];
+const ledger=buildPickLedger({
+  league:{season:"2026",status:"in_season",settings:{type:2,draft_rounds:2,pick_trading:1}},
+  rosters:mockRosters,
+  users:[
+    {user_id:"me",display_name:"Mine",metadata:{team_name:"Mine"}},
+    {user_id:"them",display_name:"Theirs",metadata:{team_name:"Theirs"}},
+  ],
+  tradedPicks:[{season:"2027",round:1,roster_id:2,owner_id:1}],
+});
+assert.ok(ledger[1].some(p=>p.season===2027&&p.round===1&&p.originRosterId===2));
+assert.ok(!ledger[2].some(p=>p.season===2027&&p.round===1&&p.originRosterId===2));
+
+const validActions=validateActions([
+  {type:"ADD_DROP",add:{name:"Free Guy"},drop:{name:"My Bench"}},
+  {type:"ADD",add:{name:"Rostered Guy"}},
+  {type:"TRADE_FOR",partner:"Rival",send:[{type:"player",name:"My Bench"}],receive:[{type:"player",name:"Target"}]},
+  {type:"TRADE_FOR",partner:"Rival",send:[{type:"pick",name:"2027 1st (Mine)"}],receive:[{type:"pick",name:"2027 2nd (Rival)"}]},
+  {type:"TRADE_FOR",partner:"Rival",send:[{type:"pick",name:"FAKE PICK"}],receive:[{type:"player",name:"Target"}]},
+],{
+  myNames:new Set(["my bench"]),
+  freeNames:new Set(["free guy"]),
+  teamPlayers:{Rival:new Set(["target"])},
+  teamPicks:{Rival:new Set(["2027 2nd (Rival)"])},
+  myPicks:new Set(["2027 1st (Mine)"]),
+  dynasty:true,
+});
+assert.equal(validActions.length,3);
+assert.ok(validActions.some(a=>a.type==="ADD_DROP"));
+assert.equal(validActions.filter(a=>a.type==="TRADE_FOR").length,2);
+
+const redraftActions=validateActions([
+  {type:"TRADE_FOR",partner:"Rival",send:[{type:"pick",name:"2027 1st"}],receive:[{type:"player",name:"Target"}]},
+],{
+  myNames:new Set(),freeNames:new Set(),
+  teamPlayers:{Rival:new Set(["target"])},teamPicks:{Rival:new Set()},
+  myPicks:new Set(),dynasty:false,
+});
+assert.equal(redraftActions.length,0);
+
+console.log("Roster action validation checks passed");
