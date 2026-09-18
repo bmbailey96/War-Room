@@ -129,7 +129,7 @@ export function actionFingerprint(a={}) {
   ].map(x=>normName(String(x))).join("|");
 }
 
-export function validateActions(actions,{myNames=new Set(),freeNames=new Set(),teamPlayers={},myPicks=new Set(),dynasty=false}={}) {
+export function validateActions(actions,{myNames=new Set(),freeNames=new Set(),teamPlayers={},myPicks=new Set(),teamPicks={},dynasty=false}={}) {
   const clean=[];
   for(const raw of Array.isArray(actions)?actions:[]){
     if(!raw || !raw.type)continue;
@@ -147,10 +147,11 @@ export function validateActions(actions,{myNames=new Set(),freeNames=new Set(),t
     if(["TRADE_FOR","SELL"].includes(type)){
       if(!a.partner || !teamPlayers[a.partner])continue;
       const theirs=teamPlayers[a.partner];
+      const theirPicks=teamPicks[a.partner]||new Set();
       let valid=true;
       for(const x of a.receive||[]){
         if(x?.type==="pick"){
-          if(!dynasty){valid=false;break;}
+          if(!dynasty || !theirPicks.has(String(x?.name||x))){valid=false;break;}
           continue;
         }
         if(!theirs.has(normName(x?.name||x))){valid=false;break;}
