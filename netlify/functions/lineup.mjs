@@ -605,11 +605,19 @@ export default async req => {
       const calc=arr=>{
         const att=arr.reduce((s,x)=>s+x.att,0), car=arr.reduce((s,x)=>s+x.car,0);
         const plays=att+car;
-        return plays?att/plays:null;
+        return {
+          passRate:plays?att/plays:null,
+          carriesPerGame:arr.length?car/arr.length:null,
+          attemptsPerGame:arr.length?att/arr.length:null,
+        };
       };
-      const seasonRate=calc(rows), recentRate=calc(rows.slice(-3));
-      if(seasonRate!=null && recentRate!=null){
-        teamForm[tm]={seasonPassRate:seasonRate,recentPassRate:recentRate,games:rows.length};
+      const season=calc(rows), recent=calc(rows.slice(-3));
+      if(season.passRate!=null && recent.passRate!=null){
+        teamForm[tm]={
+          seasonPassRate:season.passRate,recentPassRate:recent.passRate,
+          recentCarries:recent.carriesPerGame,recentAttempts:recent.attemptsPerGame,
+          games:rows.length
+        };
       }
     }
 
@@ -730,7 +738,10 @@ export default async req => {
       const actual=locked
         ? round(matchupActual != null ? matchupActual : (statActual != null ? statActual : 0))
         : null;
-      const signals={ roleRatio:1, matchupRatio:1, environmentRatio:1, schemeRatio:1, opportunityRatio:1, snapRatio:1 };
+      const signals={
+        roleRatio:1,matchupRatio:1,environmentRatio:1,schemeRatio:1,
+        opportunityRatio:1,snapRatio:1,opportunityShare:null,matchupExposure:1
+      };
       if(projection!=null && source==="custom" && ["QB","RB","WR","TE"].includes(slot)){
         const recentUsage=weightedMean(c.slice(-3),r=>usage(r,slot));
         const priorUsage=weightedMean((c.length>3?c.slice(0,-3):p.slice(-5)),r=>usage(r,slot));
@@ -757,6 +768,42 @@ export default async req => {
           if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% role/workload`);
         }
 
+        // Scale matchup effects by actual opportunity ownership. Great
+        // matchups should matter most to players who can actually exploit
+        // them, not rotational players living on 8-10% of the offense.
+        const blendShare=(currentRows,priorRows,getter)=>{
+          const cv=weightedMean(currentRows.slice(-3),getter);
+          const pv=weightedMean(priorRows.slice(-5),getter);
+          if(cv!=null&&pv!=null){
+            const cw=Math.min(.82,.28+currentRows.length*.16);
+            return cv*cw+pv*(1-cw);
+          }
+          return cv??pv??null;
+        };
+        const targetShare=blendShare(c,p,r=>num(r.target_share));
+        const formForShare=teamForm[normTeam(info.team)];
+        let opportunityShare=null,opportunityLabel=null,benchmark=1;
+        if(slot==="WR"){
+          opportunityShare=targetShare;opportunityLabel="TARGET SHARE";benchmark=.22;
+        }else if(slot==="TE"){
+          opportunityShare=targetShare;opportunityLabel="TARGET SHARE";benchmark=.17;
+        }else if(slot==="RB"){
+          const carries=weightedMean(c.slice(-3),r=>num(r.carries));
+          const rushShare=carries!=null&&formForShare?.recentCarries>0
+            ? carries/formForShare.recentCarries:null;
+          if(rushShare!=null&&targetShare!=null)opportunityShare=rushShare*.78+targetShare*.22;
+          else opportunityShare=rushShare??targetShare;
+          opportunityLabel="WORKLOAD SHARE";benchmark=.45;
+        }else if(slot==="QB"){
+          opportunityShare=1;opportunityLabel="OFFENSE CONTROL";benchmark=1;
+        }
+        const matchupExposure=opportunityShare==null
+          ? 1
+          : clamp(opportunityShare/benchmark,.45,1.25);
+        signals.opportunityShare=opportunityShare==null?null:round(opportunityShare*100);
+        signals.opportunityLabel=opportunityLabel;
+        signals.matchupExposure=round(matchupExposure);
+
         const form=teamForm[normTeam(info.team)];
         if(form && form.games>=2){
           const delta=form.recentPassRate-form.seasonPassRate;
@@ -771,8 +818,9 @@ export default async req => {
         if(opp && defense[normTeam(opp)]?.[slot]!=null && leagueAllowed[slot]){
           const ratio=clamp(defense[normTeam(opp)][slot]/leagueAllowed[slot],0.7,1.3);
           signals.matchupRatio=ratio;
-          const mult=1+model.matchup*(ratio-1); projection*=mult;
-          if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% matchup`);
+          const mult=1+model.matchup*(ratio-1)*(signals.matchupExposure||1);
+          projection*=mult;
+          if(Math.abs(mult-1)>=0.02) reasons.push(`${round((mult-1)*100)}% matchup`);
         }
 
         if(slot==="WR" && opp){
@@ -782,12 +830,21 @@ export default async req => {
             unavailableNames:unavailableDefenders
           });
           if(coverageMatchup){
-            signals.coverageMatchup=coverageMatchup;
-            const mult=coverageMatchup.multiplier||1;
+            const rawEdge=(coverageMatchup.multiplier||1)-1;
+            const scaledEdge=clamp(rawEdge*(signals.matchupExposure||1),-.045,.055);
+            const adjusted={
+              ...coverageMatchup,
+              rawEdgePct:coverageMatchup.edgePct,
+              edgePct:round(scaledEdge*100),
+              multiplier:1+scaledEdge,
+              opportunityExposure:signals.matchupExposure||1,
+            };
+            signals.coverageMatchup=adjusted;
+            const mult=adjusted.multiplier;
             projection*=mult;
             if(Math.abs(mult-1)>=0.01){
               const side=mult>1?"coverage edge":"coverage drag";
-              reasons.push(`${round((mult-1)*100)}% ${side} vs ${coverageMatchup.defender}`);
+              reasons.push(`${round((mult-1)*100)}% ${side} vs ${adjusted.defender}`);
             }
           }
         }
@@ -923,7 +980,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. WRs get conservative likely-CB micro-matchups from current depth charts plus defender coverage history; QBs get a small pass-rush micro-edge. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Team and WR-CB matchup effects are scaled by each player's actual target/workload ownership; QBs also get a small pass-rush micro-edge. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
         weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
