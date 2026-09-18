@@ -1,5 +1,6 @@
 # The Ocho War Room
 [build]
+  command = "npm test"
   publish = "."
   functions = "netlify/functions"
 
