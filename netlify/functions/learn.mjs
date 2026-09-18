@@ -147,13 +147,35 @@ export default async () => {
         }
       }
 
-      if(analysis?.analysis?.calls?.length && log?.players){
+      if(analysis && log?.players){
         const byName={};
         for(const p of Object.values(log.players)) byName[normName(p.name)]=p;
-        for(const call of analysis.analysis.calls){
-          if(!call.start || !call.sit) continue;
-          const a=byName[normName(call.start)], b=byName[normName(call.sit)];
-          if(!a || !b) continue;
+
+        // Grade the LAST recommendation that existed before either player
+        // kicked off. Later Sunday refreshes may know that an early game is
+        // over, so grading only analysis.analysis would let hindsight replace
+        // the recommendation we actually made when the decision was live.
+        const snapshots=Array.isArray(analysis.history) && analysis.history.length
+          ? analysis.history
+          : (analysis.analysis ? [{at:analysis.at,analysis:analysis.analysis}] : []);
+        const latestByPair=new Map();
+
+        for(const snap of snapshots){
+          for(const call of snap.analysis?.calls||[]){
+            if(!call.start || !call.sit) continue;
+            const a=byName[normName(call.start)], b=byName[normName(call.sit)];
+            if(!a || !b) continue;
+            const kickoffA=a.kickoffAt ? new Date(a.kickoffAt).getTime() : Infinity;
+            const kickoffB=b.kickoffAt ? new Date(b.kickoffAt).getTime() : Infinity;
+            const deadline=Math.min(kickoffA,kickoffB);
+            if(Number.isFinite(deadline) && snap.at>=deadline) continue;
+            const key=`${normName(call.start)}|${normName(call.sit)}`;
+            const prev=latestByPair.get(key);
+            if(!prev || snap.at>prev.at) latestByPair.set(key,{at:snap.at,call,a,b});
+          }
+        }
+
+        for(const {call,a,b} of latestByPair.values()){
           const aPts=actualByPid[a.pid], bPts=actualByPid[b.pid];
           if(typeof aPts!=="number" || typeof bPts!=="number") continue;
           const hit=aPts>bPts;
