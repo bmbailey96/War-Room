@@ -7,7 +7,8 @@ import { getMyLeagues } from "./leagues.mjs";
 import {
   buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush,
   buildSleeperLineUnits,buildSleeperMiddleUnits,inferTeCoverageUnit,
-  buildRbDefenseSplits,rbUsageSplit,combineRbMicroEdge,protectionEdge
+  buildRbDefenseSplits,rbUsageSplit,combineRbMicroEdge,protectionEdge,
+  buildSleeperFrontSeven,frontSevenAttritionEdge,runBlockingEdge
 } from "./lib/matchup-v2.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
@@ -664,6 +665,7 @@ export default async req => {
     const secondaries=buildSleeperSecondaries(playersDB);
     const lineUnits=buildSleeperLineUnits(playersDB);
     const middleUnits=buildSleeperMiddleUnits(playersDB);
+    const frontUnits=buildSleeperFrontSeven(playersDB);
     const defenderCoverage=buildDefenderCoverage(defCoverageCsv,priorDefCoverageCsv,week);
     const teamPassRush=buildTeamPassRush(defCoverageCsv,priorDefCoverageCsv,week);
     const rbDefenseSplits=buildRbDefenseSplits(currentRows,priorRows,week);
@@ -1038,6 +1040,36 @@ export default async req => {
               const style=adjusted.receivingShare>=.34?"receiving-weighted":"ground-weighted";
               reasons.push(`${round((adjusted.multiplier-1)*100)}% RB ${style} edge`);
             }
+
+            const groundWeight=Number(adjusted.groundShare||.8);
+            const exposure=Number(signals.matchupExposure||1);
+            const front=frontSevenAttritionEdge({
+              opponent:opp,frontUnits,unavailableNames:unavailablePlayers
+            });
+            if(front){
+              const applyFront=front.missingStarters>0 && front.confidence!=="LOW";
+              const edge=(applyFront?((front.multiplier||1)-1):0)*groundWeight*exposure;
+              const scaled={...front,edgePct:round(edge*100),multiplier:1+edge,applied:applyFront};
+              signals.frontSeven=scaled;
+              projection*=scaled.multiplier;
+              if(applyFront && Math.abs(edge)>=.005){
+                reasons.push(`+${round(edge*100)}% defensive-front attrition`);
+              }
+            }
+
+            const runBlock=runBlockingEdge({
+              offense:info.team,lineUnits,unavailableNames:unavailablePlayers
+            });
+            if(runBlock){
+              const applyBlock=runBlock.missingStarters>0 && runBlock.confidence!=="LOW";
+              const edge=(applyBlock?((runBlock.multiplier||1)-1):0)*groundWeight;
+              const scaled={...runBlock,edgePct:round(edge*100),multiplier:1+edge,applied:applyBlock};
+              signals.runBlocking=scaled;
+              projection*=scaled.multiplier;
+              if(applyBlock && Math.abs(edge)>=.005){
+                reasons.push(`${round(edge*100)}% run-blocking injury drag`);
+              }
+            }
           }
         }
 
@@ -1199,7 +1231,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Matchup effects are opportunity-scaled: WRs get likely-CB coverage, TEs get middle-coverage-unit context, RBs split ground vs receiving matchup, and QBs combine pass rush with OL availability. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Matchup effects are opportunity-scaled: WRs get likely-CB coverage, TEs get middle-coverage-unit context, RBs split ground vs receiving matchup plus current front-seven/run-blocking injuries, and QBs combine pass rush with OL availability. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
         weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}

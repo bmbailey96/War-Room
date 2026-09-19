@@ -106,6 +106,8 @@ export default async req => {
       coverageMatchup:x.player.signals?.coverageMatchup||null,
       teCoverage:x.player.signals?.teCoverage||null,
       rbMatchup:x.player.signals?.rbMatchup||null,
+      frontSeven:x.player.signals?.frontSeven||null,
+      runBlocking:x.player.signals?.runBlocking||null,
       passRush:x.player.signals?.passRush||null,
       protection:x.player.signals?.protection||null,
       opportunityShare:x.player.signals?.opportunityShare??null,
