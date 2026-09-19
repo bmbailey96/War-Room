@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import {
   eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
   projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable,
-  matchupExposureFor, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall
+  matchupExposureFor, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall,
+  buildStrategicTiebreaks
 } from "../netlify/functions/lineup.mjs";
 
 const flexPlayer={slot:"WR",eligibleSlots:["WR"]};
@@ -590,3 +591,61 @@ assert.equal(fittedMicro.weights.passRush,1);
 assert.equal(fittedMicro.weights.personnel,1);
 
 console.log("Micro-edge self-calibration checks passed");
+
+
+const meanStarter={
+  pid:"R1",name:"Mean Starter",slot:"WR",eligibleSlots:["WR"],
+  projection:15,floor:8.5,ceiling:19,sigma:4.5,out:false,locked:false
+};
+const floorBench={
+  pid:"R2",name:"Safe Bench",slot:"WR",eligibleSlots:["WR"],
+  projection:14.6,floor:10.2,ceiling:18,sigma:3.2,out:false,locked:false
+};
+const ceilingBench={
+  pid:"R3",name:"Boom Bench",slot:"WR",eligibleSlots:["WR"],
+  projection:14.5,floor:6.5,ceiling:22,sigma:5.2,out:false,locked:false
+};
+const farLowerBench={
+  pid:"R4",name:"Too Low Mean",slot:"WR",eligibleSlots:["WR"],
+  projection:13.8,floor:12,ceiling:24,sigma:4,out:false,locked:false
+};
+
+let strategic=buildStrategicTiebreaks(
+  [{slot:"WR",player:meanStarter}],
+  [meanStarter,floorBench,ceilingBench,farLowerBench],
+  "protect_floor"
+);
+assert.equal(strategic.length,1);
+assert.equal(strategic[0].start.name,"Safe Bench");
+assert.equal(strategic[0].callStrength,"FLOOR LEAN");
+assert.equal(strategic[0].actionable,false);
+assert.ok(strategic[0].riskEdge>=1);
+
+strategic=buildStrategicTiebreaks(
+  [{slot:"WR",player:meanStarter}],
+  [meanStarter,floorBench,ceilingBench,farLowerBench],
+  "chase_ceiling"
+);
+assert.equal(strategic.length,1);
+assert.equal(strategic[0].start.name,"Boom Bench");
+assert.equal(strategic[0].callStrength,"CEILING LEAN");
+assert.equal(strategic[0].actionable,false);
+assert.ok(strategic[0].riskEdge>=1.5);
+
+assert.equal(
+  buildStrategicTiebreaks(
+    [{slot:"WR",player:meanStarter}],
+    [meanStarter,floorBench],
+    "neutral"
+  ).length,
+  0
+);
+assert.ok(
+  !buildStrategicTiebreaks(
+    [{slot:"WR",player:meanStarter}],
+    [meanStarter,farLowerBench],
+    "protect_floor"
+  ).some(x=>x.start.pid==="R4")
+);
+
+console.log("Risk-aware floor/ceiling tiebreak checks passed");
