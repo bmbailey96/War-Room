@@ -629,3 +629,61 @@ export function protectionEdge({
     source:"ol_availability",
   };
 }
+
+
+export function buildSleeperFrontSeven(playersDB={}){
+  const byTeam={};
+  for(const p of Object.values(playersDB||{})){
+    const team=normTeam(p?.t),name=String(p?.n||"").trim();
+    if(!team||!name)continue;
+    const pos=sleeperPos(p),dp=sleeperDepthPos(p);
+    const isFront=/^(DL|DE|DT|NT|EDGE|LB|ILB|MLB|OLB)$/.test(pos) ||
+      /^(DE|DT|NT|LE|RE|EDGE|ILB|MLB|OLB|WLB|SLB|LB)$/.test(dp);
+    if(!isFront)continue;
+    (byTeam[team]=byTeam[team]||[]).push({
+      name,team,pos:dp||pos,rank:sleeperRank(p)
+    });
+  }
+  for(const arr of Object.values(byTeam)){
+    arr.sort((a,b)=>(a.rank-b.rank)||a.pos.localeCompare(b.pos)||a.name.localeCompare(b.name));
+  }
+  return byTeam;
+}
+
+export function frontSevenAttritionEdge({
+  opponent,frontUnits={},unavailableNames=new Set()
+}={}){
+  const unit=frontUnits[normTeam(opponent)]||[];
+  if(!unit.length)return null;
+  const unavailable=unavailableNames||new Set();
+  const starters=unit.filter(x=>x.rank===1);
+  const missing=starters.filter(x=>unavailable.has(normName(x.name)));
+  const severity=clamp(missing.length*.0075,0,.024);
+  return {
+    missingStarters:missing.length,
+    names:missing.map(x=>x.name),
+    edgePct:round(severity*100),
+    multiplier:1+severity,
+    confidence:starters.length>=5?"MEDIUM":"LOW",
+    source:"front_seven_availability",
+  };
+}
+
+export function runBlockingEdge({
+  offense,lineUnits={},unavailableNames=new Set()
+}={}){
+  const unit=lineUnits[normTeam(offense)]||[];
+  if(!unit.length)return null;
+  const unavailable=unavailableNames||new Set();
+  const starters=unit.filter(x=>x.rank===1);
+  const missing=starters.filter(x=>unavailable.has(normName(x.name)));
+  const severity=clamp(missing.length*.006,0,.02);
+  return {
+    missingStarters:missing.length,
+    names:missing.map(x=>x.name),
+    edgePct:round(-severity*100),
+    multiplier:1-severity,
+    confidence:starters.length>=4?"MEDIUM":"LOW",
+    source:"run_blocking_availability",
+  };
+}
