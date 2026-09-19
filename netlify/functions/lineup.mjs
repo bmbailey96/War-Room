@@ -619,6 +619,10 @@ export default async req => {
       matchupPointHistory(stateStore,league,week,season),
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
+    const microWeights={
+      coverage:1,teCoverage:1,rbSplit:1,passRush:1,personnel:1,
+      ...(learnedModel?.microWeights||{})
+    };
     const positionScale=learnedModel?.positionScale||{};
     const [
       matchups,currentCsv,priorCsv,snapCsv,injuryCsv,gamesCsv,sleeperProj,
@@ -973,13 +977,14 @@ export default async req => {
           });
           if(coverageMatchup){
             const rawEdge=(coverageMatchup.multiplier||1)-1;
-            const scaledEdge=clamp(rawEdge*(signals.matchupExposure||1),-.045,.055);
+            const scaledEdge=clamp(rawEdge*(signals.matchupExposure||1)*microWeights.coverage,-.045,.055);
             const adjusted={
               ...coverageMatchup,
               rawEdgePct:coverageMatchup.edgePct,
               edgePct:round(scaledEdge*100),
               multiplier:1+scaledEdge,
               opportunityExposure:signals.matchupExposure||1,
+              trustWeight:microWeights.coverage,
             };
             const applyCoverage=
               Number(adjusted.assignmentConfidence||0)>=55 &&
@@ -1001,13 +1006,14 @@ export default async req => {
           });
           if(middle){
             const rawEdge=(middle.multiplier||1)-1;
-            const scaledEdge=clamp(rawEdge*(signals.matchupExposure||1),-.028,.032);
+            const scaledEdge=clamp(rawEdge*(signals.matchupExposure||1)*microWeights.teCoverage,-.028,.032);
             const adjusted={
               ...middle,
               rawEdgePct:middle.edgePct,
               edgePct:round(scaledEdge*100),
               multiplier:1+scaledEdge,
               opportunityExposure:signals.matchupExposure||1,
+              trustWeight:microWeights.teCoverage,
             };
             const applyMiddle=Number(adjusted.coverageReliability||0)>=18;
             signals.teCoverage={...adjusted,applied:applyMiddle};
@@ -1026,13 +1032,14 @@ export default async req => {
           );
           if(rbEdge){
             const confidenceScale=rbEdge.confidence==="LOW"?.58:1;
-            const rawEdge=((rbEdge.multiplier||1)-1)*confidenceScale;
+            const rawEdge=((rbEdge.multiplier||1)-1)*confidenceScale*microWeights.rbSplit;
             const adjusted={
               ...rbEdge,
               rawEdgePct:rbEdge.edgePct,
               edgePct:round(rawEdge*100),
               multiplier:1+rawEdge,
               applied:true,
+              trustWeight:microWeights.rbSplit,
             };
             signals.rbMatchup=adjusted;
             projection*=adjusted.multiplier;
@@ -1048,8 +1055,8 @@ export default async req => {
             });
             if(front){
               const applyFront=front.missingStarters>0 && front.confidence!=="LOW";
-              const edge=(applyFront?((front.multiplier||1)-1):0)*groundWeight*exposure;
-              const scaled={...front,edgePct:round(edge*100),multiplier:1+edge,applied:applyFront};
+              const edge=(applyFront?((front.multiplier||1)-1):0)*groundWeight*exposure*microWeights.personnel;
+              const scaled={...front,rawEdgePct:front.edgePct,edgePct:round(edge*100),multiplier:1+edge,trustWeight:microWeights.personnel,applied:applyFront};
               signals.frontSeven=scaled;
               projection*=scaled.multiplier;
               if(applyFront && Math.abs(edge)>=.005){
@@ -1062,8 +1069,8 @@ export default async req => {
             });
             if(runBlock){
               const applyBlock=runBlock.missingStarters>0 && runBlock.confidence!=="LOW";
-              const edge=(applyBlock?((runBlock.multiplier||1)-1):0)*groundWeight;
-              const scaled={...runBlock,edgePct:round(edge*100),multiplier:1+edge,applied:applyBlock};
+              const edge=(applyBlock?((runBlock.multiplier||1)-1):0)*groundWeight*microWeights.personnel;
+              const scaled={...runBlock,rawEdgePct:runBlock.edgePct,edgePct:round(edge*100),multiplier:1+edge,trustWeight:microWeights.personnel,applied:applyBlock};
               signals.runBlocking=scaled;
               projection*=scaled.multiplier;
               if(applyBlock && Math.abs(edge)>=.005){
@@ -1076,8 +1083,18 @@ export default async req => {
         if(slot==="QB" && opp && teamPassRush[normTeam(opp)]){
           const passRush=teamPassRush[normTeam(opp)];
           const applyRush=passRush.confidence!=="LOW";
-          signals.passRush={...passRush,applied:applyRush};
-          const rushMult=applyRush?(passRush.multiplier||1):1;
+          const rushEdge=applyRush
+            ? ((passRush.multiplier||1)-1)*microWeights.passRush
+            : 0;
+          const rushMult=1+rushEdge;
+          signals.passRush={
+            ...passRush,
+            rawEdgePct:passRush.edgePct,
+            edgePct:round(rushEdge*100),
+            multiplier:rushMult,
+            trustWeight:microWeights.passRush,
+            applied:applyRush
+          };
           projection*=rushMult;
           if(applyRush && Math.abs(rushMult-1)>=0.007){
             reasons.push(`${round((rushMult-1)*100)}% pass-rush edge`);
@@ -1089,8 +1106,18 @@ export default async req => {
           if(protection){
             const applyProtection=
               protection.missingStarters>0 && protection.confidence!=="LOW";
-            signals.protection={...protection,applied:applyProtection};
-            const protectionMult=applyProtection?(protection.multiplier||1):1;
+            const protectionEdgeValue=applyProtection
+              ? ((protection.multiplier||1)-1)*microWeights.personnel
+              : 0;
+            const protectionMult=1+protectionEdgeValue;
+            signals.protection={
+              ...protection,
+              rawEdgePct:protection.edgePct,
+              edgePct:round(protectionEdgeValue*100),
+              multiplier:protectionMult,
+              trustWeight:microWeights.personnel,
+              applied:applyProtection
+            };
             projection*=protectionMult;
             if(applyProtection && Math.abs(protectionMult-1)>=0.006){
               reasons.push(
@@ -1231,9 +1258,10 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Matchup effects are opportunity-scaled: WRs get likely-CB coverage, TEs get middle-coverage-unit context, RBs split ground vs receiving matchup plus current front-seven/run-blocking injuries, and QBs combine pass rush with OL availability. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Opportunity-scaled micro edges (WR coverage, TE middle coverage, RB split, pass rush and current personnel) are independently self-calibrated from prior results. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
-        weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
+        weights:model,microWeights,microReliability:learnedModel?.microReliability||{},
+        positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}
       },
       currentTotal:round(currentTotal),
