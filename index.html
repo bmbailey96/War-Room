@@ -47,18 +47,20 @@ function renderActionQueue(){const box=$("actionqueue");if(!box)return;const ite
 if(base){
   const urgent=(base.contingencies||[]).filter(x=>x.urgency==="DECISION_DEADLINE"||x.urgency==="NO_CLEAN_PIVOT").sort((a,b)=>(a.deadlineAt?new Date(a.deadlineAt).getTime():0)-(b.deadlineAt?new Date(b.deadlineAt).getTime():0))[0];
   if(urgent){const when=urgent.deadlineAt?clock(urgent.deadlineAt):"";push("DEADLINE",urgent.starter+" injury decision",urgent.message+(when?" // DECIDE BY "+when:""),120,"deadline")}
+  const liveOverride=analysisState?.reasoningAvailable!==false?(analysisState?.analysis?.calls||[]).find(x=>x.verdict==="OVERRIDE"):null;
   const call=(base.actionableCalls||[])[0];
-  if(call){const edge=call.edge!=null?((call.edge>=0?"+":"")+Number(call.edge).toFixed(1)+" pts"):"";const prob=call.beatProbability!=null?Number(call.beatProbability).toFixed(0)+"% outlook":"";push("LINEUP","Start "+call.start.name+(call.sit?" over "+call.sit.name:""),[call.callStrength,edge,prob].filter(Boolean).join(" // "),110,"do")}
+  if(liveOverride){push("LINEUP","Start "+liveOverride.start+(liveOverride.sit?" over "+liveOverride.sit:""),"LIVE OVERRIDE // "+String(liveOverride.why||""),115,"do")}
+  else if(call){const edge=call.edge!=null?((call.edge>=0?"+":"")+Number(call.edge).toFixed(1)+" pts"):"";const prob=call.beatProbability!=null?Number(call.beatProbability).toFixed(0)+"% outlook":"";push("LINEUP","Start "+call.start.name+(call.sit?" over "+call.sit.name:""),[call.callStrength,edge,prob].filter(Boolean).join(" // "),110,"do")}
   const flex=(base.flexMoves||[])[0];
   if(flex)push("FLEX",flex.moveToFlex+" → "+flex.flexSlot,flex.message,100,"do");
-  if(!call){push("LINEUP","Hold current lineup","No difference cleared the no-churn threshold.",45,"watch")}
+  if(!call&&!liveOverride){push("LINEUP","Hold current lineup","No difference cleared the no-churn threshold.",45,"watch")}
   const safe=(base.contingencies||[]).find(x=>x.urgency==="SAFE_TO_WAIT");
   if(safe&&!urgent)push("WATCH",safe.starter+" status",safe.message,65,"watch");
 }
 if(movesState&&movesState.status!=="building"){
   const move=(movesState.actions||[]).find(a=>a.type!=="HOLD");
   if(move){const trade=/TRADE|SELL/.test(String(move.type||""));const waiver=/ADD|WAIVER/.test(String(move.type||""));let detail=[];if(move.weeklyDelta!=null)detail.push((move.weeklyDelta>=0?"+":"")+Number(move.weeklyDelta).toFixed(1)+" pts/wk");if(move.faabPct!=null)detail.push(Number(move.faabPct).toFixed(0)+"% FAAB");if(move.partner)detail.push("with "+move.partner);push(trade?"TRADE":(waiver?"WAIVER":"ROSTER"),move.headline||String(move.type||"Roster move").replaceAll("_"," "),detail.join(" // ")||move.why||"",trade?55:80,trade?"watch":"do")}
-}else if(base&&!movesState){push("ROSTER","Scanning waivers and trades","Core roster engine is still building the move board.",20,"watch")}
+}else if(base&&(!movesState||movesState.status==="building")){push("ROSTER","Scanning waivers and trades","Core roster engine is still building the move board.",20,"watch")}
 items.sort((a,b)=>b.priority-a.priority);const shown=items.slice(0,3);box.innerHTML=shown.length?shown.map(x=>'<div class="actionrow '+x.cls+'"><div class="actionkind">'+esc(x.kind)+'</div><div class="actionbody"><strong>'+esc(x.title)+'</strong><span>'+esc(x.detail||"")+'</span></div></div>').join(""):'<div class="empty">No action needed right now.</div>'}
 function coverageTags(p){const m=p?.signals?.coverageMatchup;if(!m)return"";const edge=Number(m.edgePct||0),cls=edge>=1?"hi":edge<=-1?"lo":"";const stats=[];if(m.defenderYpt!=null)stats.push(Number(m.defenderYpt).toFixed(1)+" Y/TGT");if(m.defenderPasserRating!=null)stats.push(Number(m.defenderPasserRating).toFixed(0)+" RTG");const mode=m.applied===false?"INFO":"APPLIED";return '<span class="tag">LIKELY VS '+esc(m.defender)+'</span><span class="tag '+cls+'">COV '+(edge>=0?"+":"")+edge.toFixed(1)+'% // '+Number(m.assignmentConfidence||0).toFixed(0)+'% ASSIGN // '+mode+'</span>'+(stats.length?'<span class="tag">'+esc(stats.join(" // "))+'</span>':'')}
 function passRushTag(p){const m=p?.signals?.passRush;if(!m)return"";const edge=Number(m.edgePct||0),cls=edge>=.7?"hi":edge<=-.7?"lo":"";const pg=m.pressurePerGame!=null?Number(m.pressurePerGame).toFixed(1):null,avg=m.leagueAverage!=null?Number(m.leagueAverage).toFixed(1):null;return '<span class="tag '+cls+'">PASS RUSH '+(edge>=0?"+":"")+edge.toFixed(1)+'% // '+(pg&&avg?pg+" PRESS/G vs "+avg:"")+' // '+(m.applied===false?"INFO":"APPLIED")+'</span>'}
