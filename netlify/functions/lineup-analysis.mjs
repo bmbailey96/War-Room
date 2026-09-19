@@ -22,6 +22,9 @@ export function deterministicAnalysis(data) {
     const confidence=c.decisionConfidence||c.start?.confidence||"MEDIUM";
     const bits=[];
     if(edge!=null)bits.push(`${edge>=0?"+":""}${edge.toFixed(1)} projected-point edge`);
+    if(c.strategic&&c.riskEdge!=null){
+      bits.push(`${c.riskEdge>=0?"+":""}${Number(c.riskEdge).toFixed(1)} ${c.posture==="protect_floor"?"floor":"ceiling"} edge`);
+    }
     if(prob!=null)bits.push(`${Math.round(prob)}% better-outlook estimate`);
     if(c.start?.injury)bits.push(`${start} is listed ${c.start.injury}`);
     return {
@@ -128,6 +131,7 @@ export default async req => {
     const computed=(data.calls||[]).map(c=>({
       start:c.start?.name,sit:c.sit?.name,slot:c.slot,
       actionable:c.actionable,callStrength:c.callStrength,actionReason:c.actionReason,
+      strategic:c.strategic||false,posture:c.posture||null,riskEdge:c.riskEdge??null,
       edge:c.edge,beatProbability:c.beatProbability,decisionConfidence:c.decisionConfidence,
       startProjection:c.start?.projection,startFloor:c.start?.floor,startCeiling:c.start?.ceiling,startSource:c.start?.source,
       startCoverage:c.start?.signals?.coverageMatchup||null,
@@ -183,7 +187,7 @@ Rules:
 2. NEVER recommend moving a player whose game has started. A player listed under PLAYERS ALREADY LOCKED ON THE BENCH is history, not an option.
 3. NEVER recommend START/HOLD/OVERRIDE in favor of anyone listed under PLAYERS UNAVAILABLE THIS WEEK, even if old projections or reputation favor him.
 4. Preserve the deterministic late-swap and FLEX guidance unless current news changes the player's availability. Never tell me to wait on a questionable late player if the listed fallback locks earlier.
-5. Respect callStrength. LEAN means the numerical difference is inside the no-churn threshold. Do not turn a LEAN into a START instruction unless current evidence creates a real reason. FORCED means the current starter is unavailable.
+5. Respect callStrength. LEAN means the numerical difference is inside the no-churn threshold. FLOOR LEAN and CEILING LEAN are matchup-state tiebreakers between near-equal mean projections; they are explicitly not forced lineup moves. Do not turn any LEAN into a START instruction unless current evidence creates a real reason. FORCED means the current starter is unavailable.
 6. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, credible inactive news, or a confirmed shadow/slot coverage assignment.
 7. Respect the engine's uncertainty. A LOW decision-confidence call or beat probability near 50% is genuinely close even if the raw point gap looks noticeable. A HIGH-confidence mathematical edge should require strong concrete news to override.
 8. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
