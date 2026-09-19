@@ -10,23 +10,25 @@ import { store, MY_USER_ID, normName } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
 const DEFAULT = { role:0.28, matchup:0.25, environment:0.35, scheme:0.22 };
+const MICRO_KEYS=["coverage","teCoverage","rbSplit","passRush","personnel"];
 const DRIVER_KEYS = ["injury","role","depth_chart","scheme","weather","matchup","projection_only","other"];
 
 async function j(url) {
   try { const r=await fetch(url); return r.ok ? r.json() : null; }
   catch(e){ return null; }
 }
+function standardProjection(s,w){
+  let p=s.base;
+  p*=1+w.role*((s.signals?.roleRatio||1)-1);
+  p*=1+w.matchup*((s.signals?.matchupRatio||1)-1);
+  p*=1+w.environment*((s.signals?.environmentRatio||1)-1);
+  p*=1+w.scheme*((s.signals?.schemeRatio||1)-1);
+  return p;
+}
 const mae=(samples,w)=> {
   if(!samples.length) return null;
   let total=0;
-  for(const s of samples){
-    let p=s.base;
-    p*=1+w.role*((s.signals?.roleRatio||1)-1);
-    p*=1+w.matchup*((s.signals?.matchupRatio||1)-1);
-    p*=1+w.environment*((s.signals?.environmentRatio||1)-1);
-    p*=1+w.scheme*((s.signals?.schemeRatio||1)-1);
-    total+=Math.abs(p-s.actual);
-  }
+  for(const s of samples) total+=Math.abs(standardProjection(s,w)-s.actual);
   return total/samples.length;
 };
 const round2=x=>Math.round(x*100)/100;
@@ -78,6 +80,52 @@ function fit(samples) {
   const weights={};
   for(const k of Object.keys(DEFAULT)) weights[k]=round2(DEFAULT[k]*(1-alpha)+best[k]*alpha);
   return {weights,rawFit:best,alpha:round2(alpha),mae:round2(mae(samples,weights)),defaultMae:round2(mae(samples,DEFAULT))};
+}
+
+function microEdge(s,key){
+  const signals=s.signals||{};
+  const usable=o=>o && o.applied!==false && Number.isFinite(Number(o.edgePct));
+  if(key==="coverage") return usable(signals.coverageMatchup)?Number(signals.coverageMatchup.edgePct)/100:null;
+  if(key==="teCoverage") return usable(signals.teCoverage)?Number(signals.teCoverage.edgePct)/100:null;
+  if(key==="rbSplit") return usable(signals.rbMatchup)?Number(signals.rbMatchup.edgePct)/100:null;
+  if(key==="passRush") return usable(signals.passRush)?Number(signals.passRush.edgePct)/100:null;
+  if(key==="personnel"){
+    const parts=[signals.frontSeven,signals.runBlocking,signals.protection]
+      .filter(usable)
+      .map(x=>Number(x.edgePct)/100);
+    return parts.length?parts.reduce((a,b)=>a+b,0):null;
+  }
+  return null;
+}
+
+function microReliability(samples,key,standardWeights){
+  let n=0,hit=0;
+  for(const s of samples){
+    const edge=microEdge(s,key);
+    if(edge==null || Math.abs(edge)<.004)continue;
+    const residual=s.actual-standardProjection(s,standardWeights);
+    if(Math.abs(residual)<.75)continue;
+    n++;
+    if((edge>0&&residual>0)||(edge<0&&residual<0))hit++;
+  }
+  return {n,hit,hitRate:n?round2(hit/n):null};
+}
+
+function microWeightFromStat(stat){
+  if(!stat || stat.n<6 || stat.hitRate==null)return 1;
+  const raw=Math.max(.55,Math.min(1.25,1+(stat.hitRate-.5)*1.8));
+  const alpha=Math.min(.7,stat.n/40);
+  return round2(1+(raw-1)*alpha);
+}
+
+function fitMicroWeights(samples,standardWeights){
+  const reliability={},weights={};
+  for(const key of MICRO_KEYS){
+    const stat=microReliability(samples,key,standardWeights);
+    reliability[key]=stat;
+    weights[key]=microWeightFromStat(stat);
+  }
+  return {weights,reliability};
 }
 
 function signalReliability(samples,key){
@@ -201,11 +249,13 @@ export default async () => {
       weights:{...DEFAULT},rawFit:null,alpha:0,
       mae:round2(mae(calibratedSamples,DEFAULT)||0),defaultMae:round2(mae(calibratedSamples,DEFAULT)||0),
     };
+    const microFit=fitMicroWeights(calibratedSamples,fitResult.weights);
     const model={
       at:Date.now(),leagueId:league.id,season,samples:samples.length,
       weeks:[...new Set(samples.map(s=>s.week))],
       positionScale:posFit.scales,positionDetail:posFit.detail,
       weights:fitResult.weights,rawFit:fitResult.rawFit,shrinkage:fitResult.alpha,
+      microWeights:microFit.weights,microReliability:microFit.reliability,
       mae:fitResult.mae,defaultMae:fitResult.defaultMae,
       reliability:{
         role:signalReliability(calibratedSamples,"role"),
@@ -225,7 +275,7 @@ export default async () => {
 
     result.push({
       league:league.name,id:league.id,samples:samples.length,
-      weights:model.weights,positionScale:model.positionScale,mae:model.mae,defaultMae:model.defaultMae,
+      weights:model.weights,microWeights:model.microWeights,positionScale:model.positionScale,mae:model.mae,defaultMae:model.defaultMae,
       reasoningCalls:reasoningGrades.length,
     });
   }
@@ -236,3 +286,6 @@ export default async () => {
 };
 
 export const config={schedule:"0 15 * * 2"};
+
+
+export { standardProjection, microEdge, microReliability, microWeightFromStat, fitMicroWeights };
