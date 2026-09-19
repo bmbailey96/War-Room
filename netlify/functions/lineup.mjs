@@ -246,6 +246,60 @@ function classifyLineupCall({start,sit,edge=null,beatProbability=null,directLega
   return {actionable:false,strength:"LEAN",reason:"difference is within model noise"};
 }
 
+function buildStrategicTiebreaks(picked=[],players=[],posture="neutral") {
+  if(!["protect_floor","chase_ceiling"].includes(posture))return [];
+  const selected=new Set(picked.map(x=>x.player?.pid).filter(Boolean));
+  const candidates=[];
+
+  for(const row of picked){
+    const starter=row.player;
+    if(!starter || starter.locked || starter.out || starter.projection==null)continue;
+    const starterRisk=posture==="protect_floor"?starter.floor:starter.ceiling;
+    if(starterRisk==null)continue;
+
+    for(const bench of players){
+      if(!bench || selected.has(bench.pid) || bench.locked || bench.out || bench.projection==null)continue;
+      if(!eligibility(row.slot,bench))continue;
+      const meanEdge=Number(bench.projection)-Number(starter.projection);
+      if(Math.abs(meanEdge)>.6)continue;
+
+      const benchRisk=posture==="protect_floor"?bench.floor:bench.ceiling;
+      if(benchRisk==null)continue;
+      const riskEdge=Number(benchRisk)-Number(starterRisk);
+      const threshold=posture==="protect_floor"?1:1.5;
+      if(riskEdge<threshold)continue;
+
+      const prob=probabilityBetter(bench,starter);
+      candidates.push({
+        start:bench,sit:starter,slot:row.slot,directLegal:true,
+        edge:round(meanEdge),
+        beatProbability:prob==null?null:Math.round(prob*100),
+        decisionScore:prob==null?50:Math.round(prob*100),
+        decisionConfidence:"LOW",
+        actionable:false,
+        callStrength:posture==="protect_floor"?"FLOOR LEAN":"CEILING LEAN",
+        actionReason:posture==="protect_floor"
+          ?"near-equal mean; stronger downside protection"
+          :"near-equal mean; stronger upside path",
+        strategic:true,posture,riskEdge:round(riskEdge),
+      });
+    }
+  }
+
+  candidates.sort((a,b)=>
+    (b.riskEdge-a.riskEdge) ||
+    (b.edge-a.edge)
+  );
+
+  const usedStarts=new Set(),usedSits=new Set(),out=[];
+  for(const call of candidates){
+    if(usedStarts.has(call.start.pid)||usedSits.has(call.sit.pid))continue;
+    usedStarts.add(call.start.pid);usedSits.add(call.sit.pid);out.push(call);
+    if(out.length>=2)break;
+  }
+  return out;
+}
+
 function confidenceGrade(score) {
   if(score>=75)return "HIGH";
   if(score>=55)return "MEDIUM";
@@ -1232,6 +1286,12 @@ export default async req => {
       ? clamp(normalCdf(projectedMargin/diffSigma),.03,.97)
       : (projectedMargin>0?.97:projectedMargin<0?.03:.5);
     const posture=winProbability>=.65?"protect_floor":winProbability<=.35?"chase_ceiling":"neutral";
+    const strategicLeans=buildStrategicTiebreaks(optimal.picked,rosterPlayers,posture);
+    const allCalls=[...changes,...strategicLeans];
+    decision.calls=allCalls;
+    decision.actionableCalls=changes.filter(x=>x.actionable);
+    decision.leans=[...changes.filter(x=>!x.actionable),...strategicLeans];
+    decision.strategicLeans=strategicLeans;
     const myRange=lineupRange(optimal.picked), opponentRange=lineupRange(opponentOptimal.picked);
 
     // Keep the last pre-kickoff projection for each player. Tuesday's learner
@@ -1277,7 +1337,7 @@ export default async req => {
         uncertainty:{mine:round(mySigma),opponent:round(opponentSigma)},
         lockedActual:{mine:round(mineLocked),opponent:round(oppLocked)},
       },
-      calls:changes,
+      calls:allCalls,
       actionableCalls:decision.actionableCalls,
       leans:decision.leans,
       decision,
@@ -1290,4 +1350,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall, buildStrategicTiebreaks };
