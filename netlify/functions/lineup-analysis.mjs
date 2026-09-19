@@ -104,7 +104,10 @@ export default async req => {
       opp:x.player.opp,injury:x.player.injury,confidence:x.player.confidence,confidenceScore:x.player.confidenceScore,
       source:x.player.source,rangeSource:x.player.rangeSource,reasons:x.player.reasons,
       coverageMatchup:x.player.signals?.coverageMatchup||null,
+      teCoverage:x.player.signals?.teCoverage||null,
+      rbMatchup:x.player.signals?.rbMatchup||null,
       passRush:x.player.signals?.passRush||null,
+      protection:x.player.signals?.protection||null,
       opportunityShare:x.player.signals?.opportunityShare??null,
       opportunityLabel:x.player.signals?.opportunityLabel||null,
       matchupExposure:x.player.signals?.matchupExposure??1

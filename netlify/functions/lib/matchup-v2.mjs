@@ -372,3 +372,260 @@ export function buildTeamPassRush(currentCsv,priorCsv,week){
   }
   return out;
 }
+
+
+function sleeperPos(p){
+  return String(p?.p||"").toUpperCase();
+}
+function sleeperDepthPos(p){
+  return String(p?.dp||"").toUpperCase();
+}
+function sleeperRank(p){
+  const x=Number(p?.do);
+  return Number.isFinite(x)&&x>0?x:99;
+}
+
+export function buildSleeperLineUnits(playersDB={}){
+  const byTeam={};
+  for(const p of Object.values(playersDB||{})){
+    const team=normTeam(p?.t),name=String(p?.n||"").trim();
+    if(!team||!name)continue;
+    const pos=sleeperPos(p),dp=sleeperDepthPos(p);
+    const isLine=/^(OL|OT|OG|C|G|T)$/.test(pos) ||
+      /^(LT|RT|LG|RG|C|OT|OG|OL)$/.test(dp);
+    if(!isLine)continue;
+    (byTeam[team]=byTeam[team]||[]).push({
+      name,team,pos:dp||pos||"OL",rank:sleeperRank(p)
+    });
+  }
+  for(const arr of Object.values(byTeam)){
+    arr.sort((a,b)=>(a.rank-b.rank)||a.pos.localeCompare(b.pos)||a.name.localeCompare(b.name));
+  }
+  return byTeam;
+}
+
+export function buildSleeperMiddleUnits(playersDB={}){
+  const byTeam={};
+  for(const p of Object.values(playersDB||{})){
+    const team=normTeam(p?.t),name=String(p?.n||"").trim();
+    if(!team||!name)continue;
+    const pos=sleeperPos(p),dp=sleeperDepthPos(p);
+    const isCorner=/CB|CORNER|NICKEL|\bNB\b|\bSCB\b/.test(`${pos} ${dp}`);
+    const isMiddle=/^(LB|ILB|MLB|OLB|S|FS|SS|DB)$/.test(pos) ||
+      /^(ILB|MLB|OLB|WLB|SLB|LB|FS|SS|S)$/.test(dp);
+    if(isCorner||!isMiddle)continue;
+    const role=/LB/.test(`${pos} ${dp}`)?"linebacker":"safety";
+    (byTeam[team]=byTeam[team]||[]).push({
+      name,team,role,pos:dp||pos,rank:sleeperRank(p)
+    });
+  }
+  for(const arr of Object.values(byTeam)){
+    arr.sort((a,b)=>(a.rank-b.rank)||((a.role==="linebacker"?0:1)-(b.role==="linebacker"?0:1))||a.name.localeCompare(b.name));
+  }
+  return byTeam;
+}
+
+export function inferTeCoverageUnit({
+  opponent,middleUnits={},coverage={},unavailableNames=new Set()
+}={}){
+  const team=normTeam(opponent);
+  const original=middleUnits[team]||[];
+  if(!original.length)return null;
+  const unavailable=unavailableNames||new Set();
+  const unavailableStarters=original.filter(x=>x.rank===1&&unavailable.has(normName(x.name))).length;
+  const active=original
+    .filter(x=>!unavailable.has(normName(x.name)))
+    .filter(x=>x.rank<=2)
+    .map(x=>({...x,coverage:coverage[normName(x.name)]||null}));
+
+  const withCoverage=active.filter(x=>x.coverage);
+  if(!withCoverage.length)return null;
+
+  // Tight ends see zones, safeties, linebackers and brackets. Treat this as
+  // a middle-of-field unit rather than pretending one defender shadows the TE.
+  const picked=withCoverage
+    .sort((a,b)=>{
+      const ar=(a.coverage?.reliability||0)*(Math.abs(a.coverage?.score||0)+.25);
+      const br=(b.coverage?.reliability||0)*(Math.abs(b.coverage?.score||0)+.25);
+      return br-ar;
+    })
+    .slice(0,3);
+
+  let scoreNum=0,relNum=0,den=0;
+  for(const x of picked){
+    const rel=Number(x.coverage?.reliability||0);
+    const w=Math.max(.12,rel);
+    scoreNum+=Number(x.coverage?.score||0)*w;
+    relNum+=rel*w;
+    den+=w;
+  }
+  const score=den?scoreNum/den:0;
+  const reliability=den?relNum/den:0;
+  const attrition=Math.min(.014,unavailableStarters*.008);
+  const edge=clamp(-score*reliability*.035+attrition,-.025,.03);
+
+  return {
+    defenders:picked.map(x=>x.name),
+    unitScore:round(score),
+    coverageReliability:round(reliability*100),
+    unavailableStartingMiddleDefenders:unavailableStarters,
+    edgePct:round(edge*100),
+    multiplier:1+edge,
+    assignment:"middle coverage unit",
+    source:"middle_unit_inference",
+  };
+}
+
+function rbDefenseRaw(rows,maxWeek=null){
+  const weekly={};
+  for(const r of rows||[]){
+    const wk=n(r.week);
+    if(maxWeek!=null&&wk>=maxWeek)continue;
+    if(String(r.position||"").toUpperCase()!=="RB")continue;
+    const def=normTeam(r.opponent_team);
+    if(!def||!wk)continue;
+    const key=`${def}|${wk}`;
+    const x=weekly[key]||(weekly[key]={
+      team:def,week:wk,carries:0,rushYards:0,targets:0,receptions:0,recYards:0
+    });
+    x.carries+=n(r.carries);
+    x.rushYards+=n(r.rushing_yards);
+    x.targets+=n(r.targets);
+    x.receptions+=n(r.receptions);
+    x.recYards+=n(r.receiving_yards);
+  }
+  const byTeam={};
+  for(const x of Object.values(weekly))(byTeam[x.team]=byTeam[x.team]||[]).push(x);
+  return byTeam;
+}
+
+function rbDefenseSummary(rows){
+  if(!rows?.length)return null;
+  const carries=rows.reduce((s,x)=>s+x.carries,0);
+  const rushYards=rows.reduce((s,x)=>s+x.rushYards,0);
+  const targets=rows.reduce((s,x)=>s+x.targets,0);
+  const receptions=rows.reduce((s,x)=>s+x.receptions,0);
+  const recYards=rows.reduce((s,x)=>s+x.recYards,0);
+  return {
+    weeks:rows.length,
+    ypc:carries?rushYards/carries:null,
+    targetsPerGame:targets/rows.length,
+    recYpt:targets?recYards/targets:null,
+    catchRate:targets?receptions/targets:null,
+  };
+}
+
+function blendMetric(cur,prev,key){
+  const c=cur?.[key],p=prev?.[key];
+  if(c==null)return p??null;
+  if(p==null)return c;
+  const alpha=Math.min(.75,(cur?.weeks||0)/6);
+  return c*alpha+p*(1-alpha);
+}
+
+export function buildRbDefenseSplits(currentRows,priorRows,week){
+  const cur=rbDefenseRaw(currentRows,week);
+  const prev=rbDefenseRaw(priorRows,null);
+  const teams=new Set([...Object.keys(cur),...Object.keys(prev)]);
+  const raw={};
+  for(const team of teams){
+    const c=rbDefenseSummary(cur[team]||[]);
+    const p=rbDefenseSummary(prev[team]||[]);
+    const ypc=blendMetric(c,p,"ypc");
+    const targets=blendMetric(c,p,"targetsPerGame");
+    const recYpt=blendMetric(c,p,"recYpt");
+    if(ypc==null&&targets==null)continue;
+    raw[team]={
+      ypc,targetsPerGame:targets,recYpt,
+      currentWeeks:c?.weeks||0,priorWeeks:p?.weeks||0
+    };
+  }
+
+  const mean=key=>{
+    const vals=Object.values(raw).map(x=>x[key]).filter(Number.isFinite);
+    return vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:null;
+  };
+  const leagueYpc=mean("ypc"),leagueTargets=mean("targetsPerGame"),leagueRecYpt=mean("recYpt");
+  const out={};
+  for(const [team,x] of Object.entries(raw)){
+    const groundRatio=leagueYpc&&x.ypc!=null?clamp(x.ypc/leagueYpc,.75,1.3):1;
+    const targetRatio=leagueTargets&&x.targetsPerGame!=null?clamp(x.targetsPerGame/leagueTargets,.7,1.35):1;
+    const recEffRatio=leagueRecYpt&&x.recYpt!=null?clamp(x.recYpt/leagueRecYpt,.75,1.3):1;
+    const receivingRatio=targetRatio*.7+recEffRatio*.3;
+    const groundEdge=clamp((groundRatio-1)*.055,-.016,.018);
+    const receivingEdge=clamp((receivingRatio-1)*.045,-.014,.017);
+    out[team]={
+      ypcAllowed:x.ypc==null?null:round(x.ypc),
+      rbTargetsAllowed:x.targetsPerGame==null?null:round(x.targetsPerGame),
+      rbRecYpt:x.recYpt==null?null:round(x.recYpt),
+      groundRatio:round(groundRatio),
+      receivingRatio:round(receivingRatio),
+      groundEdgePct:round(groundEdge*100),
+      receivingEdgePct:round(receivingEdge*100),
+      groundMultiplier:1+groundEdge,
+      receivingMultiplier:1+receivingEdge,
+      confidence:x.currentWeeks>=3?"MEDIUM":"LOW",
+    };
+  }
+  return out;
+}
+
+export function rbUsageSplit(rows=[]){
+  const recent=(rows||[]).slice(-5);
+  const carries=recent.reduce((s,r)=>s+n(r.carries),0);
+  const targets=recent.reduce((s,r)=>s+n(r.targets),0);
+  const weightedTargets=targets*1.35;
+  const total=carries+weightedTargets;
+  const receivingShare=total?weightedTargets/total:.2;
+  return {
+    carries,targets,
+    receivingShare:round(clamp(receivingShare,.05,.85)),
+    groundShare:round(clamp(1-receivingShare,.15,.95)),
+  };
+}
+
+export function combineRbMicroEdge(split,usage,exposure=1){
+  if(!split||!usage)return null;
+  const ground=Number(split.groundEdgePct||0)/100;
+  const receiving=Number(split.receivingEdgePct||0)/100;
+  const raw=ground*Number(usage.groundShare||0)+receiving*Number(usage.receivingShare||0);
+  const edge=clamp(raw*clamp(Number(exposure||1),.45,1.25),-.018,.02);
+  return {
+    ...usage,
+    groundEdgePct:split.groundEdgePct,
+    receivingEdgePct:split.receivingEdgePct,
+    edgePct:round(edge*100),
+    multiplier:1+edge,
+    confidence:split.confidence,
+    source:"rb_split_matchup",
+  };
+}
+
+export function protectionEdge({
+  offense,lineUnits={},unavailableNames=new Set(),passRush=null
+}={}){
+  const team=normTeam(offense);
+  const unit=lineUnits[team]||[];
+  if(!unit.length)return null;
+  const unavailable=unavailableNames||new Set();
+
+  // One starter per listed OL position. Sleeper depth order is not perfect,
+  // so treat this as an injury/tiebreaker signal rather than a line grade.
+  const starters=unit.filter(x=>x.rank===1);
+  const missing=starters.filter(x=>unavailable.has(normName(x.name)));
+  if(!missing.length)return {
+    missingStarters:0,names:[],edgePct:0,multiplier:1,confidence:"LOW",
+    source:"ol_availability"
+  };
+
+  const rushRatio=Number(passRush?.ratio||1);
+  const severity=clamp(.0065*missing.length*(rushRatio>=1?1.15:.9),0,.025);
+  return {
+    missingStarters:missing.length,
+    names:missing.map(x=>x.name),
+    edgePct:round(-severity*100),
+    multiplier:1-severity,
+    confidence:starters.length>=4?"MEDIUM":"LOW",
+    source:"ol_availability",
+  };
+}

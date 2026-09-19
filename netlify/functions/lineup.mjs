@@ -5,7 +5,9 @@
 import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam, store } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 import {
-  buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
+  buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush,
+  buildSleeperLineUnits,buildSleeperMiddleUnits,inferTeCoverageUnit,
+  buildRbDefenseSplits,rbUsageSplit,combineRbMicroEdge,protectionEdge
 } from "./lib/matchup-v2.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
@@ -660,8 +662,11 @@ export default async req => {
     const cur=byName(currentRows), prior=byName(priorRows);
     const wrRanks=receiverRanks(currentRows,priorRows,week);
     const secondaries=buildSleeperSecondaries(playersDB);
+    const lineUnits=buildSleeperLineUnits(playersDB);
+    const middleUnits=buildSleeperMiddleUnits(playersDB);
     const defenderCoverage=buildDefenderCoverage(defCoverageCsv,priorDefCoverageCsv,week);
     const teamPassRush=buildTeamPassRush(defCoverageCsv,priorDefCoverageCsv,week);
+    const rbDefenseSplits=buildRbDefenseSplits(currentRows,priorRows,week);
 
     // Official weekly injury reports are a second hard-availability source.
     // Sleeper's player metadata can lag designation changes; nflverse mirrors
@@ -683,7 +688,7 @@ export default async req => {
         };
       }
     }
-    const unavailableDefenders=new Set([
+    const unavailablePlayers=new Set([
       ...Object.entries(officialInjuryByName)
         .filter(([,v])=>hardUnavailable("",v?.status||""))
         .map(([k])=>k),
@@ -962,7 +967,7 @@ export default async req => {
           const coverageMatchup=inferWrCoverage({
             opponent:opp,receiverRank,receiverRole,receiverSide,
             secondaries,coverage:defenderCoverage,
-            unavailableNames:unavailableDefenders
+            unavailableNames:unavailablePlayers
           });
           if(coverageMatchup){
             const rawEdge=(coverageMatchup.multiplier||1)-1;
@@ -987,14 +992,79 @@ export default async req => {
           }
         }
 
+        if(slot==="TE" && opp){
+          const middle=inferTeCoverageUnit({
+            opponent:opp,middleUnits,coverage:defenderCoverage,
+            unavailableNames:unavailablePlayers
+          });
+          if(middle){
+            const rawEdge=(middle.multiplier||1)-1;
+            const scaledEdge=clamp(rawEdge*(signals.matchupExposure||1),-.028,.032);
+            const adjusted={
+              ...middle,
+              rawEdgePct:middle.edgePct,
+              edgePct:round(scaledEdge*100),
+              multiplier:1+scaledEdge,
+              opportunityExposure:signals.matchupExposure||1,
+            };
+            const applyMiddle=Number(adjusted.coverageReliability||0)>=18;
+            signals.teCoverage={...adjusted,applied:applyMiddle};
+            const mult=applyMiddle?adjusted.multiplier:1;
+            projection*=mult;
+            if(applyMiddle && Math.abs(mult-1)>=0.007){
+              reasons.push(`${round((mult-1)*100)}% middle-coverage edge`);
+            }
+          }
+        }
+
+        if(slot==="RB" && opp && rbDefenseSplits[normTeam(opp)]){
+          const usageSplit=rbUsageSplit([...p.slice(-5),...c.slice(-5)]);
+          const rbEdge=combineRbMicroEdge(
+            rbDefenseSplits[normTeam(opp)],usageSplit,signals.matchupExposure||1
+          );
+          if(rbEdge){
+            const confidenceScale=rbEdge.confidence==="LOW"?.58:1;
+            const rawEdge=((rbEdge.multiplier||1)-1)*confidenceScale;
+            const adjusted={
+              ...rbEdge,
+              rawEdgePct:rbEdge.edgePct,
+              edgePct:round(rawEdge*100),
+              multiplier:1+rawEdge,
+              applied:true,
+            };
+            signals.rbMatchup=adjusted;
+            projection*=adjusted.multiplier;
+            if(Math.abs(adjusted.multiplier-1)>=0.006){
+              const style=adjusted.receivingShare>=.34?"receiving-weighted":"ground-weighted";
+              reasons.push(`${round((adjusted.multiplier-1)*100)}% RB ${style} edge`);
+            }
+          }
+        }
+
         if(slot==="QB" && opp && teamPassRush[normTeam(opp)]){
           const passRush=teamPassRush[normTeam(opp)];
           const applyRush=passRush.confidence!=="LOW";
           signals.passRush={...passRush,applied:applyRush};
-          const mult=applyRush?(passRush.multiplier||1):1;
-          projection*=mult;
-          if(applyRush && Math.abs(mult-1)>=0.007){
-            reasons.push(`${round((mult-1)*100)}% pass-rush edge`);
+          const rushMult=applyRush?(passRush.multiplier||1):1;
+          projection*=rushMult;
+          if(applyRush && Math.abs(rushMult-1)>=0.007){
+            reasons.push(`${round((rushMult-1)*100)}% pass-rush edge`);
+          }
+
+          const protection=protectionEdge({
+            offense:info.team,lineUnits,unavailableNames:unavailablePlayers,passRush
+          });
+          if(protection){
+            const applyProtection=
+              protection.missingStarters>0 && protection.confidence!=="LOW";
+            signals.protection={...protection,applied:applyProtection};
+            const protectionMult=applyProtection?(protection.multiplier||1):1;
+            projection*=protectionMult;
+            if(applyProtection && Math.abs(protectionMult-1)>=0.006){
+              reasons.push(
+                `${round((protectionMult-1)*100)}% protection injury drag (${protection.missingStarters} OL out)`
+              );
+            }
           }
         }
 
@@ -1129,7 +1199,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Team and WR-CB matchup effects are scaled by each player's actual target/workload ownership; QBs also get a small pass-rush micro-edge. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Matchup effects are opportunity-scaled: WRs get likely-CB coverage, TEs get middle-coverage-unit context, RBs split ground vs receiving matchup, and QBs combine pass rush with OL availability. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
         weights:model,positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
         reasoningCalls:learnedReasoning?.totalCalls||0,drivers:learnedReasoning?.drivers||{}

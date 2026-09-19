@@ -252,7 +252,9 @@ console.log("Bench stash fallback checks passed");
 
 
 const {
-  buildDepthSecondaries,buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
+  buildDepthSecondaries,buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush,
+  buildSleeperLineUnits,buildSleeperMiddleUnits,inferTeCoverageUnit,
+  buildRbDefenseSplits,rbUsageSplit,combineRbMicroEdge,protectionEdge
 } = await import("../netlify/functions/lib/matchup-v2.mjs");
 
 const depthCsv = [
@@ -436,3 +438,65 @@ assert.equal(forcedMove.actionable,true);
 assert.equal(forcedMove.strength,"FORCED");
 
 console.log("Actionable-vs-lean lineup threshold checks passed");
+
+
+const lineUnits=buildSleeperLineUnits({
+  ot1:{n:"Left Tackle",p:"OL",t:"BUF",dp:"LT",do:1},
+  og1:{n:"Left Guard",p:"OL",t:"BUF",dp:"LG",do:1},
+  c1:{n:"Center",p:"OL",t:"BUF",dp:"C",do:1},
+  rg1:{n:"Right Guard",p:"OL",t:"BUF",dp:"RG",do:1},
+  rt1:{n:"Right Tackle",p:"OL",t:"BUF",dp:"RT",do:1},
+  ot2:{n:"Backup Tackle",p:"OL",t:"BUF",dp:"LT",do:2},
+});
+assert.equal(lineUnits.BUF.filter(x=>x.rank===1).length,5);
+const protection=protectionEdge({
+  offense:"BUF",lineUnits,
+  unavailableNames:new Set(["left tackle"]),
+  passRush:{ratio:1.22}
+});
+assert.equal(protection.missingStarters,1);
+assert.ok(protection.edgePct<0);
+assert.equal(protection.confidence,"MEDIUM");
+
+const middleUnits=buildSleeperMiddleUnits({
+  lb1:{n:"Cover Linebacker",p:"LB",fp:["LB"],t:"NYJ",dp:"MLB",do:1},
+  s1:{n:"Range Safety",p:"DB",fp:["DB"],t:"NYJ",dp:"FS",do:1},
+  s2:{n:"Strong Safety",p:"DB",fp:["DB"],t:"NYJ",dp:"SS",do:1},
+  cb1:{n:"Outside Corner",p:"CB",fp:["DB"],t:"NYJ",dp:"RCB",do:1},
+});
+assert.equal(middleUnits.NYJ.length,3);
+const teUnit=inferTeCoverageUnit({
+  opponent:"NYJ",middleUnits,
+  coverage:{
+    "cover linebacker":{score:-.85,reliability:.75},
+    "range safety":{score:-.4,reliability:.65},
+    "strong safety":{score:.15,reliability:.55},
+  },
+  unavailableNames:new Set()
+});
+assert.ok(teUnit.edgePct>0);
+assert.equal(teUnit.assignment,"middle coverage unit");
+assert.ok(teUnit.defenders.includes("Cover Linebacker"));
+
+const rbCurrent=[
+  {position:"RB",opponent_team:"NE",week:"1",carries:"20",rushing_yards:"110",targets:"7",receptions:"6",receiving_yards:"50"},
+  {position:"RB",opponent_team:"NE",week:"2",carries:"18",rushing_yards:"99",targets:"8",receptions:"6",receiving_yards:"55"},
+  {position:"RB",opponent_team:"NYJ",week:"1",carries:"20",rushing_yards:"62",targets:"3",receptions:"2",receiving_yards:"12"},
+  {position:"RB",opponent_team:"NYJ",week:"2",carries:"18",rushing_yards:"58",targets:"4",receptions:"3",receiving_yards:"18"},
+];
+const rbPrior=[
+  {position:"RB",opponent_team:"NE",week:"17",carries:"22",rushing_yards:"112",targets:"6",receptions:"5",receiving_yards:"40"},
+  {position:"RB",opponent_team:"NYJ",week:"17",carries:"22",rushing_yards:"70",targets:"4",receptions:"3",receiving_yards:"20"},
+];
+const rbSplits=buildRbDefenseSplits(rbCurrent,rbPrior,3);
+assert.ok(rbSplits.NE.groundEdgePct>0);
+assert.ok(rbSplits.NYJ.groundEdgePct<0);
+const receivingBack=rbUsageSplit([
+  {carries:"8",targets:"7"},{carries:"9",targets:"8"},{carries:"7",targets:"8"}
+]);
+assert.ok(receivingBack.receivingShare>.5);
+const rbMicro=combineRbMicroEdge(rbSplits.NE,receivingBack,1.1);
+assert.ok(Number.isFinite(rbMicro.edgePct));
+assert.ok(Math.abs(rbMicro.edgePct)<=2);
+
+console.log("Position-specific TE/RB/protection matchup checks passed");
