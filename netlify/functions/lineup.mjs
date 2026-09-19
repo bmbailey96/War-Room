@@ -5,7 +5,9 @@
 import { MY_USER_ID, getPlayersTrim, pInfo, slotPos, normName, normTeam, store } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 import {
-  buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush
+  buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush,
+  buildSleeperLineUnits,buildSleeperMiddleUnits,inferTeCoverageUnit,
+  buildRbDefenseSplits,rbUsageSplit,combineRbMicroEdge,protectionEdge
 } from "./lib/matchup-v2.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
@@ -660,8 +662,11 @@ export default async req => {
     const cur=byName(currentRows), prior=byName(priorRows);
     const wrRanks=receiverRanks(currentRows,priorRows,week);
     const secondaries=buildSleeperSecondaries(playersDB);
+    const lineUnits=buildSleeperLineUnits(playersDB);
+    const middleUnits=buildSleeperMiddleUnits(playersDB);
     const defenderCoverage=buildDefenderCoverage(defCoverageCsv,priorDefCoverageCsv,week);
     const teamPassRush=buildTeamPassRush(defCoverageCsv,priorDefCoverageCsv,week);
+    const rbDefenseSplits=buildRbDefenseSplits(currentRows,priorRows,week);
 
     // Official weekly injury reports are a second hard-availability source.
     // Sleeper's player metadata can lag designation changes; nflverse mirrors
@@ -683,7 +688,7 @@ export default async req => {
         };
       }
     }
-    const unavailableDefenders=new Set([
+    const unavailablePlayers=new Set([
       ...Object.entries(officialInjuryByName)
         .filter(([,v])=>hardUnavailable("",v?.status||""))
         .map(([k])=>k),
@@ -962,7 +967,7 @@ export default async req => {
           const coverageMatchup=inferWrCoverage({
             opponent:opp,receiverRank,receiverRole,receiverSide,
             secondaries,coverage:defenderCoverage,
-            unavailableNames:unavailableDefenders
+            unavailableNames:unavailablePlayers
           });
           if(coverageMatchup){
             const rawEdge=(coverageMatchup.multiplier||1)-1;
