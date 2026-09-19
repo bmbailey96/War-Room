@@ -254,7 +254,8 @@ console.log("Bench stash fallback checks passed");
 const {
   buildDepthSecondaries,buildSleeperSecondaries,buildDefenderCoverage,inferWrCoverage,receiverRanks,buildTeamPassRush,
   buildSleeperLineUnits,buildSleeperMiddleUnits,inferTeCoverageUnit,
-  buildRbDefenseSplits,rbUsageSplit,combineRbMicroEdge,protectionEdge
+  buildRbDefenseSplits,rbUsageSplit,combineRbMicroEdge,protectionEdge,
+  buildSleeperFrontSeven,frontSevenAttritionEdge,runBlockingEdge
 } = await import("../netlify/functions/lib/matchup-v2.mjs");
 
 const depthCsv = [
@@ -500,3 +501,31 @@ assert.ok(Number.isFinite(rbMicro.edgePct));
 assert.ok(Math.abs(rbMicro.edgePct)<=2);
 
 console.log("Position-specific TE/RB/protection matchup checks passed");
+
+
+const frontUnits=buildSleeperFrontSeven({
+  dl1:{n:"Nose Tackle",p:"DL",fp:["DL"],t:"NYJ",dp:"NT",do:1},
+  dl2:{n:"End One",p:"DL",fp:["DL"],t:"NYJ",dp:"DE",do:1},
+  dl3:{n:"End Two",p:"DL",fp:["DL"],t:"NYJ",dp:"DE",do:1},
+  lb1:{n:"Mike Backer",p:"LB",fp:["LB"],t:"NYJ",dp:"MLB",do:1},
+  lb2:{n:"Will Backer",p:"LB",fp:["LB"],t:"NYJ",dp:"WLB",do:1},
+  lb3:{n:"Sam Backer",p:"LB",fp:["LB"],t:"NYJ",dp:"SLB",do:1},
+});
+assert.equal(frontUnits.NYJ.filter(x=>x.rank===1).length,6);
+const depletedFront=frontSevenAttritionEdge({
+  opponent:"NYJ",frontUnits,
+  unavailableNames:new Set(["nose tackle","mike backer"])
+});
+assert.equal(depletedFront.missingStarters,2);
+assert.ok(depletedFront.edgePct>0);
+assert.equal(depletedFront.confidence,"MEDIUM");
+
+const runBlockDrag=runBlockingEdge({
+  offense:"BUF",lineUnits,
+  unavailableNames:new Set(["left tackle","right guard"])
+});
+assert.equal(runBlockDrag.missingStarters,2);
+assert.ok(runBlockDrag.edgePct<0);
+assert.equal(runBlockDrag.confidence,"MEDIUM");
+
+console.log("Current front-seven and run-blocking personnel checks passed");
