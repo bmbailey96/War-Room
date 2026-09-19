@@ -529,3 +529,64 @@ assert.ok(runBlockDrag.edgePct<0);
 assert.equal(runBlockDrag.confidence,"MEDIUM");
 
 console.log("Current front-seven and run-blocking personnel checks passed");
+
+
+const {
+  microEdge,microReliability,microWeightFromStat,fitMicroWeights
+} = await import("../netlify/functions/learn.mjs");
+
+const structuralWeights={role:.28,matchup:.25,environment:.35,scheme:.22};
+
+const goodCoverageSamples=Array.from({length:12},(_,i)=>{
+  const positive=i<9;
+  return {
+    base:10,
+    actual:positive?12:8,
+    signals:{
+      coverageMatchup:{
+        edgePct:positive?2:-2,
+        applied:true
+      }
+    }
+  };
+});
+const goodCoverage=microReliability(goodCoverageSamples,"coverage",structuralWeights);
+assert.equal(goodCoverage.n,12);
+assert.ok(goodCoverage.hitRate>.9);
+assert.ok(microWeightFromStat(goodCoverage)>1);
+
+const badCoverageSamples=goodCoverageSamples.map(s=>({
+  ...s,
+  signals:{
+    coverageMatchup:{
+      edgePct:-s.signals.coverageMatchup.edgePct,
+      applied:true
+    }
+  }
+}));
+const badCoverage=microReliability(badCoverageSamples,"coverage",structuralWeights);
+assert.ok(badCoverage.hitRate<.1);
+assert.ok(microWeightFromStat(badCoverage)<1);
+
+assert.equal(
+  microWeightFromStat({n:4,hit:4,hitRate:1}),
+  1
+);
+
+const personnelSample={
+  signals:{
+    frontSeven:{edgePct:1.2,applied:true},
+    runBlocking:{edgePct:-.6,applied:true},
+    protection:{edgePct:-.4,applied:true}
+  }
+};
+assert.ok(Math.abs(microEdge(personnelSample,"personnel")-.002)<.0001);
+
+const fittedMicro=fitMicroWeights(goodCoverageSamples,structuralWeights);
+assert.ok(fittedMicro.weights.coverage>1);
+assert.equal(fittedMicro.weights.teCoverage,1);
+assert.equal(fittedMicro.weights.rbSplit,1);
+assert.equal(fittedMicro.weights.passRush,1);
+assert.equal(fittedMicro.weights.personnel,1);
+
+console.log("Micro-edge self-calibration checks passed");
