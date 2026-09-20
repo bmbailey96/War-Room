@@ -5,6 +5,7 @@ import {
   getPlayersTrim,pInfo,slotPos,store,callClaude
 } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
+import { rosterActionsCacheKey,rosterActionsLockKey } from "./lib/roster-cache.mjs";
 import lineup, {
   scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean,easternKickoffMs
 } from "./lineup.mjs";
@@ -403,7 +404,7 @@ export default async req=>{
     const chosen=leagues.find(l=>l.id===requested)||leagues[0];
     if(!chosen)return new Response(JSON.stringify({error:"no league"}),{status:404});
 
-    const s=store(),cacheKey=`roster_actions_v4_${chosen.id}`;
+    const s=store(),cacheKey=rosterActionsCacheKey(chosen.id);
     const cached=await s.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force&&cached&&Date.now()-(cached.at||0)<4*60*60*1000){
       return new Response(JSON.stringify(cached),{headers:{"content-type":"application/json","cache-control":"no-store"}});
@@ -997,7 +998,7 @@ Return ONLY valid JSON:
     };
 
     await s.setJSON(cacheKey,result);
-    await s.delete(`roster_actions_refresh_${chosen.id}`).catch(()=>{});
+    await s.delete(rosterActionsLockKey(chosen.id)).catch(()=>{});
     const histKey=`roster_action_history_${chosen.id}`;
     const hist=await s.get(histKey,{type:"json"}).catch(()=>[])||[];
     const fingerprint=JSON.stringify(result.actions.map(a=>[a.type,a.headline]));
