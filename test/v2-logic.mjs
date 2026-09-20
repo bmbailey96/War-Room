@@ -909,3 +909,45 @@ assert.equal(dynastySpecialist.allowed,true);
 assert.equal(dynastySpecialist.mode,"STREAM_SWAP");
 
 console.log("Versioned roster-cache and dynasty specialist checks passed");
+
+
+const {
+  currentOfficialInjuries,redraftTradeEfficient,dynastyTradeEfficient
+} = await import("../netlify/functions/roster-actions-background.mjs");
+
+const officialInjuryCsv=[
+  "full_name,week,report_status,practice_status,report_primary_injury",
+  "Brock Bowers,2,Doubtful,Limited Participation,Knee",
+  "Healthy Player,2,,Full Participation,"
+].join("\n");
+const injuryMap=currentOfficialInjuries(officialInjuryCsv,2);
+assert.equal(injuryMap["brock bowers"].status,"Doubtful");
+assert.equal(injuryMap["brock bowers"].practice,"Limited Participation");
+
+let tradeFit=redraftTradeEfficient({
+  sendHorizon:100,receiveHorizon:94,weeklyDelta:3,partnerWeeklyDelta:.5
+});
+assert.equal(tradeFit.allowed,true);
+
+tradeFit=redraftTradeEfficient({
+  sendHorizon:120,receiveHorizon:75,weeklyDelta:4,partnerWeeklyDelta:1
+});
+assert.equal(tradeFit.allowed,false);
+
+tradeFit=redraftTradeEfficient({
+  sendHorizon:70,receiveHorizon:100,weeklyDelta:4,partnerWeeklyDelta:-3
+});
+assert.equal(tradeFit.allowed,false);
+
+let dynastyFit=dynastyTradeEfficient({
+  sendValue:84,receiveValue:78,weeklyDelta:4.6,partnerWeeklyDelta:-1.3
+});
+assert.equal(dynastyFit.allowed,true);
+
+dynastyFit=dynastyTradeEfficient({
+  sendValue:111,receiveValue:89,weeklyDelta:4.2,partnerWeeklyDelta:-3
+});
+assert.equal(dynastyFit.allowed,false);
+assert.equal(dynastyFit.reason,"too much dynasty value for the weekly gain");
+
+console.log("Trade horizon, injury, and efficiency checks passed");

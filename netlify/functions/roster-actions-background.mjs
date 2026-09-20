@@ -33,6 +33,36 @@ export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
   const delta=Math.max(0,Number(current||0)-Number(prior||0));
   return {delta:round(delta),perHour:round(delta/Math.max(.1,Number(elapsedHours)))};
 }
+
+export function redraftTradeEfficient({
+  sendHorizon=0,receiveHorizon=0,weeklyDelta=0,partnerWeeklyDelta=0
+}={}){
+  const send=Math.max(0,Number(sendHorizon||0)),receive=Math.max(0,Number(receiveHorizon||0));
+  if(send<=0||receive<=0)return {allowed:false,ratio:null,reason:"missing horizon value"};
+  const ratio=receive/send;
+  if(ratio<.78)return {allowed:false,ratio:round(ratio),reason:"giving up too much six-week value"};
+  if(ratio>1.28)return {allowed:false,ratio:round(ratio),reason:"offer is unlikely to be accepted"};
+  if(Number(partnerWeeklyDelta||0)<-1.5)return {allowed:false,ratio:round(ratio),reason:"damages partner lineup too much"};
+  if(Number(weeklyDelta||0)<=.2)return {allowed:false,ratio:round(ratio),reason:"does not improve my lineup enough"};
+  return {allowed:true,ratio:round(ratio),reason:null};
+}
+
+export function dynastyTradeEfficient({
+  sendValue=0,receiveValue=0,weeklyDelta=0,partnerWeeklyDelta=0
+}={}){
+  const send=Math.max(0,Number(sendValue||0)),receive=Math.max(0,Number(receiveValue||0));
+  if(send<=0||receive<=0)return {allowed:false,ratio:null,overpay:null,efficiency:null,reason:"missing market value"};
+  const ratio=receive/send;
+  const overpay=Math.max(0,send-receive);
+  const efficiency=overpay>0?Number(weeklyDelta||0)/overpay:null;
+  if(ratio<.78)return {allowed:false,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:"dynasty overpay is too large"};
+  if(ratio>1.35)return {allowed:false,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:"offer is unlikely to be accepted"};
+  if(Number(partnerWeeklyDelta||0)<-3)return {allowed:false,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:"damages partner lineup too much"};
+  if(overpay>15 && (efficiency??0)<.30){
+    return {allowed:false,ratio:round(ratio),overpay:round(overpay),efficiency:round(efficiency||0),reason:"too much dynasty value for the weekly gain"};
+  }
+  return {allowed:true,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:null};
+}
 function hardInjured(status){
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/i.test(String(status||""));
 }
@@ -163,8 +193,29 @@ export function blendedRosterForecast(providerAvg,form){
   };
 }
 
+export function currentOfficialInjuries(csvText,week){
+  const out={};
+  for(const r of parseCsv(csvText,[
+    "full_name","week","report_status","practice_status",
+    "report_primary_injury","practice_primary_injury"
+  ])){
+    const wk=n(r.week),key=normName(r.full_name||"");
+    if(!key||wk>Number(week))continue;
+    const prev=out[key];
+    if(!prev||wk>=prev.week){
+      out[key]={
+        week:wk,
+        status:(r.report_status||r.practice_status||"").trim(),
+        practice:(r.practice_status||"").trim(),
+        injury:(r.report_primary_injury||r.practice_primary_injury||"").trim(),
+      };
+    }
+  }
+  return out;
+}
+
 async function projectionMap(season,week,league,db){
-  const weeks=[week,week+1,week+2].filter(w=>w<=18);
+  const weeks=Array.from({length:6},(_,i)=>week+i).filter(w=>w<=18);
   const rows=await Promise.all(weeks.map(w=>
     j(`https://api.sleeper.app/projections/nfl/${season}/${w}?season_type=regular&order_by=ppr`).catch(()=>[])
   ));
@@ -177,24 +228,36 @@ async function projectionMap(season,week,league,db){
       const info=pInfo(db,pid),slot=slotPos(info);
       const pts=scoreSleeperProjection(row.stats,league.scoring_settings||{},slot);
       if(typeof pts!=="number")continue;
-      const rec=out[pid]||(out[pid]={weeks:{},avg:0});
+      const rec=out[pid]||(out[pid]={weeks:{},avg:0,tradeAvg:0,tradeTotal:0});
       rec.weeks[wk]=round(pts);
     }
   });
   for(const rec of Object.values(out)){
-    const vals=Object.values(rec.weeks);
-    rec.avg=vals.length?round(vals.reduce((a,b)=>a+b,0)/vals.length):0;
+    const short=weeks.slice(0,3).map(w=>rec.weeks[w]).filter(v=>v!=null);
+    const horizon=weeks.map(w=>rec.weeks[w]).filter(v=>v!=null);
+    rec.avg=short.length?round(short.reduce((a,b)=>a+b,0)/short.length):0;
+    rec.tradeAvg=horizon.length?round(horizon.reduce((a,b)=>a+b,0)/horizon.length):rec.avg;
+    rec.tradeTotal=round(horizon.reduce((a,b)=>a+b,0));
+    rec.tradeWeeks=horizon.length;
   }
   return out;
 }
-function playerView(pid,db,proj,formMap={},gameLocks={}){
+function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
   const p=pInfo(db,pid);
+  const key=normName(p.name);
   const provider=proj[pid]?.avg??0;
-  const form=blendedRosterForecast(provider,formMap[normName(p.name)]);
+  const tradeProvider=proj[pid]?.tradeAvg??provider;
+  const form=blendedRosterForecast(provider,formMap[key]);
+  const tradeForm=blendedRosterForecast(tradeProvider,formMap[key]);
   const game=gameLocks[normTeam(p.team)]||null;
+  const official=injuryMap[key]||null;
+  const injury=official?.status||p.inj||null;
+  const tradeWeeks=proj[pid]?.tradeWeeks||0;
   return {
-    pid,name:p.name,pos:slotPos(p),eligibleSlots:p.fps||[],team:p.team,age:p.age,injury:p.inj||null,
+    pid,name:p.name,pos:slotPos(p),eligibleSlots:p.fps||[],team:p.team,age:p.age,injury,
+    practiceStatus:official?.practice||null,injuryDetail:official?.injury||null,
     next3:form.forecast,providerNext3:provider,weeks:proj[pid]?.weeks||{},
+    tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
     forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
     baselinePts:form.baselinePts,currentGames:form.currentGames,
     kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
@@ -379,6 +442,8 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
       faabPct:null,drivers:["consolidation",...(mode==="DYNASTY"?["market","pick_value"]:[])],
       weeklyDelta:t.weeklyDelta,partnerWeeklyDelta:t.partnerWeeklyDelta,
       sendValue:t.sendValue??null,receiveValue:t.receiveValue??null,
+      horizonSend:t.horizonSend??null,horizonReceive:t.horizonReceive??null,
+      tradeRatio:t.tradeRatio??null,
       marketDelta:t.marketDelta??null,managerFit:t.managerFit??null,
       partnerCareerTrades:t.partnerCareerTrades??null,
     });
@@ -422,15 +487,17 @@ export default async req=>{
     const usesFaab=faabTotal>0;
     const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const [proj,formMap,lineupData,market,gamesCsv]=await Promise.all([
+    const [proj,formMap,lineupData,market,gamesCsv,injuryCsv]=await Promise.all([
       projectionMap(season,week,league,db),
       recentFormMap(season,week,league),
       lineup(new Request(`${url.origin}/.netlify/functions/lineup?league=${encodeURIComponent(chosen.id)}`))
         .then(r=>r.json()).catch(()=>null),
       mode==="DYNASTY"?getDynastyMarket(s):Promise.resolve({players:{},picks:{},scrapeDate:null}),
-      txt("https://github.com/nflverse/nfldata/raw/master/data/games.csv")
+      txt("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
+      txt(`${NV}/injuries/injuries_${season}.csv`)
     ]);
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
+    const officialInjuries=currentOfficialInjuries(injuryCsv,week);
     const marketValue=name=>market.players?.[normName(name)]?.value??null;
     const rankedTeams=[...snapshot.teams].sort((a,b)=>(b.wins-a.wins)||(b.pointsFor-a.pointsFor));
     const tierOfOriginal=original=>{
@@ -454,7 +521,7 @@ export default async req=>{
       .filter(pid=>pid&&!rostered.has(pid));
 
     let free=candidateIds.map(pid=>{
-      const p=playerView(pid,db,proj,formMap,gameLocks),trend=trendById[pid]||0;
+      const p=playerView(pid,db,proj,formMap,gameLocks,officialInjuries),trend=trendById[pid]||0;
       const priorTrend=Number(priorTrendById[pid]||0);
       const velocity=computeTrendVelocity(trend,priorTrend,trendElapsedHours);
       const trendDelta=velocity.delta;
@@ -473,12 +540,19 @@ export default async req=>{
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,24);
 
     const enrichForecast=p=>{
-      const provider=proj[p.pid]?.avg??0;
-      const form=blendedRosterForecast(provider,formMap[normName(p.name)]);
+      const key=normName(p.name),provider=proj[p.pid]?.avg??0;
+      const tradeProvider=proj[p.pid]?.tradeAvg??provider;
+      const form=blendedRosterForecast(provider,formMap[key]);
+      const tradeForm=blendedRosterForecast(tradeProvider,formMap[key]);
       const game=gameLocks[normTeam(p.team)]||null;
+      const official=officialInjuries[key]||null;
+      const tradeWeeks=proj[p.pid]?.tradeWeeks||0;
       return {
         ...p,eligibleSlots:p.fps||[],
+        injury:official?.status||p.inj||p.injury||null,
+        practiceStatus:official?.practice||null,injuryDetail:official?.injury||null,
         next3:form.forecast,providerNext3:provider,weeks:proj[p.pid]?.weeks||{},
+        tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
         forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
         baselinePts:form.baselinePts,currentGames:form.currentGames,
         kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
@@ -622,8 +696,8 @@ export default async req=>{
         if(weeklyCeiling<=0.2 && mode!=="DYNASTY")continue;
         tradeTargets.push({
           partner:team.name,name:p.name,pos:p.pos,age:p.age,next3:p.next3,
-          market:p.market,weeklyCeiling,forecastSource:p.forecastSource,
-          roleRatio:p.roleRatio,recentPts:p.recentPts,
+          market:p.market,weeklyCeiling,tradeTotal:p.tradeTotal,tradeAvg:p.tradeAvg,
+          forecastSource:p.forecastSource,roleRatio:p.roleRatio,recentPts:p.recentPts,
           partnerHoles:team.holes,partnerSurplus:team.surplus
         });
       }
@@ -665,7 +739,11 @@ export default async req=>{
       .filter(p=>!starterSet.has(p.name)&&!p.onIR&&!hardInjured(p.injury))
       .sort((a,b)=>(mode==="DYNASTY"?(a.market??0)-(b.market??0):(a.next3||0)-(b.next3||0)));
     const sendAssets=[
-      ...myBench.map(p=>({type:"player",name:p.name,value:mode==="DYNASTY"?p.market:(p.next3||0),player:p})),
+      ...myBench.map(p=>({
+        type:"player",name:p.name,
+        value:mode==="DYNASTY"?p.market:(p.tradeTotal||0),
+        player:p
+      })),
       ...(mode==="DYNASTY"?myPicks.map(p=>({type:"pick",name:p.name,value:p.value,pick:p})):[])
     ].filter(x=>x.value!=null);
 
@@ -674,7 +752,7 @@ export default async req=>{
       const targetPlayer=partner?.players.find(p=>normName(p.name)===normName(target.name));
       if(!partner||!targetPlayer)continue;
       const partnerBase=simTotal(partner.players,activeSlots);
-      const targetValue=mode==="DYNASTY"?(target.market??null):(target.next3||0);
+      const targetValue=mode==="DYNASTY"?(target.market??null):(target.tradeTotal||0);
       const combos=[];
       for(const a of sendAssets)combos.push([a]);
       for(let i=0;i<Math.min(sendAssets.length,12);i++){
@@ -685,10 +763,6 @@ export default async req=>{
       for(const combo of combos){
         const sentPlayers=combo.filter(x=>x.type==="player").map(x=>x.player);
         const sendValue=combo.reduce((s,x)=>s+Number(x.value||0),0);
-        if(mode==="DYNASTY" && targetValue!=null){
-          const ratio=targetValue/Math.max(1,sendValue);
-          if(ratio<.72||ratio>1.38)continue;
-        }
         const myAfter=simTotal(rosterAfter(myRoster,{
           removeNames:sentPlayers.map(p=>p.name),addPlayers:[targetPlayer]
         }),activeSlots);
@@ -698,14 +772,17 @@ export default async req=>{
         const weeklyDelta=round(myAfter-baselineRosterTotal);
         const partnerWeeklyDelta=round(partnerAfter-partnerBase);
         if(weeklyDelta<=.2)continue;
-        if(mode==="REDRAFT" && partnerWeeklyDelta<-1.5)continue;
-        if(mode==="DYNASTY" && partnerWeeklyDelta<-3)continue;
 
-        const receiveValue=mode==="DYNASTY"?targetValue:null;
+        const receiveValue=targetValue;
         const marketDelta=mode==="DYNASTY"&&receiveValue!=null?round(receiveValue-sendValue):null;
-        const fairnessPenalty=mode==="DYNASTY"&&receiveValue!=null
-          ? Math.abs(receiveValue-sendValue)*.18
-          : Math.abs(Math.min(0,partnerWeeklyDelta))*1.2;
+        const tradeFit=mode==="DYNASTY"
+          ? dynastyTradeEfficient({sendValue,receiveValue,weeklyDelta,partnerWeeklyDelta})
+          : redraftTradeEfficient({sendHorizon:sendValue,receiveHorizon:receiveValue,weeklyDelta,partnerWeeklyDelta});
+        if(!tradeFit.allowed)continue;
+
+        const fairnessPenalty=mode==="DYNASTY"
+          ? Math.abs(receiveValue-sendValue)*.30
+          : Math.abs(receiveValue-sendValue)*.035+Math.abs(Math.min(0,partnerWeeklyDelta))*1.2;
 
         // Manager realism: prefer packages that resemble what this owner has
         // actually acquired historically. This is a soft ranking factor, not
@@ -737,7 +814,10 @@ export default async req=>{
             send:combo.map(x=>({type:x.type,name:x.name})),
             weeklyDelta,partnerWeeklyDelta,
             sendValue:mode==="DYNASTY"?round(sendValue):null,
-            receiveValue:mode==="DYNASTY"&&receiveValue!=null?round(receiveValue):null,
+            receiveValue:mode==="DYNASTY"?round(receiveValue):null,
+            horizonSend:mode==="REDRAFT"?round(sendValue):null,
+            horizonReceive:mode==="REDRAFT"?round(receiveValue):null,
+            tradeRatio:tradeFit.ratio,
             marketDelta,
             managerFit:round(managerFit),
             partnerCareerTrades:careerTrades,
@@ -749,7 +829,7 @@ export default async req=>{
         best.confidence=best.weeklyDelta>=2&&best.partnerWeeklyDelta>=-1?"HIGH":"MEDIUM";
         best.why=mode==="DYNASTY"
           ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical trade behavior.`
-          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup and ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs.`;
+          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`;
         deterministicTrades.push(best);
       }
     }
@@ -914,6 +994,7 @@ Return ONLY valid JSON:
         const weeklyDelta=round(myAfter-baselineRosterTotal);
         const partnerWeeklyDelta=round(partnerAfter-partnerBase);
         let sendValue=null,receiveValue=null,marketDelta=null;
+        let horizonSend=null,horizonReceive=null,tradeRatio=null,tradeEfficient=true,tradeEfficiencyReason=null;
         if(mode==="DYNASTY"){
           const sv=(a.send||[]).map(dynastyAssetValue);
           const rv=(a.receive||[]).map(dynastyAssetValue);
@@ -921,11 +1002,21 @@ Return ONLY valid JSON:
             sendValue=sv.reduce((x,y)=>x+y,0);
             receiveValue=rv.reduce((x,y)=>x+y,0);
             marketDelta=receiveValue-sendValue;
+            const fit=dynastyTradeEfficient({sendValue,receiveValue,weeklyDelta,partnerWeeklyDelta});
+            tradeEfficient=fit.allowed;tradeRatio=fit.ratio;tradeEfficiencyReason=fit.reason;
           }
+        }else{
+          horizonSend=round(sentPlayers.reduce((s,p)=>s+Number(p.tradeTotal||0),0));
+          horizonReceive=round(gotPlayers.reduce((s,p)=>s+Number(p.tradeTotal||0),0));
+          const fit=redraftTradeEfficient({
+            sendHorizon:horizonSend,receiveHorizon:horizonReceive,weeklyDelta,partnerWeeklyDelta
+          });
+          tradeEfficient=fit.allowed;tradeRatio=fit.ratio;tradeEfficiencyReason=fit.reason;
         }
         const primaryGet=gotPlayers[0]||null;
         return {
           ...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta,
+          horizonSend,horizonReceive,tradeRatio,tradeEfficient,tradeEfficiencyReason,
           forecastSource:primaryGet?.forecastSource||null,
           roleRatio:primaryGet?.roleRatio??null,
           recentPts:primaryGet?.recentPts??null,
@@ -940,13 +1031,9 @@ Return ONLY valid JSON:
         return waiverMoveActionable(a,mode);
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
-        if(mode==="DYNASTY"&&a.sendValue!=null&&a.receiveValue!=null){
-          const ratio=a.sendValue>0?a.receiveValue/a.sendValue:1;
-          if(ratio<.68||ratio>1.48)return false;
-          if((a.partnerWeeklyDelta??0)<-3 && ratio>1.15)return false;
-        }else if(mode!=="DYNASTY"&&(a.partnerWeeklyDelta??0)<-3.5){
-          return false;
-        }
+        if(a.tradeEfficient===false)return false;
+        if(mode==="DYNASTY"&&(a.sendValue==null||a.receiveValue==null))return false;
+        if(mode==="REDRAFT"&&(a.horizonSend==null||a.horizonReceive==null))return false;
       }
       return true;
     }).slice(0,6);
@@ -989,6 +1076,7 @@ Return ONLY valid JSON:
         trendingSnapshot:trendById,
         trendSnapshotAgeMinutes:cached?.at?round((Date.now()-cached.at)/60000):null,
         forecastModel:"provider + recent league-scored production + workload trend",
+        redraftTradeHorizon:"up to six projected weeks, blended with current form and official injury status",
         replacementByPos,
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
       },
