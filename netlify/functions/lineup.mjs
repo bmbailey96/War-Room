@@ -1315,6 +1315,31 @@ export default async req => {
       leagueId:chosen.id,season,week,updatedAt:Date.now(),players:byPid,
     }).catch(()=>{});
 
+    // Lightweight blueprint for Sunday live mode. Keep the last pre-kickoff
+    // projection/range for players whose games have begun so live polling
+    // never rewrites history with in-week results.
+    const liveKey=`live_blueprint_${chosen.id}_${week}`;
+    const priorBlueprint=await stateStore.get(liveKey,{type:"json"}).catch(()=>null);
+    const priorMy=Object.fromEntries((priorBlueprint?.myPlayers||[]).map(p=>[p.pid,p]));
+    const priorOpp=Object.fromEntries((priorBlueprint?.opponentPlayers||[]).map(p=>[p.pid,p]));
+    const livePlayer=(p,prior)=>{
+      const freeze=p.locked&&prior?.[p.pid];
+      const src=freeze?{...p,...prior[p.pid],locked:p.locked,actual:p.actual,kickoffAt:p.kickoffAt}:p;
+      return {
+        pid:src.pid,name:src.name,slot:src.slot,eligibleSlots:src.eligibleSlots||[],
+        team:src.team,projection:src.projection,floor:src.floor,ceiling:src.ceiling,
+        sigma:src.sigma,injury:src.injury,out:src.out,availability:src.availability,
+        kickoffAt:src.kickoffAt,
+      };
+    };
+    const liveBlueprint={
+      at:Date.now(),leagueId:chosen.id,leagueName:chosen.name,season,week,
+      opponent,slots,myRosterId:mine.roster_id,opponentRosterId:oppRoster?.roster_id||null,
+      myPlayers:rosterPlayers.map(p=>livePlayer(p,priorMy)),
+      opponentPlayers:opponentPlayers.map(p=>livePlayer(p,priorOpp)),
+    };
+    await stateStore.setJSON(liveKey,liveBlueprint).catch(()=>{});
+
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
@@ -1350,4 +1375,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall, buildStrategicTiebreaks };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall, buildStrategicTiebreaks, lineupChanges, confidenceGrade };
