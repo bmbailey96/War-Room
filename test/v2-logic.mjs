@@ -753,3 +753,49 @@ assert.equal(typeof gameDayRosterRefresh.default,"function");
 assert.ok(gameDayRosterRefresh.config?.schedule);
 
 console.log("Redraft positional-depth and game-day refresh checks passed");
+
+
+const {
+  buildTeamGameLocks,specialistScheduleEdge
+} = await import("../netlify/functions/roster-actions-background.mjs");
+
+const gamesCsvForLocks=[
+  "season,week,game_type,home_team,away_team,gameday,gametime",
+  "2026,3,REG,SF,LAR,2026-09-20,13:00",
+].join("\n");
+let locks=buildTeamGameLocks(
+  gamesCsvForLocks,2026,3,Date.parse("2026-09-21T00:00:00Z")
+);
+assert.equal(locks.SF.locked,true);
+assert.equal(locks.LAR.locked,true);
+assert.ok(locks.SF.kickoffAt);
+
+locks=buildTeamGameLocks(
+  gamesCsvForLocks,2026,3,Date.parse("2026-09-20T12:00:00Z")
+);
+assert.equal(locks.SF.locked,false);
+
+const streamEdge=specialistScheduleEdge(
+  {weeks:{3:10,4:5,5:7}},
+  {weeks:{3:6,4:8,5:6}},
+  3
+);
+assert.equal(streamEdge.thisWeekEdge,4);
+assert.ok(streamEdge.next3Edge>0);
+
+assert.equal(
+  waiverMoveActionable({
+    specialistMode:"STREAM_SWAP",
+    streamWeekEdge:1.2,streamNext3Edge:-.2,weeklyDelta:.1
+  },"REDRAFT"),
+  true
+);
+assert.equal(
+  waiverMoveActionable({
+    specialistMode:"STREAM_SWAP",
+    streamWeekEdge:.4,streamNext3Edge:.4,weeklyDelta:.4
+  },"REDRAFT"),
+  false
+);
+
+console.log("Game-day free-agent lock and defense-stream timing checks passed");
