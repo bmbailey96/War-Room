@@ -706,3 +706,50 @@ assert.equal(waiverMoveActionable({weeklyDelta:.4,specialistMode:"STREAM_SWAP"},
 assert.equal(waiverMoveActionable({weeklyDelta:.2,stash:true,depthDelta:1.8}, "REDRAFT"),true);
 
 console.log("Redraft specialist roster-construction and no-churn checks passed");
+
+
+const { positionalDepthDecision } = await import("../netlify/functions/roster-actions-background.mjs");
+
+let depthFit=positionalDepthDecision({
+  mode:"REDRAFT",
+  add:{name:"Extra WR",pos:"WR"},
+  drop:{name:"Third RB",pos:"RB"},
+  roster:[
+    {name:"RB1",pos:"RB"},{name:"RB2",pos:"RB"},{name:"Third RB",pos:"RB"},
+    {name:"WR1",pos:"WR"},{name:"WR2",pos:"WR"},{name:"WR3",pos:"WR"},
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  weeklyDelta:1.1
+});
+assert.equal(depthFit.allowed,false);
+
+depthFit=positionalDepthDecision({
+  mode:"REDRAFT",
+  add:{name:"Massive WR Upgrade",pos:"WR"},
+  drop:{name:"Third RB",pos:"RB"},
+  roster:[
+    {name:"RB1",pos:"RB"},{name:"RB2",pos:"RB"},{name:"Third RB",pos:"RB"},
+    {name:"WR1",pos:"WR"},{name:"WR2",pos:"WR"},{name:"WR3",pos:"WR"},
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  weeklyDelta:3.2
+});
+assert.equal(depthFit.allowed,true);
+
+depthFit=positionalDepthDecision({
+  mode:"REDRAFT",
+  add:{name:"RB Upgrade",pos:"RB"},
+  drop:{name:"Third RB",pos:"RB"},
+  roster:[
+    {name:"RB1",pos:"RB"},{name:"RB2",pos:"RB"},{name:"Third RB",pos:"RB"},
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  weeklyDelta:.8
+});
+assert.equal(depthFit.allowed,true);
+
+const gameDayRosterRefresh = await import("../netlify/functions/roster-gameday-refresh.mjs");
+assert.equal(typeof gameDayRosterRefresh.default,"function");
+assert.ok(gameDayRosterRefresh.config?.schedule);
+
+console.log("Redraft positional-depth and game-day refresh checks passed");
