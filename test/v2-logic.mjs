@@ -860,3 +860,52 @@ assert.equal(crispFallback.actions.some(x=>x.type==="TRADE_FOR"),true);
 assert.equal(crispFallback.actions[0].claimRole,"PRIMARY");
 
 console.log("Ranked waiver-plan checks passed");
+
+
+const {
+  ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey
+} = await import("../netlify/functions/lib/roster-cache.mjs");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v5");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v5_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v5_123");
+
+let dynastySpecialist=specialistRosterDecision({
+  mode:"DYNASTY",
+  add:{pid:"K2",name:"Second Kicker",pos:"K",next3:9,weeks:{2:9,3:9,4:9}},
+  drop:{pid:"T1",name:"Young TE",pos:"TE",next3:6},
+  roster:[
+    {pid:"K1",name:"Current Kicker",pos:"K",next3:8,weeks:{2:8,3:8,4:8}},
+    {pid:"T1",name:"Young TE",pos:"TE",next3:6}
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  week:2,marginalDrop:2
+});
+assert.equal(dynastySpecialist.allowed,false);
+assert.equal(dynastySpecialist.mode,"BLOCK_DUPLICATE_K");
+
+dynastySpecialist=specialistRosterDecision({
+  mode:"DYNASTY",
+  add:{pid:"D2",name:"Second DEF",pos:"DEF",next3:8,weeks:{2:8,3:8,4:8}},
+  drop:{pid:"T1",name:"Young TE",pos:"TE",next3:6},
+  roster:[
+    {pid:"D1",name:"Current DEF",pos:"DEF",next3:6,weeks:{2:6,3:6,4:6}},
+    {pid:"T1",name:"Young TE",pos:"TE",next3:6}
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  week:2,marginalDrop:2
+});
+assert.equal(dynastySpecialist.allowed,false);
+assert.equal(dynastySpecialist.mode,"BLOCK_DUPLICATE_DEF");
+
+dynastySpecialist=specialistRosterDecision({
+  mode:"DYNASTY",
+  add:{pid:"K2",name:"Upgrade Kicker",pos:"K",next3:9,weeks:{2:9,3:9,4:9}},
+  drop:{pid:"K1",name:"Current Kicker",pos:"K",next3:8,weeks:{2:8,3:8,4:8}},
+  roster:[{pid:"K1",name:"Current Kicker",pos:"K",next3:8,weeks:{2:8,3:8,4:8}}],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  week:2,marginalDrop:0
+});
+assert.equal(dynastySpecialist.allowed,true);
+assert.equal(dynastySpecialist.mode,"STREAM_SWAP");
+
+console.log("Versioned roster-cache and dynasty specialist checks passed");
