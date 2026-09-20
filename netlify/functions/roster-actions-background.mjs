@@ -33,6 +33,36 @@ export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
   const delta=Math.max(0,Number(current||0)-Number(prior||0));
   return {delta:round(delta),perHour:round(delta/Math.max(.1,Number(elapsedHours)))};
 }
+
+export function redraftTradeEfficient({
+  sendHorizon=0,receiveHorizon=0,weeklyDelta=0,partnerWeeklyDelta=0
+}={}){
+  const send=Math.max(0,Number(sendHorizon||0)),receive=Math.max(0,Number(receiveHorizon||0));
+  if(send<=0||receive<=0)return {allowed:false,ratio:null,reason:"missing horizon value"};
+  const ratio=receive/send;
+  if(ratio<.78)return {allowed:false,ratio:round(ratio),reason:"giving up too much six-week value"};
+  if(ratio>1.28)return {allowed:false,ratio:round(ratio),reason:"offer is unlikely to be accepted"};
+  if(Number(partnerWeeklyDelta||0)<-1.5)return {allowed:false,ratio:round(ratio),reason:"damages partner lineup too much"};
+  if(Number(weeklyDelta||0)<=.2)return {allowed:false,ratio:round(ratio),reason:"does not improve my lineup enough"};
+  return {allowed:true,ratio:round(ratio),reason:null};
+}
+
+export function dynastyTradeEfficient({
+  sendValue=0,receiveValue=0,weeklyDelta=0,partnerWeeklyDelta=0
+}={}){
+  const send=Math.max(0,Number(sendValue||0)),receive=Math.max(0,Number(receiveValue||0));
+  if(send<=0||receive<=0)return {allowed:false,ratio:null,overpay:null,efficiency:null,reason:"missing market value"};
+  const ratio=receive/send;
+  const overpay=Math.max(0,send-receive);
+  const efficiency=overpay>0?Number(weeklyDelta||0)/overpay:null;
+  if(ratio<.78)return {allowed:false,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:"dynasty overpay is too large"};
+  if(ratio>1.35)return {allowed:false,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:"offer is unlikely to be accepted"};
+  if(Number(partnerWeeklyDelta||0)<-3)return {allowed:false,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:"damages partner lineup too much"};
+  if(overpay>15 && (efficiency??0)<.30){
+    return {allowed:false,ratio:round(ratio),overpay:round(overpay),efficiency:round(efficiency||0),reason:"too much dynasty value for the weekly gain"};
+  }
+  return {allowed:true,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:null};
+}
 function hardInjured(status){
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/i.test(String(status||""));
 }
@@ -664,8 +694,8 @@ export default async req=>{
         if(weeklyCeiling<=0.2 && mode!=="DYNASTY")continue;
         tradeTargets.push({
           partner:team.name,name:p.name,pos:p.pos,age:p.age,next3:p.next3,
-          market:p.market,weeklyCeiling,forecastSource:p.forecastSource,
-          roleRatio:p.roleRatio,recentPts:p.recentPts,
+          market:p.market,weeklyCeiling,tradeTotal:p.tradeTotal,tradeAvg:p.tradeAvg,
+          forecastSource:p.forecastSource,roleRatio:p.roleRatio,recentPts:p.recentPts,
           partnerHoles:team.holes,partnerSurplus:team.surplus
         });
       }
@@ -707,7 +737,11 @@ export default async req=>{
       .filter(p=>!starterSet.has(p.name)&&!p.onIR&&!hardInjured(p.injury))
       .sort((a,b)=>(mode==="DYNASTY"?(a.market??0)-(b.market??0):(a.next3||0)-(b.next3||0)));
     const sendAssets=[
-      ...myBench.map(p=>({type:"player",name:p.name,value:mode==="DYNASTY"?p.market:(p.next3||0),player:p})),
+      ...myBench.map(p=>({
+        type:"player",name:p.name,
+        value:mode==="DYNASTY"?p.market:(p.tradeTotal||0),
+        player:p
+      })),
       ...(mode==="DYNASTY"?myPicks.map(p=>({type:"pick",name:p.name,value:p.value,pick:p})):[])
     ].filter(x=>x.value!=null);
 
@@ -716,7 +750,7 @@ export default async req=>{
       const targetPlayer=partner?.players.find(p=>normName(p.name)===normName(target.name));
       if(!partner||!targetPlayer)continue;
       const partnerBase=simTotal(partner.players,activeSlots);
-      const targetValue=mode==="DYNASTY"?(target.market??null):(target.next3||0);
+      const targetValue=mode==="DYNASTY"?(target.market??null):(target.tradeTotal||0);
       const combos=[];
       for(const a of sendAssets)combos.push([a]);
       for(let i=0;i<Math.min(sendAssets.length,12);i++){
@@ -727,10 +761,6 @@ export default async req=>{
       for(const combo of combos){
         const sentPlayers=combo.filter(x=>x.type==="player").map(x=>x.player);
         const sendValue=combo.reduce((s,x)=>s+Number(x.value||0),0);
-        if(mode==="DYNASTY" && targetValue!=null){
-          const ratio=targetValue/Math.max(1,sendValue);
-          if(ratio<.72||ratio>1.38)continue;
-        }
         const myAfter=simTotal(rosterAfter(myRoster,{
           removeNames:sentPlayers.map(p=>p.name),addPlayers:[targetPlayer]
         }),activeSlots);
@@ -740,14 +770,17 @@ export default async req=>{
         const weeklyDelta=round(myAfter-baselineRosterTotal);
         const partnerWeeklyDelta=round(partnerAfter-partnerBase);
         if(weeklyDelta<=.2)continue;
-        if(mode==="REDRAFT" && partnerWeeklyDelta<-1.5)continue;
-        if(mode==="DYNASTY" && partnerWeeklyDelta<-3)continue;
 
-        const receiveValue=mode==="DYNASTY"?targetValue:null;
+        const receiveValue=targetValue;
         const marketDelta=mode==="DYNASTY"&&receiveValue!=null?round(receiveValue-sendValue):null;
-        const fairnessPenalty=mode==="DYNASTY"&&receiveValue!=null
-          ? Math.abs(receiveValue-sendValue)*.18
-          : Math.abs(Math.min(0,partnerWeeklyDelta))*1.2;
+        const tradeFit=mode==="DYNASTY"
+          ? dynastyTradeEfficient({sendValue,receiveValue,weeklyDelta,partnerWeeklyDelta})
+          : redraftTradeEfficient({sendHorizon:sendValue,receiveHorizon:receiveValue,weeklyDelta,partnerWeeklyDelta});
+        if(!tradeFit.allowed)continue;
+
+        const fairnessPenalty=mode==="DYNASTY"
+          ? Math.abs(receiveValue-sendValue)*.30
+          : Math.abs(receiveValue-sendValue)*.035+Math.abs(Math.min(0,partnerWeeklyDelta))*1.2;
 
         // Manager realism: prefer packages that resemble what this owner has
         // actually acquired historically. This is a soft ranking factor, not
@@ -779,7 +812,10 @@ export default async req=>{
             send:combo.map(x=>({type:x.type,name:x.name})),
             weeklyDelta,partnerWeeklyDelta,
             sendValue:mode==="DYNASTY"?round(sendValue):null,
-            receiveValue:mode==="DYNASTY"&&receiveValue!=null?round(receiveValue):null,
+            receiveValue:mode==="DYNASTY"?round(receiveValue):null,
+            horizonSend:mode==="REDRAFT"?round(sendValue):null,
+            horizonReceive:mode==="REDRAFT"?round(receiveValue):null,
+            tradeRatio:tradeFit.ratio,
             marketDelta,
             managerFit:round(managerFit),
             partnerCareerTrades:careerTrades,
@@ -791,7 +827,7 @@ export default async req=>{
         best.confidence=best.weeklyDelta>=2&&best.partnerWeeklyDelta>=-1?"HIGH":"MEDIUM";
         best.why=mode==="DYNASTY"
           ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical trade behavior.`
-          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup and ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs.`;
+          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`;
         deterministicTrades.push(best);
       }
     }
