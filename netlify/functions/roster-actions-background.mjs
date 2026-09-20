@@ -163,8 +163,29 @@ export function blendedRosterForecast(providerAvg,form){
   };
 }
 
+export function currentOfficialInjuries(csvText,week){
+  const out={};
+  for(const r of parseCsv(csvText,[
+    "full_name","week","report_status","practice_status",
+    "report_primary_injury","practice_primary_injury"
+  ])){
+    const wk=n(r.week),key=normName(r.full_name||"");
+    if(!key||wk>Number(week))continue;
+    const prev=out[key];
+    if(!prev||wk>=prev.week){
+      out[key]={
+        week:wk,
+        status:(r.report_status||r.practice_status||"").trim(),
+        practice:(r.practice_status||"").trim(),
+        injury:(r.report_primary_injury||r.practice_primary_injury||"").trim(),
+      };
+    }
+  }
+  return out;
+}
+
 async function projectionMap(season,week,league,db){
-  const weeks=[week,week+1,week+2].filter(w=>w<=18);
+  const weeks=Array.from({length:6},(_,i)=>week+i).filter(w=>w<=18);
   const rows=await Promise.all(weeks.map(w=>
     j(`https://api.sleeper.app/projections/nfl/${season}/${w}?season_type=regular&order_by=ppr`).catch(()=>[])
   ));
@@ -177,24 +198,36 @@ async function projectionMap(season,week,league,db){
       const info=pInfo(db,pid),slot=slotPos(info);
       const pts=scoreSleeperProjection(row.stats,league.scoring_settings||{},slot);
       if(typeof pts!=="number")continue;
-      const rec=out[pid]||(out[pid]={weeks:{},avg:0});
+      const rec=out[pid]||(out[pid]={weeks:{},avg:0,tradeAvg:0,tradeTotal:0});
       rec.weeks[wk]=round(pts);
     }
   });
   for(const rec of Object.values(out)){
-    const vals=Object.values(rec.weeks);
-    rec.avg=vals.length?round(vals.reduce((a,b)=>a+b,0)/vals.length):0;
+    const short=weeks.slice(0,3).map(w=>rec.weeks[w]).filter(v=>v!=null);
+    const horizon=weeks.map(w=>rec.weeks[w]).filter(v=>v!=null);
+    rec.avg=short.length?round(short.reduce((a,b)=>a+b,0)/short.length):0;
+    rec.tradeAvg=horizon.length?round(horizon.reduce((a,b)=>a+b,0)/horizon.length):rec.avg;
+    rec.tradeTotal=round(horizon.reduce((a,b)=>a+b,0));
+    rec.tradeWeeks=horizon.length;
   }
   return out;
 }
-function playerView(pid,db,proj,formMap={},gameLocks={}){
+function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
   const p=pInfo(db,pid);
+  const key=normName(p.name);
   const provider=proj[pid]?.avg??0;
-  const form=blendedRosterForecast(provider,formMap[normName(p.name)]);
+  const tradeProvider=proj[pid]?.tradeAvg??provider;
+  const form=blendedRosterForecast(provider,formMap[key]);
+  const tradeForm=blendedRosterForecast(tradeProvider,formMap[key]);
   const game=gameLocks[normTeam(p.team)]||null;
+  const official=injuryMap[key]||null;
+  const injury=official?.status||p.inj||null;
+  const tradeWeeks=proj[pid]?.tradeWeeks||0;
   return {
-    pid,name:p.name,pos:slotPos(p),eligibleSlots:p.fps||[],team:p.team,age:p.age,injury:p.inj||null,
+    pid,name:p.name,pos:slotPos(p),eligibleSlots:p.fps||[],team:p.team,age:p.age,injury,
+    practiceStatus:official?.practice||null,injuryDetail:official?.injury||null,
     next3:form.forecast,providerNext3:provider,weeks:proj[pid]?.weeks||{},
+    tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
     forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
     baselinePts:form.baselinePts,currentGames:form.currentGames,
     kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
@@ -422,15 +455,17 @@ export default async req=>{
     const usesFaab=faabTotal>0;
     const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const [proj,formMap,lineupData,market,gamesCsv]=await Promise.all([
+    const [proj,formMap,lineupData,market,gamesCsv,injuryCsv]=await Promise.all([
       projectionMap(season,week,league,db),
       recentFormMap(season,week,league),
       lineup(new Request(`${url.origin}/.netlify/functions/lineup?league=${encodeURIComponent(chosen.id)}`))
         .then(r=>r.json()).catch(()=>null),
       mode==="DYNASTY"?getDynastyMarket(s):Promise.resolve({players:{},picks:{},scrapeDate:null}),
-      txt("https://github.com/nflverse/nfldata/raw/master/data/games.csv")
+      txt("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
+      txt(`${NV}/injuries/injuries_${season}.csv`)
     ]);
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
+    const officialInjuries=currentOfficialInjuries(injuryCsv,week);
     const marketValue=name=>market.players?.[normName(name)]?.value??null;
     const rankedTeams=[...snapshot.teams].sort((a,b)=>(b.wins-a.wins)||(b.pointsFor-a.pointsFor));
     const tierOfOriginal=original=>{
@@ -454,7 +489,7 @@ export default async req=>{
       .filter(pid=>pid&&!rostered.has(pid));
 
     let free=candidateIds.map(pid=>{
-      const p=playerView(pid,db,proj,formMap,gameLocks),trend=trendById[pid]||0;
+      const p=playerView(pid,db,proj,formMap,gameLocks,officialInjuries),trend=trendById[pid]||0;
       const priorTrend=Number(priorTrendById[pid]||0);
       const velocity=computeTrendVelocity(trend,priorTrend,trendElapsedHours);
       const trendDelta=velocity.delta;
@@ -473,12 +508,19 @@ export default async req=>{
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,24);
 
     const enrichForecast=p=>{
-      const provider=proj[p.pid]?.avg??0;
-      const form=blendedRosterForecast(provider,formMap[normName(p.name)]);
+      const key=normName(p.name),provider=proj[p.pid]?.avg??0;
+      const tradeProvider=proj[p.pid]?.tradeAvg??provider;
+      const form=blendedRosterForecast(provider,formMap[key]);
+      const tradeForm=blendedRosterForecast(tradeProvider,formMap[key]);
       const game=gameLocks[normTeam(p.team)]||null;
+      const official=officialInjuries[key]||null;
+      const tradeWeeks=proj[p.pid]?.tradeWeeks||0;
       return {
         ...p,eligibleSlots:p.fps||[],
+        injury:official?.status||p.inj||p.injury||null,
+        practiceStatus:official?.practice||null,injuryDetail:official?.injury||null,
         next3:form.forecast,providerNext3:provider,weeks:proj[p.pid]?.weeks||{},
+        tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
         forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
         baselinePts:form.baselinePts,currentGames:form.currentGames,
         kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
