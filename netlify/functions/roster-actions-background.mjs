@@ -323,7 +323,8 @@ export function buildWaiverPlan(pairs=[],limit=3){
 
 export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
   const actions=[];
-  for(const [i,w] of waivers.slice(0,3).entries()){
+  const waiverLimit=trades.length?2:3;
+  for(const [i,w] of waivers.slice(0,waiverLimit).entries()){
     const impact=Math.max(
       Number(w.weeklyDelta||0),
       Number(w.depthDelta||0)*.55,
