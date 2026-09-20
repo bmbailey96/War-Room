@@ -14,6 +14,7 @@ jobs:
         run: |
           set -euo pipefail
           BASE="https://fantasywarroom.netlify.app"
+          sleep 30
 
           echo "=== ROOT ==="
           curl -fsS "$BASE/" | grep -o "WAR ROOM" | head -1
