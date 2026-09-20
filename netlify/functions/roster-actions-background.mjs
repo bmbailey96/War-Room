@@ -175,6 +175,30 @@ function assetName(x){return x?.name||String(x||"");}
 
 const SPECIALIST_POSITIONS=new Set(["DEF","K"]);
 
+export function positionalDepthDecision({
+  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],weeklyDelta=0
+}={}){
+  if(mode!=="REDRAFT" || !add || !drop || add.pos===drop.pos){
+    return {allowed:true,reason:null};
+  }
+  if(!["RB","WR"].includes(drop.pos)){
+    return {allowed:true,reason:null};
+  }
+
+  const dedicatedStarters=activeSlots.filter(s=>s===drop.pos).length;
+  const minimum=Math.max(1,dedicatedStarters+1);
+  const current=roster.filter(p=>p.pos===drop.pos&&!p.onIR).length;
+  const after=current-1;
+
+  if(after<minimum && Number(weeklyDelta||0)<2.5){
+    return {
+      allowed:false,
+      reason:`would leave only ${after} ${drop.pos}s; protect at least ${minimum} unless the lineup gain is substantial`
+    };
+  }
+  return {allowed:true,reason:null};
+}
+
 export function waiverMoveActionable(x,mode="REDRAFT"){
   if(!x)return false;
   if(mode==="DYNASTY")return (x.weeklyDelta??0)>=.5 || (x.marketDelta??0)>=6;
@@ -461,6 +485,10 @@ export default async req=>{
           mode,add,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
         if(!specialist.allowed)continue;
+        const depthFit=positionalDepthDecision({
+          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta
+        });
+        if(!depthFit.allowed)continue;
 
         const roleSurge=Math.max(0,Number(add.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add.trending||0));
@@ -473,7 +501,8 @@ export default async req=>{
           : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus;
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
-          specialistMode:specialist.mode,rosterFitReason:specialist.reason,
+          specialistMode:specialist.mode,
+          rosterFitReason:specialist.reason||depthFit.reason||null,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           score:round(score),addNext3:add.next3,dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
@@ -743,6 +772,9 @@ Return ONLY valid JSON:
         const specialist=specialistRosterDecision({
           mode,add,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
+        const depthFit=positionalDepthDecision({
+          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta
+        });
         const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add?.trending||0));
         const breakoutScore=round(roleSurge*10+trendSignal);
@@ -750,9 +782,9 @@ Return ONLY valid JSON:
           weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
         return {
           ...a,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
-          rosterFitBlocked:!specialist.allowed,
+          rosterFitBlocked:!specialist.allowed||!depthFit.allowed,
           specialistMode:specialist.mode||null,
-          rosterFitReason:specialist.reason||null,
+          rosterFitReason:specialist.reason||depthFit.reason||null,
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
@@ -829,6 +861,7 @@ Return ONLY valid JSON:
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
         rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
         noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
+        depthProtection:"redraft protects one RB and WR beyond dedicated starting slots unless a cross-position move adds at least 2.5 pts/week",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         forecastModel:"provider + recent league-scored production + workload trend",
