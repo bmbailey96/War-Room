@@ -17,6 +17,7 @@ export default async req=>{
       s.get(lockKey,{type:"json"}).catch(()=>null),
     ]);
     const force=url.searchParams.get("refresh")==="1";
+    const coreOnly=url.searchParams.get("core")==="1";
     const stale=!cached||Date.now()-(cached.at||0)>4*60*60*1000;
     const locked=lock&&Date.now()-(lock.at||0)<10*60*1000;
     const shouldTrigger=(force||stale)&&!locked;
@@ -25,7 +26,7 @@ export default async req=>{
       await s.setJSON(lockKey,{at:Date.now()}).catch(()=>{});
       const base=url.origin;
       const r=await fetch(
-        `${base}/.netlify/functions/roster-actions-background?league=${encodeURIComponent(chosen.id)}&refresh=1`
+        `${base}/.netlify/functions/roster-actions-background?league=${encodeURIComponent(chosen.id)}&refresh=1${coreOnly?"&core=1":""}`
       ).catch(()=>null);
       if(!r||!r.ok){
         await s.delete(lockKey).catch(()=>{});
