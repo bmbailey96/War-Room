@@ -1,5 +1,6 @@
 import { store } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
+import { rosterActionsCacheKey,rosterActionsLockKey } from "./lib/roster-cache.mjs";
 
 export default async req=>{
   try{
@@ -10,8 +11,8 @@ export default async req=>{
     if(!chosen)return new Response(JSON.stringify({error:"no league"}),{status:404});
 
     const s=store();
-    const cacheKey=`roster_actions_${chosen.id}`;
-    const lockKey=`roster_actions_refresh_${chosen.id}`;
+    const cacheKey=rosterActionsCacheKey(chosen.id);
+    const lockKey=rosterActionsLockKey(chosen.id);
     const [cached,lock]=await Promise.all([
       s.get(cacheKey,{type:"json"}).catch(()=>null),
       s.get(lockKey,{type:"json"}).catch(()=>null),
