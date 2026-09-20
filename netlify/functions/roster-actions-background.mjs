@@ -24,6 +24,14 @@ async function txt(url){
 }
 const n=v=>v==null||v===""||Number.isNaN(+v)?0:+v;
 const round=x=>Math.round(x*10)/10;
+
+export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
+  if(elapsedHours==null || !Number.isFinite(Number(elapsedHours)) || Number(elapsedHours)<=0){
+    return {delta:0,perHour:0};
+  }
+  const delta=Math.max(0,Number(current||0)-Number(prior||0));
+  return {delta:round(delta),perHour:round(delta/Math.max(.1,Number(elapsedHours)))};
+}
 function hardInjured(status){
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/i.test(String(status||""));
 }
@@ -428,8 +436,9 @@ export default async req=>{
     let free=candidateIds.map(pid=>{
       const p=playerView(pid,db,proj,formMap,gameLocks),trend=trendById[pid]||0;
       const priorTrend=Number(priorTrendById[pid]||0);
-      const trendDelta=trendElapsedHours==null?0:Math.max(0,trend-priorTrend);
-      const trendVelocity=trendElapsedHours==null?0:trendDelta/trendElapsedHours;
+      const velocity=computeTrendVelocity(trend,priorTrend,trendElapsedHours);
+      const trendDelta=velocity.delta;
+      const trendVelocity=velocity.perHour;
       const mv=mode==="DYNASTY"?marketValue(p.name):null;
       const ageBonus=mode==="DYNASTY"&&p.age?Math.max(-5,Math.min(6,(27-p.age)*1.1)):0;
       const velocityBonus=Math.log10(1+trendVelocity)*1.5;
@@ -846,11 +855,14 @@ Return ONLY valid JSON:
           : {thisWeekEdge:null,next3Edge:null};
         const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add?.trending||0));
-        const breakoutScore=round(roleSurge*10+trendSignal);
+        const velocitySignal=Math.log10(1+Number(add?.trendVelocity||0));
+        const breakoutScore=round(roleSurge*10+trendSignal+velocitySignal*1.5);
         const stash=!SPECIALIST_POSITIONS.has(add?.pos) &&
-          weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
+          weeklyDelta<=.2 && depthDelta>=1.5 &&
+          (roleSurge>=.08 || trendSignal>=2 || velocitySignal>=1.45);
         return {
           ...a,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
           rosterFitBlocked:!specialist.allowed||!depthFit.allowed,
           specialistMode:specialist.mode||null,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
