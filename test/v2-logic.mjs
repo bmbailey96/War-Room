@@ -649,3 +649,60 @@ assert.ok(
 );
 
 console.log("Risk-aware floor/ceiling tiebreak checks passed");
+
+
+const {
+  specialistRosterDecision,waiverMoveActionable
+} = await import("../netlify/functions/roster-actions-background.mjs");
+
+const rosterWithDef=[
+  {pid:"D1",name:"Current DEF",pos:"DEF",next3:6,weeks:{3:6,4:6,5:6}},
+  {pid:"R1",name:"Useful RB",pos:"RB",next3:9,weeks:{3:9,4:9,5:9}},
+];
+const addDef={pid:"D2",name:"49ers DEF",pos:"DEF",next3:8,weeks:{3:8,4:8,5:8}};
+const usefulRb=rosterWithDef[1];
+const currentDef=rosterWithDef[0];
+
+let fit=specialistRosterDecision({
+  mode:"REDRAFT",add:addDef,drop:usefulRb,roster:rosterWithDef,
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],week:3,marginalDrop:3
+});
+assert.equal(fit.allowed,false);
+assert.equal(fit.mode,"BLOCK_DUPLICATE_DEF");
+
+fit=specialistRosterDecision({
+  mode:"REDRAFT",add:addDef,drop:currentDef,roster:rosterWithDef,
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],week:3,marginalDrop:0
+});
+assert.equal(fit.allowed,true);
+assert.equal(fit.mode,"STREAM_SWAP");
+
+fit=specialistRosterDecision({
+  mode:"REDRAFT",
+  add:{pid:"K2",name:"New Kicker",pos:"K",next3:9,weeks:{3:9,4:9,5:9}},
+  drop:usefulRb,
+  roster:[...rosterWithDef,{pid:"K1",name:"Current Kicker",pos:"K",next3:8,weeks:{3:8,4:8,5:8}}],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],week:3,marginalDrop:0
+});
+assert.equal(fit.allowed,false);
+assert.equal(fit.mode,"BLOCK_DUPLICATE_K");
+
+fit=specialistRosterDecision({
+  mode:"REDRAFT",
+  add:{pid:"D2",name:"Bye Cover DEF",pos:"DEF",next3:8,weeks:{4:8,5:8}},
+  drop:{pid:"W5",name:"Replacement WR",pos:"WR",next3:4,weeks:{3:4,4:4,5:4}},
+  roster:[
+    {pid:"D1",name:"Current DEF",pos:"DEF",next3:6,weeks:{3:6,5:6}},
+    {pid:"W5",name:"Replacement WR",pos:"WR",next3:4,weeks:{3:4,4:4,5:4}}
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],week:3,marginalDrop:.2
+});
+assert.equal(fit.allowed,true);
+assert.equal(fit.mode,"BYE_HOLD");
+
+assert.equal(waiverMoveActionable({weeklyDelta:.2}, "REDRAFT"),false);
+assert.equal(waiverMoveActionable({weeklyDelta:.8}, "REDRAFT"),true);
+assert.equal(waiverMoveActionable({weeklyDelta:.4,specialistMode:"STREAM_SWAP"}, "REDRAFT"),true);
+assert.equal(waiverMoveActionable({weeklyDelta:.2,stash:true,depthDelta:1.8}, "REDRAFT"),true);
+
+console.log("Redraft specialist roster-construction and no-churn checks passed");
