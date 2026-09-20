@@ -702,7 +702,9 @@ assert.equal(fit.mode,"BYE_HOLD");
 
 assert.equal(waiverMoveActionable({weeklyDelta:.2}, "REDRAFT"),false);
 assert.equal(waiverMoveActionable({weeklyDelta:.8}, "REDRAFT"),true);
-assert.equal(waiverMoveActionable({weeklyDelta:.4,specialistMode:"STREAM_SWAP"}, "REDRAFT"),true);
+assert.equal(waiverMoveActionable({
+  weeklyDelta:.4,specialistMode:"STREAM_SWAP",streamWeekEdge:1.2,streamNext3Edge:.4
+}, "REDRAFT"),true);
 assert.equal(waiverMoveActionable({weeklyDelta:.2,stash:true,depthDelta:1.8}, "REDRAFT"),true);
 
 console.log("Redraft specialist roster-construction and no-churn checks passed");
