@@ -5,6 +5,7 @@ import {
   getPlayersTrim,pInfo,slotPos,store,callClaude
 } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
+import { rosterActionsCacheKey,rosterActionsLockKey } from "./lib/roster-cache.mjs";
 import lineup, {
   scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean,easternKickoffMs
 } from "./lineup.mjs";
@@ -260,7 +261,7 @@ export function waiverMoveActionable(x,mode="REDRAFT"){
 export function specialistRosterDecision({
   mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],week=1,marginalDrop=0
 }={}){
-  if(mode!=="REDRAFT" || !add || !SPECIALIST_POSITIONS.has(add.pos)){
+  if(!add || !SPECIALIST_POSITIONS.has(add.pos)){
     return {allowed:true,mode:null,reason:null};
   }
 
@@ -277,8 +278,9 @@ export function specialistRosterDecision({
   }
 
   // Carrying a second defense can occasionally be rational for an imminent
-  // bye/setup week, but only if the sacrificed skill player is truly
-  // replacement-level. Carrying two kickers is never worth a skill bench spot.
+  // bye/setup week in either format, but only if the sacrificed player is
+  // truly replacement-level. Carrying two kickers is never worth a bench spot,
+  // including dynasty: swap the kicker instead.
   if(add.pos==="K"){
     return {allowed:false,mode:"BLOCK_DUPLICATE_K",reason:"already roster a kicker; swap kickers instead"};
   }
@@ -301,7 +303,7 @@ export function specialistRosterDecision({
 
   return {
     allowed:false,mode:"BLOCK_DUPLICATE_DEF",
-    reason:"already roster a defense; do not burn useful skill depth for a second DST"
+    reason:`already roster a defense; do not burn useful ${mode==="DYNASTY"?"dynasty value":"skill depth"} for a second DST`
   };
 }
 
@@ -403,7 +405,7 @@ export default async req=>{
     const chosen=leagues.find(l=>l.id===requested)||leagues[0];
     if(!chosen)return new Response(JSON.stringify({error:"no league"}),{status:404});
 
-    const s=store(),cacheKey=`roster_actions_v4_${chosen.id}`;
+    const s=store(),cacheKey=rosterActionsCacheKey(chosen.id);
     const cached=await s.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force&&cached&&Date.now()-(cached.at||0)<4*60*60*1000){
       return new Response(JSON.stringify(cached),{headers:{"content-type":"application/json","cache-control":"no-store"}});
@@ -997,7 +999,7 @@ Return ONLY valid JSON:
     };
 
     await s.setJSON(cacheKey,result);
-    await s.delete(`roster_actions_refresh_${chosen.id}`).catch(()=>{});
+    await s.delete(rosterActionsLockKey(chosen.id)).catch(()=>{});
     const histKey=`roster_action_history_${chosen.id}`;
     const hist=await s.get(histKey,{type:"json"}).catch(()=>[])||[];
     const fingerprint=JSON.stringify(result.actions.map(a=>[a.type,a.headline]));
