@@ -215,7 +215,11 @@ export default async req=>{
       at:now,phase,pollAfterSeconds:phase==="LIVE"?60:phase==="BETWEEN_GAMES"?120:phase==="PREGAME"?180:600,
       league:{id:chosen.id,name:chosen.name},week,opponentName:blueprint.opponent,
       score:{mine:mine.actual,opponent:opponent.actual},
-      expected:{mine:mine.expected,opponent:opponent.expected,margin:round(mine.expected-opponent.expected)},
+      expected:{
+        mine:mine.expected,opponent:opponent.expected,
+        currentMine:mine.currentExpected,currentOpponent:opponent.currentExpected,
+        margin:round(mine.expected-opponent.expected)
+      },
       winProbability:winPct,posture,
       calls:decisions.calls,actionableCalls:decisions.actionableCalls,leans:decisions.leans,
       flexMoves,events,newlyLocked,
