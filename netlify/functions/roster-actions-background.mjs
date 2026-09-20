@@ -173,6 +173,89 @@ function rosterAfter(roster,{removeNames=[],addPlayers=[]}={}){
 }
 function assetName(x){return x?.name||String(x||"");}
 
+const SPECIALIST_POSITIONS=new Set(["DEF","K"]);
+
+export function positionalDepthDecision({
+  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],weeklyDelta=0
+}={}){
+  if(mode!=="REDRAFT" || !add || !drop || add.pos===drop.pos){
+    return {allowed:true,reason:null};
+  }
+  if(!["RB","WR"].includes(drop.pos)){
+    return {allowed:true,reason:null};
+  }
+
+  const dedicatedStarters=activeSlots.filter(s=>s===drop.pos).length;
+  const minimum=Math.max(1,dedicatedStarters+1);
+  const current=roster.filter(p=>p.pos===drop.pos&&!p.onIR).length;
+  const after=current-1;
+
+  if(after<minimum && Number(weeklyDelta||0)<2.5){
+    return {
+      allowed:false,
+      reason:`would leave only ${after} ${drop.pos}s; protect at least ${minimum} unless the lineup gain is substantial`
+    };
+  }
+  return {allowed:true,reason:null};
+}
+
+export function waiverMoveActionable(x,mode="REDRAFT"){
+  if(!x)return false;
+  if(mode==="DYNASTY")return (x.weeklyDelta??0)>=.5 || (x.marketDelta??0)>=6;
+  if(x.specialistMode==="STREAM_SWAP")return (x.weeklyDelta??0)>=.35;
+  if(x.specialistMode==="BYE_HOLD")return true;
+  if(x.stash&&(x.depthDelta??0)>=1.5)return true;
+  return (x.weeklyDelta??0)>=.75;
+}
+
+export function specialistRosterDecision({
+  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],week=1,marginalDrop=0
+}={}){
+  if(mode!=="REDRAFT" || !add || !SPECIALIST_POSITIONS.has(add.pos)){
+    return {allowed:true,mode:null,reason:null};
+  }
+
+  const same=roster.filter(p=>p.pos===add.pos);
+  const starterNeed=Math.max(1,activeSlots.filter(s=>s===add.pos).length);
+  const alreadyCovered=same.length>=starterNeed;
+
+  if(!alreadyCovered){
+    return {allowed:true,mode:"FILL_SPECIALIST",reason:`fill open ${add.pos} slot`};
+  }
+
+  if(drop?.pos===add.pos){
+    return {allowed:true,mode:"STREAM_SWAP",reason:`swap ${add.pos} rather than carry two`};
+  }
+
+  // Carrying a second defense can occasionally be rational for an imminent
+  // bye/setup week, but only if the sacrificed skill player is truly
+  // replacement-level. Carrying two kickers is never worth a skill bench spot.
+  if(add.pos==="K"){
+    return {allowed:false,mode:"BLOCK_DUPLICATE_K",reason:"already roster a kicker; swap kickers instead"};
+  }
+
+  const upcoming=[week+1,week+2].filter(w=>w<=18);
+  const addHasWindow=upcoming.some(w=>Object.prototype.hasOwnProperty.call(add.weeks||{},w));
+  const hasUpcomingBye=addHasWindow && same.some(p=>
+    upcoming.some(w=>!Object.prototype.hasOwnProperty.call(p.weeks||{},w))
+  );
+  const existingBest=Math.max(...same.map(p=>Number(p.next3||0)),0);
+  const clearScheduleEdge=Number(add.next3||0)>=existingBest+1.5;
+  const replacementLevelDrop=Number(marginalDrop||0)<=0.5;
+
+  if(hasUpcomingBye && clearScheduleEdge && replacementLevelDrop){
+    return {
+      allowed:true,mode:"BYE_HOLD",
+      reason:"temporary second defense for an imminent bye/schedule edge with a replacement-level drop"
+    };
+  }
+
+  return {
+    allowed:false,mode:"BLOCK_DUPLICATE_DEF",
+    reason:"already roster a defense; do not burn useful skill depth for a second DST"
+  };
+}
+
 export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
   const actions=[];
   for(const [i,w] of waivers.slice(0,3).entries()){
@@ -190,16 +273,25 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
     const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
     actions.push({
       type:"ADD_DROP",priority:i+1,confidence,
-      headline:`${w.stash?"Stash":"Add"} ${w.add}, drop ${w.drop}`,
+      headline:w.specialistMode==="STREAM_SWAP"
+        ? `Stream ${w.add}, drop ${w.drop}`
+        : w.specialistMode==="BYE_HOLD"
+          ? `Short-term hold ${w.add}, drop ${w.drop}`
+          : `${w.stash?"Stash":"Add"} ${w.add}, drop ${w.drop}`,
       why:mode==="DYNASTY"
         ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
-        : w.stash
-          ? `Bench-upside screen: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value with a real role/trend breakout signal; no immediate starter gain is required.`
-          : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
+        : w.specialistMode==="STREAM_SWAP"
+          ? `DST/K roster construction: this is a specialist-for-specialist stream, not a second specialist using a skill-position bench spot. ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} projected points/week.`
+          : w.specialistMode==="BYE_HOLD"
+            ? `Temporary second-defense hold cleared the bye/schedule test and the proposed drop is replacement-level.`
+            : w.stash
+              ? `Bench-upside screen: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value with a real role/trend breakout signal; no immediate starter gain is required.`
+              : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
       window:"BEFORE WAIVERS",
       add:{name:w.add},drop:{name:w.drop},faabPct,
       drivers:[w.stash?"role":"depth","schedule",...(mode==="DYNASTY"?["market"]:[])],
       weeklyDelta:w.weeklyDelta,depthDelta:w.depthDelta??null,stash:!!w.stash,
+      specialistMode:w.specialistMode||null,rosterFitReason:w.rosterFitReason||null,
       breakoutScore:w.breakoutScore??null,marketDelta:w.marketDelta??null,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
@@ -241,7 +333,7 @@ export default async req=>{
     const chosen=leagues.find(l=>l.id===requested)||leagues[0];
     if(!chosen)return new Response(JSON.stringify({error:"no league"}),{status:404});
 
-    const s=store(),cacheKey=`roster_actions_${chosen.id}`;
+    const s=store(),cacheKey=`roster_actions_v3_${chosen.id}`;
     const cached=await s.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force&&cached&&Date.now()-(cached.at||0)<4*60*60*1000){
       return new Response(JSON.stringify(cached),{headers:{"content-type":"application/json","cache-control":"no-store"}});
@@ -304,14 +396,19 @@ export default async req=>{
         baselinePts:form.baselinePts,currentGames:form.currentGames
       };
     };
+    const lineupByName=new Map((lineupData?.players||[]).map(p=>[normName(p.name),p]));
     const myRoster=me.players.map(p=>({
       ...enrichForecast(p),
-      market:mode==="DYNASTY"?marketValue(p.name):null
+      market:mode==="DYNASTY"?marketValue(p.name):null,
+      gameLocked:!!lineupByName.get(normName(p.name))?.locked,
     }));
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
-    const drops=myRoster.filter(p=>!starterSet.has(p.name)&&!p.onIR)
+    const baseDropPool=myRoster.filter(p=>!starterSet.has(p.name)&&!p.onIR&&!p.gameLocked);
+    const specialistSwapPool=myRoster.filter(p=>SPECIALIST_POSITIONS.has(p.pos)&&!p.onIR&&!p.gameLocked);
+    const dropPool=[...new Map([...baseDropPool,...specialistSwapPool].map(p=>[p.pid,p])).values()];
+    const drops=dropPool
       .map(p=>({...p,dropScore:mode==="DYNASTY"?(p.market??0)*.75+(p.next3||0)*1.5:(p.next3||0)}))
-      .sort((a,b)=>a.dropScore-b.dropScore).slice(0,10);
+      .sort((a,b)=>a.dropScore-b.dropScore).slice(0,12);
 
     const enrichPick=p=>{
       const tier=tierOfOriginal(p.original);
@@ -384,15 +481,29 @@ export default async req=>{
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add.market!=null&&drop.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
+        const specialist=specialistRosterDecision({
+          mode,add,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
+        });
+        if(!specialist.allowed)continue;
+        const depthFit=positionalDepthDecision({
+          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta
+        });
+        if(!depthFit.allowed)continue;
+
         const roleSurge=Math.max(0,Number(add.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add.trending||0));
         const breakoutScore=round(roleSurge*10+trendSignal);
-        const stash=weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
+        const stash=!SPECIALIST_POSITIONS.has(add.pos) &&
+          weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
+        const specialistBonus=specialist.mode==="STREAM_SWAP"?2.5:specialist.mode==="BYE_HOLD"?0.5:0;
         const score=mode==="DYNASTY"
           ? weeklyDelta*5+(marketDelta??0)*.35+depthDelta*.7+(add.screenScore-drop.dropScore)*.08
-          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5;
+          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus;
         waiverPairs.push({
-          add:add.name,drop:drop.name,pos:add.pos,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
+          specialistMode:specialist.mode,
+          rosterFitReason:specialist.reason||depthFit.reason||null,
+          weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           score:round(score),addNext3:add.next3,dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
@@ -403,11 +514,7 @@ export default async req=>{
     }
     waiverPairs.sort((a,b)=>b.score-a.score);
     const bestWaiverPairs=waiverPairs
-      .filter(x=>
-        x.weeklyDelta>.15 ||
-        (mode==="DYNASTY"&&(x.marketDelta??0)>=8) ||
-        (mode==="REDRAFT"&&x.stash&&x.depthDelta>=1.5)
-      )
+      .filter(x=>waiverMoveActionable(x,mode))
       .slice(0,12);
 
     const tradeTargets=[];
@@ -662,12 +769,22 @@ Return ONLY valid JSON:
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
+        const specialist=specialistRosterDecision({
+          mode,add,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
+        });
+        const depthFit=positionalDepthDecision({
+          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta
+        });
         const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add?.trending||0));
         const breakoutScore=round(roleSurge*10+trendSignal);
-        const stash=weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
+        const stash=!SPECIALIST_POSITIONS.has(add?.pos) &&
+          weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
         return {
           ...a,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          rosterFitBlocked:!specialist.allowed||!depthFit.allowed,
+          specialistMode:specialist.mode||null,
+          rosterFitReason:specialist.reason||depthFit.reason||null,
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
@@ -713,9 +830,8 @@ Return ONLY valid JSON:
     }).filter(a=>{
       if(a.invalidMath)return false;
       if(["ADD","WAIVER","ADD_DROP"].includes(a.type)){
-        return (a.weeklyDelta??0)>.15 ||
-          (mode==="DYNASTY"&&(a.marketDelta??0)>=6) ||
-          (mode==="REDRAFT"&&a.stash&&(a.depthDelta??0)>=1.5);
+        if(a.rosterFitBlocked)return false;
+        return waiverMoveActionable(a,mode);
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
         if(mode==="DYNASTY"&&a.sendValue!=null&&a.receiveValue!=null){
@@ -743,6 +859,9 @@ Return ONLY valid JSON:
         marketDate:market.scrapeDate||null,
         baselineNext3Lineup:baselineRosterTotal,
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
+        rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
+        noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
+        depthProtection:"redraft protects one RB and WR beyond dedicated starting slots unless a cross-position move adds at least 2.5 pts/week",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         forecastModel:"provider + recent league-scored production + workload trend",
