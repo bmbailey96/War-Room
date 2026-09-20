@@ -36,7 +36,14 @@ jobs:
             ] | join(" // ")' "/tmp/lineup-$id.json"
 
             echo "=== ROSTER MOVES ==="
-            curl -fsS "$BASE/.netlify/functions/roster-actions?league=$id&core=1" > "/tmp/moves-$id.json"
+            curl -fsS "$BASE/.netlify/functions/roster-actions?league=$id&refresh=1&core=1" > "/tmp/moves-trigger-$id.json"
+            for attempt in $(seq 1 12); do
+              sleep 5
+              curl -fsS "$BASE/.netlify/functions/roster-actions?league=$id&core=1" > "/tmp/moves-$id.json"
+              building=$(jq -r '(.status=="building") or (.refreshing==true)' "/tmp/moves-$id.json")
+              if [ "$building" != "true" ]; then break; fi
+              echo "roster board still rebuilding: $attempt/12"
+            done
             jq -r '[
               "mode="+(.league.mode//"?"),
               "summary="+(.summary//"?"),
