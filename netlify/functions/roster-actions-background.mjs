@@ -305,9 +305,26 @@ export function specialistRosterDecision({
   };
 }
 
+export function buildWaiverPlan(pairs=[],limit=3){
+  const plan=[],seenAdds=new Set();
+  for(const pair of pairs||[]){
+    const key=normName(pair?.add||"");
+    if(!key||seenAdds.has(key))continue;
+    seenAdds.add(key);
+    plan.push({
+      ...pair,
+      claimRank:plan.length+1,
+      claimRole:plan.length===0?"PRIMARY":"BACKUP",
+    });
+    if(plan.length>=limit)break;
+  }
+  return plan;
+}
+
 export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
   const actions=[];
-  for(const [i,w] of waivers.slice(0,3).entries()){
+  const waiverLimit=trades.length?2:3;
+  for(const [i,w] of waivers.slice(0,waiverLimit).entries()){
     const impact=Math.max(
       Number(w.weeklyDelta||0),
       Number(w.depthDelta||0)*.55,
@@ -322,6 +339,7 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
     const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
     actions.push({
       type:"ADD_DROP",priority:i+1,confidence,
+      claimRank:w.claimRank??i+1,claimRole:w.claimRole||(i===0?"PRIMARY":"BACKUP"),
       headline:w.specialistMode==="STREAM_SWAP"
         ? `Stream ${w.add}, drop ${w.drop}`
         : w.specialistMode==="BYE_HOLD"
@@ -591,6 +609,7 @@ export default async req=>{
     const bestWaiverPairs=waiverPairs
       .filter(x=>waiverMoveActionable(x,mode))
       .slice(0,12);
+    const waiverPlan=buildWaiverPlan(bestWaiverPairs,3);
 
     const tradeTargets=[];
     for(const team of otherTeams){
@@ -761,6 +780,9 @@ ${JSON.stringify(myRoster,null,2)}
 MY MOST PLAUSIBLE DROPS:
 ${JSON.stringify(drops,null,2)}
 
+WAIVER CLAIM PLAN, ordered and deduplicated by target:
+${JSON.stringify(waiverPlan,null,2)}
+
 DETERMINISTIC ADD/DROP PAIRS, ordered by real best-lineup impact:
 ${JSON.stringify(bestWaiverPairs,null,2)}
 
@@ -827,7 +849,7 @@ Return ONLY valid JSON:
       }catch(e){error=e.message;}
     }
     if(!parsed)parsed=deterministicRosterFallback({
-      waivers:bestWaiverPairs,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
+      waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
     });
 
     let actions=validateActions(parsed.actions,{
@@ -926,11 +948,25 @@ Return ONLY valid JSON:
       }
       return true;
     }).slice(0,6);
+    const claimRankByAdd=new Map(waiverPlan.map(x=>[normName(x.add),x]));
+    actions=actions.map(a=>{
+      if(!["ADD","WAIVER","ADD_DROP"].includes(a.type))return a;
+      const planned=claimRankByAdd.get(normName(a.add?.name||""));
+      return planned
+        ? {...a,claimRank:planned.claimRank,claimRole:planned.claimRole}
+        : a;
+    }).sort((a,b)=>{
+      const aw=["ADD","WAIVER","ADD_DROP"].includes(a.type),bw=["ADD","WAIVER","ADD_DROP"].includes(b.type);
+      if(aw&&bw)return Number(a.claimRank||99)-Number(b.claimRank||99);
+      if(aw!==bw)return aw?-1:1;
+      return Number(a.priority||99)-Number(b.priority||99);
+    });
+
     const result={
       at:Date.now(),league:{id:chosen.id,name:league.name,mode,week,season},
       summary:parsed.summary||actions[0]?.headline||"No urgent roster move.",
       actions:actions.length?actions:deterministicRosterFallback({
-        waivers:bestWaiverPairs,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
+        waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
       }).actions,
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
@@ -940,6 +976,7 @@ Return ONLY valid JSON:
         myPicks,
         marketDate:market.scrapeDate||null,
         baselineNext3Lineup:baselineRosterTotal,
+        waiverPlan,
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
         rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
         noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
