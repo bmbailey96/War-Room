@@ -175,6 +175,15 @@ function assetName(x){return x?.name||String(x||"");}
 
 const SPECIALIST_POSITIONS=new Set(["DEF","K"]);
 
+export function waiverMoveActionable(x,mode="REDRAFT"){
+  if(!x)return false;
+  if(mode==="DYNASTY")return (x.weeklyDelta??0)>=.5 || (x.marketDelta??0)>=6;
+  if(x.specialistMode==="STREAM_SWAP")return (x.weeklyDelta??0)>=.35;
+  if(x.specialistMode==="BYE_HOLD")return true;
+  if(x.stash&&(x.depthDelta??0)>=1.5)return true;
+  return (x.weeklyDelta??0)>=.75;
+}
+
 export function specialistRosterDecision({
   mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],week=1,marginalDrop=0
 }={}){
@@ -300,7 +309,7 @@ export default async req=>{
     const chosen=leagues.find(l=>l.id===requested)||leagues[0];
     if(!chosen)return new Response(JSON.stringify({error:"no league"}),{status:404});
 
-    const s=store(),cacheKey=`roster_actions_${chosen.id}`;
+    const s=store(),cacheKey=`roster_actions_v3_${chosen.id}`;
     const cached=await s.get(cacheKey,{type:"json"}).catch(()=>null);
     if(!force&&cached&&Date.now()-(cached.at||0)<4*60*60*1000){
       return new Response(JSON.stringify(cached),{headers:{"content-type":"application/json","cache-control":"no-store"}});
@@ -476,11 +485,7 @@ export default async req=>{
     }
     waiverPairs.sort((a,b)=>b.score-a.score);
     const bestWaiverPairs=waiverPairs
-      .filter(x=>
-        x.weeklyDelta>.15 ||
-        (mode==="DYNASTY"&&(x.marketDelta??0)>=8) ||
-        (mode==="REDRAFT"&&x.stash&&x.depthDelta>=1.5)
-      )
+      .filter(x=>waiverMoveActionable(x,mode))
       .slice(0,12);
 
     const tradeTargets=[];
@@ -794,9 +799,7 @@ Return ONLY valid JSON:
       if(a.invalidMath)return false;
       if(["ADD","WAIVER","ADD_DROP"].includes(a.type)){
         if(a.rosterFitBlocked)return false;
-        return (a.weeklyDelta??0)>.15 ||
-          (mode==="DYNASTY"&&(a.marketDelta??0)>=6) ||
-          (mode==="REDRAFT"&&a.stash&&(a.depthDelta??0)>=1.5);
+        return waiverMoveActionable(a,mode);
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
         if(mode==="DYNASTY"&&a.sendValue!=null&&a.receiveValue!=null){
@@ -825,6 +828,7 @@ Return ONLY valid JSON:
         baselineNext3Lineup:baselineRosterTotal,
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
         rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
+        noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         forecastModel:"provider + recent league-scored production + workload trend",
