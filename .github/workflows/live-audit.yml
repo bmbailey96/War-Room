@@ -63,6 +63,7 @@ jobs:
               " K="+(($p|map(select(.slot=="K"))|length)|tostring)
             ' "/tmp/lineup-$id.json"
             jq -r '(.actions//[])[] | select(.add!=null) | "ADD "+.add.name+" // DROP "+(.drop.name//"—")+" // "+(.specialistMode//"NORMAL")' "/tmp/moves-$id.json" || true
+            jq -r '(.actions//[])[] | select(.type=="TRADE_FOR" or .type=="SELL") | "TRADE // WITH "+(.partner//"?")+" // SEND "+((.send//[])|map(.name)|join(" + "))+" // GET "+((.receive//[])|map(.name)|join(" + "))+" // MY "+((.weeklyDelta//0)|tostring)+" pts/wk // THEM "+((.partnerWeeklyDelta//0)|tostring)+" pts/wk"+(if .sendValue!=null then " // MARKET "+(.sendValue|tostring)+"->"+(.receiveValue|tostring) else "" end)' "/tmp/moves-$id.json" || true
 
             echo "=== LIVE STATE ==="
             curl -fsS "$BASE/.netlify/functions/live-state?league=$id" > "/tmp/live-$id.json" || true
