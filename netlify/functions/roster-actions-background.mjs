@@ -442,6 +442,8 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
       faabPct:null,drivers:["consolidation",...(mode==="DYNASTY"?["market","pick_value"]:[])],
       weeklyDelta:t.weeklyDelta,partnerWeeklyDelta:t.partnerWeeklyDelta,
       sendValue:t.sendValue??null,receiveValue:t.receiveValue??null,
+      horizonSend:t.horizonSend??null,horizonReceive:t.horizonReceive??null,
+      tradeRatio:t.tradeRatio??null,
       marketDelta:t.marketDelta??null,managerFit:t.managerFit??null,
       partnerCareerTrades:t.partnerCareerTrades??null,
     });
@@ -992,6 +994,7 @@ Return ONLY valid JSON:
         const weeklyDelta=round(myAfter-baselineRosterTotal);
         const partnerWeeklyDelta=round(partnerAfter-partnerBase);
         let sendValue=null,receiveValue=null,marketDelta=null;
+        let horizonSend=null,horizonReceive=null,tradeRatio=null,tradeEfficient=true,tradeEfficiencyReason=null;
         if(mode==="DYNASTY"){
           const sv=(a.send||[]).map(dynastyAssetValue);
           const rv=(a.receive||[]).map(dynastyAssetValue);
@@ -999,11 +1002,21 @@ Return ONLY valid JSON:
             sendValue=sv.reduce((x,y)=>x+y,0);
             receiveValue=rv.reduce((x,y)=>x+y,0);
             marketDelta=receiveValue-sendValue;
+            const fit=dynastyTradeEfficient({sendValue,receiveValue,weeklyDelta,partnerWeeklyDelta});
+            tradeEfficient=fit.allowed;tradeRatio=fit.ratio;tradeEfficiencyReason=fit.reason;
           }
+        }else{
+          horizonSend=round(sentPlayers.reduce((s,p)=>s+Number(p.tradeTotal||0),0));
+          horizonReceive=round(gotPlayers.reduce((s,p)=>s+Number(p.tradeTotal||0),0));
+          const fit=redraftTradeEfficient({
+            sendHorizon:horizonSend,receiveHorizon:horizonReceive,weeklyDelta,partnerWeeklyDelta
+          });
+          tradeEfficient=fit.allowed;tradeRatio=fit.ratio;tradeEfficiencyReason=fit.reason;
         }
         const primaryGet=gotPlayers[0]||null;
         return {
           ...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta,
+          horizonSend,horizonReceive,tradeRatio,tradeEfficient,tradeEfficiencyReason,
           forecastSource:primaryGet?.forecastSource||null,
           roleRatio:primaryGet?.roleRatio??null,
           recentPts:primaryGet?.recentPts??null,
@@ -1018,13 +1031,9 @@ Return ONLY valid JSON:
         return waiverMoveActionable(a,mode);
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
-        if(mode==="DYNASTY"&&a.sendValue!=null&&a.receiveValue!=null){
-          const ratio=a.sendValue>0?a.receiveValue/a.sendValue:1;
-          if(ratio<.68||ratio>1.48)return false;
-          if((a.partnerWeeklyDelta??0)<-3 && ratio>1.15)return false;
-        }else if(mode!=="DYNASTY"&&(a.partnerWeeklyDelta??0)<-3.5){
-          return false;
-        }
+        if(a.tradeEfficient===false)return false;
+        if(mode==="DYNASTY"&&(a.sendValue==null||a.receiveValue==null))return false;
+        if(mode==="REDRAFT"&&(a.horizonSend==null||a.horizonReceive==null))return false;
       }
       return true;
     }).slice(0,6);
@@ -1067,6 +1076,7 @@ Return ONLY valid JSON:
         trendingSnapshot:trendById,
         trendSnapshotAgeMinutes:cached?.at?round((Date.now()-cached.at)/60000):null,
         forecastModel:"provider + recent league-scored production + workload trend",
+        redraftTradeHorizon:"up to six projected weeks, blended with current form and official injury status",
         replacementByPos,
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
       },
