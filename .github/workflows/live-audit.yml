@@ -1,0 +1,70 @@
+name: Audit live War Room
+
+on:
+  push:
+    branches:
+      - "ops/live-audit-2026-09-20"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query deployed War Room
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://fantasywarroom.netlify.app"
+
+          echo "=== ROOT ==="
+          curl -fsS "$BASE/" | grep -o "WAR ROOM" | head -1
+
+          curl -fsS "$BASE/.netlify/functions/lineup" > /tmp/base.json
+          echo "=== LEAGUES ==="
+          jq -r '.leagues[] | [.id,.name] | @tsv' /tmp/base.json
+
+          jq -r '.leagues[].id' /tmp/base.json | while read -r id; do
+            echo
+            echo "=== LEAGUE $id : LINEUP ==="
+            curl -fsS "$BASE/.netlify/functions/lineup?league=$id" > "/tmp/lineup-$id.json"
+            jq -r '[
+              "league="+(.league.name//"?"),
+              "week="+(.week|tostring),
+              "opponent="+(.opponent//"?"),
+              "win="+((.matchup.winProbability//0)|tostring)+"%",
+              "posture="+(.matchup.posture//"?"),
+              "calls="+((.actionableCalls//[])|map((.start.name//"?")+" over "+(.sit.name//"—")+" ["+(.callStrength//"?")+"]")|join(" | "))
+            ] | join(" // ")' "/tmp/lineup-$id.json"
+
+            echo "=== ROSTER MOVES ==="
+            curl -fsS "$BASE/.netlify/functions/roster-actions?league=$id&core=1" > "/tmp/moves-$id.json"
+            jq -r '[
+              "mode="+(.league.mode//"?"),
+              "summary="+(.summary//"?"),
+              "actions="+((.actions//[])|map(
+                (.claimRole//"")+
+                (if .claimRank then "#"+(.claimRank|tostring)+" " else "" end)+
+                (.type//"?")+": "+(.headline//"?")+
+                (if .weeklyDelta!=null then " ["+((.weeklyDelta|tostring))+" pts/wk]" else "" end)+
+                (if .specialistMode then " ["+.specialistMode+"]" else "" end)
+              )|join(" | "))
+            ] | join(" // ")' "/tmp/moves-$id.json"
+
+            echo "=== SPECIALIST COUNTS / DROPS ==="
+            jq -r '
+              (.players//[]) as $p |
+              "rostered DEF="+(($p|map(select(.slot=="DEF"))|length)|tostring)+
+              " K="+(($p|map(select(.slot=="K"))|length)|tostring)
+            ' "/tmp/lineup-$id.json"
+            jq -r '(.actions//[])[] | select(.add!=null) | "ADD "+.add.name+" // DROP "+(.drop.name//"—")+" // "+(.specialistMode//"NORMAL")' "/tmp/moves-$id.json" || true
+
+            echo "=== LIVE STATE ==="
+            curl -fsS "$BASE/.netlify/functions/live-state?league=$id" > "/tmp/live-$id.json" || true
+            jq -r 'if .error then "error="+.error else [
+              "phase="+(.phase//"?"),
+              "score="+((.score.mine//0)|tostring)+"-"+((.score.opponent//0)|tostring),
+              "expect="+((.expected.mine//0)|tostring)+"-"+((.expected.opponent//0)|tostring),
+              "win="+((.winProbability//0)|tostring)+"%",
+              "posture="+(.posture//"?"),
+              "liveCalls="+((.actionableCalls//[])|map((.start.name//"?")+" over "+(.sit.name//"—"))|join(" | "))
+            ]|join(" // ") end' "/tmp/live-$id.json" || true
+          done
