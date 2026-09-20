@@ -829,3 +829,34 @@ assert.deepEqual(computeTrendVelocity(120,100,null),{delta:0,perHour:0});
 assert.deepEqual(computeTrendVelocity(110,100,2),{delta:10,perHour:5});
 
 console.log("Waiver trend-velocity checks passed");
+
+
+const { buildWaiverPlan } = await import("../netlify/functions/roster-actions-background.mjs");
+const claimPlan=buildWaiverPlan([
+  {add:"Best Add",drop:"Bench A",score:10,weeklyDelta:2},
+  {add:"Best Add",drop:"Bench B",score:9,weeklyDelta:1.8},
+  {add:"Second Add",drop:"Bench A",score:8,weeklyDelta:1.4},
+  {add:"Third Add",drop:"Bench C",score:7,weeklyDelta:1.1},
+],3);
+assert.equal(claimPlan.length,3);
+assert.equal(claimPlan[0].add,"Best Add");
+assert.equal(claimPlan[0].claimRole,"PRIMARY");
+assert.equal(claimPlan[0].claimRank,1);
+assert.equal(claimPlan[1].add,"Second Add");
+assert.equal(claimPlan[1].claimRole,"BACKUP");
+assert.equal(claimPlan[2].add,"Third Add");
+
+const crispFallback=deterministicRosterFallback({
+  mode:"REDRAFT",usesFaab:false,
+  waivers:claimPlan,
+  trades:[{
+    target:"Trade Target",partner:"Other Team",confidence:"MEDIUM",
+    why:"Fair consolidation",send:[{type:"player",name:"Bench A"}],
+    weeklyDelta:1.5,partnerWeeklyDelta:.2
+  }]
+});
+assert.equal(crispFallback.actions.filter(x=>x.type==="ADD_DROP").length,2);
+assert.equal(crispFallback.actions.some(x=>x.type==="TRADE_FOR"),true);
+assert.equal(crispFallback.actions[0].claimRole,"PRIMARY");
+
+console.log("Ranked waiver-plan checks passed");
