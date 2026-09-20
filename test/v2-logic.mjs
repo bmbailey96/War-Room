@@ -801,3 +801,22 @@ assert.equal(
 );
 
 console.log("Game-day free-agent lock and defense-stream timing checks passed");
+
+
+const liveModule = await import("../netlify/functions/live-state.mjs");
+const { liveProgress, liveExpectedFinal } = liveModule;
+
+const kickoff=Date.parse("2026-09-20T17:00:00Z");
+assert.equal(liveProgress(new Date(kickoff).toISOString(),kickoff-1000),0);
+assert.ok(Math.abs(liveProgress(new Date(kickoff).toISOString(),kickoff+2*60*60*1000)-.5)<.01);
+assert.equal(liveProgress(new Date(kickoff).toISOString(),kickoff+5*60*60*1000),1);
+
+assert.equal(liveExpectedFinal({projection:20,actual:0,progress:0,slot:"WR"}),20);
+const hotHalf=liveExpectedFinal({projection:20,actual:15,progress:.5,slot:"WR"});
+assert.ok(hotHalf>20 && hotHalf<26);
+const hotDstHalf=liveExpectedFinal({projection:8,actual:14,progress:.5,slot:"DEF"});
+assert.ok(hotDstHalf>8 && hotDstHalf<hotHalf);
+assert.equal(liveExpectedFinal({projection:20,actual:11.4,progress:1,slot:"WR"}),11.4);
+assert.equal(typeof liveModule.default,"function");
+
+console.log("Sunday live pace-model checks passed");
