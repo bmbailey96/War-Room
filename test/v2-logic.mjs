@@ -820,3 +820,12 @@ assert.equal(liveExpectedFinal({projection:20,actual:11.4,progress:1,slot:"WR"})
 assert.equal(typeof liveModule.default,"function");
 
 console.log("Sunday live pace-model checks passed");
+
+
+const { computeTrendVelocity } = await import("../netlify/functions/roster-actions-background.mjs");
+assert.deepEqual(computeTrendVelocity(300,200,.5),{delta:100,perHour:200});
+assert.deepEqual(computeTrendVelocity(180,200,.5),{delta:0,perHour:0});
+assert.deepEqual(computeTrendVelocity(120,100,null),{delta:0,perHour:0});
+assert.deepEqual(computeTrendVelocity(110,100,2),{delta:10,perHour:5});
+
+console.log("Waiver trend-velocity checks passed");

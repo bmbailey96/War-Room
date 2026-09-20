@@ -24,6 +24,14 @@ async function txt(url){
 }
 const n=v=>v==null||v===""||Number.isNaN(+v)?0:+v;
 const round=x=>Math.round(x*10)/10;
+
+export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
+  if(elapsedHours==null || !Number.isFinite(Number(elapsedHours)) || Number(elapsedHours)<=0){
+    return {delta:0,perHour:0};
+  }
+  const delta=Math.max(0,Number(current||0)-Number(prior||0));
+  return {delta:round(delta),perHour:round(delta/Math.max(.1,Number(elapsedHours)))};
+}
 function hardInjured(status){
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/i.test(String(status||""));
 }
@@ -336,6 +344,7 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
       streamWeekEdge:w.streamWeekEdge??null,streamNext3Edge:w.streamNext3Edge??null,
       rosterFitReason:w.rosterFitReason||null,
       breakoutScore:w.breakoutScore??null,marketDelta:w.marketDelta??null,
+      trendDelta:w.trendDelta??null,trendVelocity:w.trendVelocity??null,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
   }
@@ -416,18 +425,30 @@ export default async req=>{
     const rostered=new Set();
     for(const r of core.rosters)for(const pid of r.players||[])rostered.add(pid);
     const trendById=Object.fromEntries((core.trending||[]).map(x=>[x.player_id,n(x.count)]));
+    const priorTrendById=cached?.context?.trendingSnapshot||{};
+    const trendElapsedHours=cached?.at
+      ? Math.max(.1,(Date.now()-cached.at)/3600000)
+      : null;
     const topProj=Object.entries(proj).sort((a,b)=>(b[1].avg||0)-(a[1].avg||0)).slice(0,220).map(([pid])=>pid);
     const candidateIds=[...new Set([...(core.trending||[]).map(x=>x.player_id),...topProj])]
       .filter(pid=>pid&&!rostered.has(pid));
 
     let free=candidateIds.map(pid=>{
       const p=playerView(pid,db,proj,formMap,gameLocks),trend=trendById[pid]||0;
+      const priorTrend=Number(priorTrendById[pid]||0);
+      const velocity=computeTrendVelocity(trend,priorTrend,trendElapsedHours);
+      const trendDelta=velocity.delta;
+      const trendVelocity=velocity.perHour;
       const mv=mode==="DYNASTY"?marketValue(p.name):null;
       const ageBonus=mode==="DYNASTY"&&p.age?Math.max(-5,Math.min(6,(27-p.age)*1.1)):0;
+      const velocityBonus=Math.log10(1+trendVelocity)*1.5;
       const score=mode==="DYNASTY"
-        ? (mv??0)*.7+(p.next3||0)*1.25+Math.log10(1+trend)*3+ageBonus
-        : (p.next3||0)*4+Math.log10(1+trend)*3;
-      return {...p,market:mv,trending:trend,screenScore:round(score)};
+        ? (mv??0)*.7+(p.next3||0)*1.25+Math.log10(1+trend)*3+velocityBonus+ageBonus
+        : (p.next3||0)*4+Math.log10(1+trend)*3+velocityBonus;
+      return {
+        ...p,market:mv,trending:trend,trendDelta:round(trendDelta),
+        trendVelocity:round(trendVelocity),screenScore:round(score)
+      };
     }).filter(p=>p.name&&p.team&&!hardInjured(p.injury)&&!p.gameLocked)
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,24);
 
@@ -542,9 +563,11 @@ export default async req=>{
 
         const roleSurge=Math.max(0,Number(add.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add.trending||0));
-        const breakoutScore=round(roleSurge*10+trendSignal);
+        const velocitySignal=Math.log10(1+Number(add.trendVelocity||0));
+        const breakoutScore=round(roleSurge*10+trendSignal+velocitySignal*1.5);
         const stash=!SPECIALIST_POSITIONS.has(add.pos) &&
-          weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
+          weeklyDelta<=.2 && depthDelta>=1.5 &&
+          (roleSurge>=.08 || trendSignal>=2 || velocitySignal>=1.45);
         const specialistBonus=specialist.mode==="STREAM_SWAP"?2.5:specialist.mode==="BYE_HOLD"?0.5:0;
         const score=mode==="DYNASTY"
           ? weeklyDelta*5+(marketDelta??0)*.35+depthDelta*.7+(add.screenScore-drop.dropScore)*.08
@@ -557,6 +580,7 @@ export default async req=>{
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           score:round(score),addNext3:add.next3,dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
+          trendDelta:add.trendDelta,trendVelocity:add.trendVelocity,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
           addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio,
           replacement:Number(replacementByPos[add.pos]||0)
@@ -831,11 +855,14 @@ Return ONLY valid JSON:
           : {thisWeekEdge:null,next3Edge:null};
         const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add?.trending||0));
-        const breakoutScore=round(roleSurge*10+trendSignal);
+        const velocitySignal=Math.log10(1+Number(add?.trendVelocity||0));
+        const breakoutScore=round(roleSurge*10+trendSignal+velocitySignal*1.5);
         const stash=!SPECIALIST_POSITIONS.has(add?.pos) &&
-          weeklyDelta<=.2 && depthDelta>=1.5 && (roleSurge>=.08 || trendSignal>=2);
+          weeklyDelta<=.2 && depthDelta>=1.5 &&
+          (roleSurge>=.08 || trendSignal>=2 || velocitySignal>=1.45);
         return {
           ...a,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
           rosterFitBlocked:!specialist.allowed||!depthFit.allowed,
           specialistMode:specialist.mode||null,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
@@ -920,6 +947,8 @@ Return ONLY valid JSON:
         gameDayLegality:"free agents are removed once their NFL game has started; specialist streams are evaluated on this-week edge first",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
+        trendingSnapshot:trendById,
+        trendSnapshotAgeMinutes:cached?.at?round((Date.now()-cached.at)/60000):null,
         forecastModel:"provider + recent league-scored production + workload trend",
         replacementByPos,
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
