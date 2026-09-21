@@ -91,11 +91,11 @@ export default async req=>{
     const acquisition=acquisitionPolicy(league);
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
     const alerts=buildPulseAlerts({rosters,db,liveStatsRaw,gameLocks,acquisition});
-    const signature=alerts.map(a=>[
-      a.pid,a.score,a.liveRole?.targets||0,a.liveRole?.carries||0,
-      a.liveRole?.liveTargetShare||0,a.liveRole?.liveCarryShare||0,
-      a.liveRole?.routeParticipation||0
-    ].join(":")).join("|");
+    // Only change the signature when the actionable alert set changes.
+    // Target/carry counters move constantly and should not trigger a full rebuild.
+    const signature=alerts.map(a=>
+      [a.pid,a.immediateFreeAgent?"NOW":a.waiverOnly?"WAIVER":"OPEN"].join(":")
+    ).sort().join("|");
 
     return new Response(JSON.stringify({
       at:Date.now(),league:{id:leagueId,name:league?.name||"",season,week},
