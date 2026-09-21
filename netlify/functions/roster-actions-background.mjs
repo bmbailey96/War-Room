@@ -1179,6 +1179,7 @@ export default async req=>{
 
 LEAGUE: ${league.name}
 MODE: ${mode}
+ACQUISITION POLICY: ${acquisition.label} (${acquisition.source})
 NFL WEEK: ${week}
 MY MATCHUP WIN CHANCE: ${lineupData?.matchup?.winProbability??"unknown"}%
 MY WAIVER POSITION: ${me.waiverPosition??"unknown"}
@@ -1220,7 +1221,8 @@ Use web search for current injury/practice news, depth-chart movement, snap/rout
 
 Hard rules:
 - A pickup must be from ACTUALLY UNROSTERED CANDIDATES.
-- If a candidate has waiverOnly=true, that player's game has already started. Never describe that as an immediate add. It is a NEXT WAIVER RUN claim only.
+- If a candidate has waiverOnly=true, that player's game has already started and this league locks him. It is a NEXT WAIVER RUN claim only.
+- If a candidate has immediateFreeAgent=true, this league permits the acquisition despite the game already starting. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
 - Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
 - Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
 - If an add needs a roster spot, give an exact drop from MY ROSTER.
@@ -1300,30 +1302,34 @@ Return ONLY valid JSON:
           ? specialistScheduleEdge(addForSim,drop,week)
           : {thisWeekEdge:null,next3Edge:null};
         const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
+        const liveRoleSignal=add?.liveRole?.strong?2:add?.liveRole?1:0;
         const trendSignal=Math.log10(1+Number(add?.trending||0));
         const velocitySignal=Math.log10(1+Number(add?.trendVelocity||0));
         const fastSignal=Math.log10(1+Number(add?.fastTrending||0));
         const injurySignal=add?.injuryOpportunity?.applied
           ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
           : 0;
-        const breakoutScore=round(roleSurge*10+trendSignal+velocitySignal*1.5+fastSignal+injurySignal*.7);
+        const breakoutScore=round(roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+fastSignal+injurySignal*.7);
         const stash=!SPECIALIST_POSITIONS.has(add?.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
-          (roleSurge>=.08 || injurySignal>=1.5 || trendSignal>=2 || velocitySignal>=1.45);
+          (roleSurge>=.08 || injurySignal>=1.5 || !!add?.liveRole?.strong || trendSignal>=2 || velocitySignal>=1.45);
         const agreement=waiverSignalAgreement({
           weeklyDelta,depthDelta,marketDelta,
           addRoleRatio:add?.roleRatio,injuryOpportunity:add?.injuryOpportunity,
+          liveRole:add?.liveRole,
           fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity,
-          mirageRisk:add?.mirageRisk,waiverOnly:add?.gameLocked
+          mirageRisk:add?.mirageRisk,waiverOnly:add?.waiverOnly
         });
         return {
           ...a,
-          headline:add?.gameLocked&&add?.name
+          headline:add?.waiverOnly&&add?.name
             ? `Claim ${add.name}${drop?.name?`, drop ${drop.name}`:""}`
-            : a.headline,
-          window:add?.gameLocked?"NEXT WAIVER RUN":a.window,
+            : add?.immediateFreeAgent&&add?.name
+              ? `Add ${add.name} now${drop?.name?`, drop ${drop.name}`:""}`
+              : a.headline,
+          window:add?.waiverOnly?"NEXT WAIVER RUN":add?.immediateFreeAgent?"NOW":a.window,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
-          waiverOnly:!!add?.gameLocked,
+          waiverOnly:!!add?.waiverOnly,immediateFreeAgent:!!add?.immediateFreeAgent,
           signalCount:agreement.count,signalAgreement:agreement,
           fastTrending:add?.fastTrending??0,
           trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
@@ -1336,6 +1342,7 @@ Return ONLY valid JSON:
           recentPts:add?.recentPts??null,
           providerNext3:add?.providerNext3??null,
           injuryOpportunity:add?.injuryOpportunity||null,
+          liveRole:add?.liveRole||null,
           mirageRisk:add?.mirageRisk??0,
         };
       }
