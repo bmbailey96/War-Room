@@ -522,23 +522,35 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
       Number(w.depthDelta||0)*.55,
       mode==="DYNASTY"?Number(w.marketDelta||0)/8:0
     );
-    const confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
-    const faabBase=mode==="DYNASTY"
+    const agreement=w.signalAgreement||waiverSignalAgreement(w);
+    let confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
+    if(w.waiverOnly){
+      confidence=agreement.strong?"HIGH":agreement.actionable?"MEDIUM":"LOW";
+    }
+    let faabBase=mode==="DYNASTY"
       ? Math.min(22,Math.max(2,Math.round((w.marketDelta||0)*.7+(w.weeklyDelta||0)*4)))
       : w.stash
         ? Math.min(12,Math.max(2,Math.round((w.depthDelta||0)*2+Math.log10(1+(w.trending||0))*2)))
         : Math.min(28,Math.max(2,Math.round((w.weeklyDelta||0)*6+Math.log10(1+(w.trending||0))*3)));
+    if(w.waiverOnly && !agreement.strong)faabBase=Math.min(faabBase,8);
     const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
     actions.push({
       type:"ADD_DROP",priority:i+1,confidence,
       claimRank:w.claimRank??i+1,claimRole:w.claimRole||(i===0?"PRIMARY":"BACKUP"),
-      headline:w.specialistMode==="STREAM_SWAP"
-        ? `Stream ${w.add}, drop ${w.drop}`
-        : w.specialistMode==="BYE_HOLD"
-          ? `Short-term hold ${w.add}, drop ${w.drop}`
-          : `${w.stash?"Stash":"Add"} ${w.add}, drop ${w.drop}`,
-      why:mode==="DYNASTY"
-        ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
+      headline:w.waiverOnly
+        ? `Claim ${w.add}, drop ${w.drop}`
+        : w.specialistMode==="STREAM_SWAP"
+          ? `Stream ${w.add}, drop ${w.drop}`
+          : w.specialistMode==="BYE_HOLD"
+            ? `Short-term hold ${w.add}, drop ${w.drop}`
+            : `${w.stash?"Stash":"Add"} ${w.add}, drop ${w.drop}`,
+      why:w.waiverOnly
+        ? `Next-waiver scout: this player's game has started, so this is not an immediate add. ${agreement.count} independent signals agree, including ${[
+            agreement.role?"role":null,agreement.injury?"injury opportunity":null,
+            agreement.market?"add heat":null,agreement.value?"future value":null
+          ].filter(Boolean).join(", ")}.`
+        : mode==="DYNASTY"
+          ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
         : w.specialistMode==="STREAM_SWAP"
           ? `DST/K roster construction: this is a specialist-for-specialist stream, not a second specialist using a skill-position bench spot. ${w.streamWeekEdge==null?"":`This week ${w.streamWeekEdge>=0?"+":""}${w.streamWeekEdge.toFixed(1)}; `}${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} projected points/week across the short horizon.`
           : w.specialistMode==="BYE_HOLD"
@@ -548,7 +560,7 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
                 ? `Injury-created stash: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value, with ${Number(w.injuryOpportunity.edgePct||0).toFixed(1)}% short-term opportunity from unavailable teammate workload.`
                 : `Bench-upside screen: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value with a real role/trend breakout signal; no immediate starter gain is required.`
               : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
-      window:"BEFORE WAIVERS",
+      window:w.waiverOnly?"NEXT WAIVER RUN":"BEFORE WAIVERS",
       add:{name:w.add},drop:{name:w.drop},faabPct,
       drivers:[
         w.injuryOpportunity?.applied?"injury_opportunity":(w.stash?"role":"depth"),
@@ -560,6 +572,8 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
       rosterFitReason:w.rosterFitReason||null,
       breakoutScore:w.breakoutScore??null,marketDelta:w.marketDelta??null,
       trendDelta:w.trendDelta??null,trendVelocity:w.trendVelocity??null,
+      fastTrending:w.fastTrending??0,waiverOnly:!!w.waiverOnly,
+      signalCount:agreement.count,signalAgreement:agreement,
       injuryOpportunity:w.injuryOpportunity||null,
       tdDependency:w.tdDependency??null,mirageRisk:w.mirageRisk??0,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
