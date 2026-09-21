@@ -1451,6 +1451,7 @@ Return ONLY valid JSON:
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
         teamState,
+        acquisition,
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
         waiver:{usesFaab,total:faabTotal,used:faabUsed,remaining:faabRemaining},
@@ -1463,10 +1464,16 @@ Return ONLY valid JSON:
         baselineNext3Lineup:baselineRosterTotal,
         waiverPlan,
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
+        liveRoleAlerts:free.filter(p=>p.liveRole).slice(0,8).map(p=>({
+          name:p.name,pos:p.pos,team:p.team,waiverOnly:p.waiverOnly,
+          immediateFreeAgent:p.immediateFreeAgent,liveRole:p.liveRole
+        })),
         rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
         noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
         depthProtection:"redraft protects one RB and WR beyond dedicated starting slots unless a cross-position move adds at least 2.5 pts/week",
-        gameDayLegality:"played/playing free agents remain visible as next-waiver targets; they are never presented as immediate adds. Specialist streams still require an unlocked game.",
+        gameDayLegality:acquisition.canAddStartedPlayers
+          ?"Team Ocho uses open free agency: live RB/WR/TE breakouts can be immediate adds when role evidence clears the actionability screen."
+          :"Started players are next-waiver targets only; unlocked free agents can still be added immediately.",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         trendingSnapshot:trendById,
