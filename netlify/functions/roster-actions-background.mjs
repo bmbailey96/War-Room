@@ -35,6 +35,18 @@ async function txt(url){
 const n=v=>v==null||v===""||Number.isNaN(+v)?0:+v;
 const round=x=>Math.round(x*10)/10;
 
+async function allPlayHistory(s,leagueId,week){
+  const key=`all_play_${leagueId}_${week}`;
+  const cached=await s.get(key,{type:"json"}).catch(()=>null);
+  if(cached&&Date.now()-Number(cached.at||0)<6*60*60*1000)return cached.weeks||[];
+  const completed=Array.from({length:Math.max(0,Number(week)-1)},(_,i)=>i+1);
+  const weeks=await Promise.all(completed.map(w=>
+    j(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${w}`).catch(()=>[])
+  ));
+  await s.setJSON(key,{at:Date.now(),weeks}).catch(()=>{});
+  return weeks;
+}
+
 export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
   if(elapsedHours==null || !Number.isFinite(Number(elapsedHours)) || Number(elapsedHours)<=0){
     return {delta:0,perHour:0};
@@ -665,7 +677,6 @@ export default async req=>{
     const reserveUsed=Array.isArray(me.reserve)?me.reserve.length:0;
     const openReserveSlots=Math.max(0,reserveSlots-reserveUsed);
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const completedWeeks=Array.from({length:Math.max(0,week-1)},(_,i)=>i+1);
     const [proj,formContext,lineupData,market,gamesCsv,injuryCsv,liveStatsRaw,historicalMatchups]=await Promise.all([
       projectionMap(season,week,league,db),
       recentFormMap(season,week,league),
@@ -675,9 +686,7 @@ export default async req=>{
       txt("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
       txt(`${NV}/injuries/injuries_${season}.csv`),
       j(`https://api.sleeper.app/v1/stats/nfl/regular/${season}/${week}`).catch(()=>({})),
-      Promise.all(completedWeeks.map(w=>
-        j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${w}`).catch(()=>[])
-      ))
+      allPlayHistory(s,chosen.id,week)
     ]);
     const allPlay=buildAllPlayMetrics(historicalMatchups,me.rosterId,me.wins);
     const teamState=diagnoseTeamState(snapshot.teams,me,{allPlay});
