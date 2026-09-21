@@ -13,8 +13,49 @@ function ordinal(n){
   if(mod>=11&&mod<=13)return `${x}th`;
   return `${x}${x%10===1?"st":x%10===2?"nd":x%10===3?"rd":"th"}`;
 }
+function matchupScore(row){
+  if(row?.points!=null&&Number.isFinite(Number(row.points)))return Number(row.points);
+  if(row?.custom_points!=null&&Number.isFinite(Number(row.custom_points)))return Number(row.custom_points);
+  return null;
+}
 
-export function diagnoseTeamState(teams=[],me=null){
+export function buildAllPlayMetrics(weeks=[],rosterId=null,actualWins=0){
+  if(rosterId==null)return null;
+  let expectedWins=0,pairWins=0,pairTies=0,pairGames=0,scoredWeeks=0;
+
+  for(const week of weeks||[]){
+    const rows=Array.isArray(week)?week:(week?.rows||[]);
+    const mine=rows.find(r=>Number(r?.roster_id)===Number(rosterId));
+    const mineScore=matchupScore(mine);
+    if(mineScore==null)continue;
+    const others=rows.filter(r=>Number(r?.roster_id)!==Number(rosterId))
+      .map(r=>matchupScore(r)).filter(Number.isFinite);
+    if(!others.length)continue;
+
+    let wins=0,ties=0;
+    for(const score of others){
+      if(mineScore>score)wins++;
+      else if(Math.abs(mineScore-score)<1e-9)ties++;
+    }
+    expectedWins+=(wins+ties*.5)/others.length;
+    pairWins+=wins;
+    pairTies+=ties;
+    pairGames+=others.length;
+    scoredWeeks++;
+  }
+
+  if(!scoredWeeks||!pairGames)return null;
+  const actual=Number(actualWins||0);
+  return {
+    weeks:scoredWeeks,
+    expectedWins:round1(expectedWins),
+    actualWins:actual,
+    luckWins:round1(actual-expectedWins),
+    allPlayWinPct:round1((pairWins+pairTies*.5)/pairGames*100),
+  };
+}
+
+export function diagnoseTeamState(teams=[],me=null,{allPlay=null}={}){
   if(!me)return {
     code:"UNKNOWN",label:"TEAM STATE UNKNOWN",confidence:"LOW",
     aggression:1,tradePosture:"neutral",summary:"Not enough team data yet."
@@ -56,8 +97,14 @@ export function diagnoseTeamState(teams=[],me=null){
   const injuries=Array.isArray(me.injured)?me.injured.length:0;
   const losing=Number(me.losses||0)>Number(me.wins||0);
   const strongUnderlying=potentialRank!=null&&potentialRank<=half;
-  const scoringStrong=pfRank!=null&&pfRank<=half;
   const hardSchedule=pointsAgainstRank!=null&&pointsAgainstRank<=topThird;
+  const allPlayWeeks=Number(allPlay?.weeks||0);
+  const allPlayWinPct=allPlay?.allPlayWinPct==null?null:Number(allPlay.allPlayWinPct);
+  const expectedWins=allPlay?.expectedWins==null?null:Number(allPlay.expectedWins);
+  const luckWins=allPlay?.luckWins==null?null:Number(allPlay.luckWins);
+  const unluckyAllPlay=
+    allPlayWeeks>=2 && allPlayWinPct!=null && allPlayWinPct>=50 &&
+    luckWins!=null && luckWins<=-.6;
   const rankLeak=pfRank!=null&&potentialRank!=null?pfRank-potentialRank:0;
   const lineupLeak=strongUnderlying && rankLeak>=2 && executionRate<.94;
 
@@ -68,7 +115,7 @@ export function diagnoseTeamState(teams=[],me=null){
   }else if(lineupLeak){
     code="LINEUP_LEAK";label="LINEUP EXECUTION";
     aggression=.95;tradePosture="fix_lineup";
-  }else if(strongUnderlying&&losing&&hardSchedule){
+  }else if(strongUnderlying&&losing&&(unluckyAllPlay||hardSchedule)){
     code="SCHEDULE_VARIANCE";label="BAD-LUCK SCHEDULE";
     aggression=.86;tradePosture="hold_value";
   }else if(strongUnderlying&&losing){
@@ -89,6 +136,9 @@ export function diagnoseTeamState(teams=[],me=null){
   const rankText=pfRank&&potentialRank
     ? `PF ${ordinal(pfRank)}/${n}, potential ${ordinal(potentialRank)}/${n}`
     : "league ranks unavailable";
+  const allPlayText=allPlayWeeks>=2&&expectedWins!=null&&allPlayWinPct!=null
+    ? ` All-play ${Math.round(allPlayWinPct)}% (${expectedWins.toFixed(1)} expected wins vs ${Number(me.wins||0)} actual).`
+    : "";
   let directive;
   if(code==="LINEUP_LEAK")directive="Prioritize start/sit accuracy over roster churn.";
   else if(code==="SCHEDULE_VARIANCE"||code==="PROCESS_OK")directive="Do not sell low because of the record.";
@@ -104,7 +154,11 @@ export function diagnoseTeamState(teams=[],me=null){
     pointsAgainstPerGame:round1(mine.pa),benchLeakPerGame:round1(mine.leakage),
     executionRate:round1(executionRate*100),
     pfRank,potentialRank,pointsAgainstRank,
+    allPlayWeeks:allPlayWeeks||0,
+    allPlayExpectedWins:expectedWins==null?null:round1(expectedWins),
+    allPlayWinPct:allPlayWinPct==null?null:round1(allPlayWinPct),
+    scheduleLuckWins:luckWins==null?null:round1(luckWins),
     injuries,
-    summary:`${rankText}. ${directive}`
+    summary:`${rankText}.${allPlayText} ${directive}`.replace(/\s+/g," ").trim()
   };
 }
