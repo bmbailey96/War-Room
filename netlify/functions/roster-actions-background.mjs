@@ -11,6 +11,9 @@ import lineup, {
 } from "./lineup.mjs";
 import { detectLeagueMode,validateActions } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
+import {
+  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge
+} from "./lib/opportunity-v2.mjs";
 
 const NV="https://github.com/nflverse/nflverse-data/releases/download";
 async function j(url){
@@ -119,10 +122,10 @@ async function recentFormMap(season,week,league){
     txt(`${NV}/stats_player/stats_player_week_${season-1}.csv`)
   ]);
   const wanted=[
-    "player_display_name","position","week","season_type",
+    "player_display_name","position","week","team","season_type",
     "completions","attempts","passing_yards","passing_tds","passing_interceptions","passing_fumbles_lost",
     "carries","rushing_yards","rushing_tds","rushing_fumbles_lost",
-    "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost",
+    "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost","receiving_air_yards",
     "target_share","air_yards_share","wopr",
     "passing_first_downs","rushing_first_downs","receiving_first_downs",
     "passing_2pt_conversions","rushing_2pt_conversions","receiving_2pt_conversions"
@@ -138,8 +141,12 @@ async function recentFormMap(season,week,league){
     for(const rows of Object.values(out))rows.sort((a,b)=>n(a.week)-n(b.week));
     return out;
   };
-  const cur=group(parseCsv(curTxt,wanted).filter(r=>n(r.week)<=week));
-  const prior=group(parseCsv(priorTxt,wanted));
+  const currentRows=parseCsv(curTxt,wanted)
+    .filter(r=>(!r.season_type||r.season_type==="REG")&&n(r.week)<=week);
+  const priorRows=parseCsv(priorTxt,wanted)
+    .filter(r=>!r.season_type||r.season_type==="REG");
+  const cur=group(currentRows);
+  const prior=group(priorRows);
   const names=new Set([...Object.keys(cur),...Object.keys(prior)]);
   const out={};
 
@@ -162,7 +169,7 @@ async function recentFormMap(season,week,league){
       roleRatio:round(roleRatio),
     };
   }
-  return out;
+  return {map:out,currentRows,priorRows};
 }
 
 export function blendedRosterForecast(providerAvg,form){
@@ -487,7 +494,7 @@ export default async req=>{
     const usesFaab=faabTotal>0;
     const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const [proj,formMap,lineupData,market,gamesCsv,injuryCsv]=await Promise.all([
+    const [proj,formContext,lineupData,market,gamesCsv,injuryCsv]=await Promise.all([
       projectionMap(season,week,league,db),
       recentFormMap(season,week,league),
       lineup(new Request(`${url.origin}/.netlify/functions/lineup?league=${encodeURIComponent(chosen.id)}`))
@@ -498,6 +505,22 @@ export default async req=>{
     ]);
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
     const officialInjuries=currentOfficialInjuries(injuryCsv,week);
+    const formMap=formContext?.map||{};
+    const opportunityProfiles=buildOpportunityProfiles(
+      formContext?.currentRows||[],formContext?.priorRows||[],week
+    );
+    const unavailableForOpportunity=new Set([
+      ...Object.entries(officialInjuries)
+        .filter(([,v])=>hardInjured(v?.status))
+        .map(([name])=>name),
+      ...Object.values(db||{})
+        .filter(p=>hardInjured(p?.inj))
+        .map(p=>normName(p?.n||""))
+        .filter(Boolean),
+    ]);
+    const vacatedByTeam=buildVacatedOpportunity(
+      opportunityProfiles,unavailableForOpportunity
+    );
     const marketValue=name=>market.players?.[normName(name)]?.value??null;
     const rankedTeams=[...snapshot.teams].sort((a,b)=>(b.wins-a.wins)||(b.pointsFor-a.pointsFor));
     const tierOfOriginal=original=>{
