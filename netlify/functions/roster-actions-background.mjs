@@ -698,6 +698,9 @@ export function deterministicRosterFallback({
       horizonSend:t.horizonSend??null,horizonReceive:t.horizonReceive??null,
       tradeRatio:t.tradeRatio??null,
       marketDelta:t.marketDelta??null,managerFit:t.managerFit??null,
+      tradeTiming:t.tradeTiming||null,
+      sentTradeTiming:t.sentTradeTiming||[],
+      timingScore:t.timingScore??null,
       partnerCareerTrades:t.partnerCareerTrades??null,
     });
   }
@@ -1342,6 +1345,8 @@ Hard rules:
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
 - Do not recommend lateral churn.
+- Role-vs-box-score trade timing is a SOFT factor only. BUY_LOW means underlying role is ahead of recent fantasy scoring; SELL_HIGH means recent scoring is ahead of role with touchdown/mirage support. Never let timing make an unfair trade fair.
+- Avoid selling my BUY_LOW players merely because the recent box score is weak. Prefer SELL_HIGH outgoing assets only when the trade already improves my roster.
 - Do not treat a losing record by itself as evidence the roster is bad. Respect TEAM STATE DIAGNOSIS.
 - If TEAM STATE says BAD-LUCK SCHEDULE or RESULTS LAGGING, suppress panic sells and marginal trades.
 - If TEAM STATE says LINEUP EXECUTION, do not try to solve a start/sit problem with unnecessary roster churn.
@@ -1496,6 +1501,10 @@ Return ONLY valid JSON:
           roleRatio:primaryGet?.roleRatio??null,
           recentPts:primaryGet?.recentPts??null,
           providerNext3:primaryGet?.providerNext3??null,
+          tradeTiming:primaryGet?.tradeTiming||roleMarketTiming(primaryGet||{}),
+          sentTradeTiming:sentPlayers.map(p=>({
+            name:p.name,...(p.tradeTiming||roleMarketTiming(p))
+          })),
         };
       }
       return a;
@@ -1590,6 +1599,7 @@ Return ONLY valid JSON:
         redraftTradeHorizon:"up to six projected weeks, blended with current form and official injury status",
         replacementByPos,
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
+        tradeTimingModel:"role vs recent box score is a soft ranking factor; it never overrides lineup gain, partner plausibility, or dynasty/redraft value efficiency",
       },
       reasoningMode:(coreOnly||error)?"deterministic":"live_news",
       reasoningAvailable:!coreOnly&&!error,
