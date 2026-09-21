@@ -1190,7 +1190,7 @@ assert.equal(typeof sundayPulse.default,"function");
 assert.equal(typeof sundayLatePulse.default,"function");
 assert.equal(typeof lineupPulse.default,"function");
 assert.equal(typeof lineupLatePulse.default,"function");
-assert.ok(sundayPulse.config?.schedule.includes("*/30"));
+assert.ok(sundayPulse.config?.schedule.includes("*/10"));
 assert.ok(lineupPulse.config?.schedule.includes("*/15"));
 
 console.log("Sunday pulse freshness and next-waiver scouting checks passed");
@@ -1252,3 +1252,95 @@ const noPanicTrade=deterministicRosterFallback({
 assert.equal(noPanicTrade.actions[0].type,"HOLD");
 
 console.log("Team-state diagnosis and anti-panic behavior checks passed");
+
+
+const { acquisitionPolicy } = await import("../netlify/functions/lib/roster-v2.mjs");
+const {
+  normalizeSleeperWeekStats,liveRoleEmergence
+} = await import("../netlify/functions/lib/live-market.mjs");
+
+const ochoPolicy=acquisitionPolicy({name:"The Ocho"});
+assert.equal(ochoPolicy.mode,"OPEN_FA");
+assert.equal(ochoPolicy.canAddStartedPlayers,true);
+const funPolicy=acquisitionPolicy({name:"Teenypetes"});
+assert.equal(funPolicy.mode,"WAIVERS");
+assert.equal(funPolicy.canAddStartedPlayers,false);
+
+const liveWr=liveRoleEmergence({
+  pos:"WR",progress:.5,baselineTargets:5,
+  stats:{rec_tgt:6,off_snp:32,tm_off_snp:45}
+});
+assert.equal(liveWr.strong,true);
+assert.ok(liveWr.targetPace>=12);
+assert.ok(liveWr.snapShare>=70);
+
+const touchdownOnly=liveRoleEmergence({
+  pos:"WR",progress:.5,baselineTargets:5,
+  stats:{rec_td:2,rec_yd:82}
+});
+assert.equal(touchdownOnly,null);
+
+const liveRb=liveRoleEmergence({
+  pos:"RB",progress:.55,baselineCarries:7,baselineTargets:2,
+  stats:{rush_att:8,rec_tgt:3,off_snp:30,tm_off_snp:43}
+});
+assert.equal(liveRb.strong,true);
+assert.ok(liveRb.touchPace>=19);
+
+const normalized=normalizeSleeperWeekStats({
+  "wr1":{rec_tgt:5},
+  "rb1":{stats:{rush_att:9}}
+});
+assert.equal(normalized.wr1.rec_tgt,5);
+assert.equal(normalized.rb1.rush_att,9);
+
+const liveAgreement=waiverSignalAgreement({
+  liveRole:liveWr,depthDelta:2,weeklyDelta:0,marketDelta:0,
+  fastTrending:0,trendVelocity:0,mirageRisk:0
+});
+assert.equal(liveAgreement.liveRole,true);
+assert.equal(liveAgreement.actionable,true);
+
+assert.equal(waiverMoveActionable({
+  immediateFreeAgent:true,liveRole:liveWr,depthDelta:2,weeklyDelta:0,
+  marketDelta:0,fastTrending:0,trendVelocity:0,mirageRisk:0,stash:true
+},"DYNASTY"),true);
+
+const immediateAdd=deterministicRosterFallback({
+  mode:"DYNASTY",usesFaab:false,
+  waivers:[{
+    add:"Emerging WR",drop:"Bench WR",weeklyDelta:0,depthDelta:2,
+    marketDelta:0,liveRole:liveWr,immediateFreeAgent:true,stash:true,
+    signalAgreement:liveAgreement
+  }],
+  trades:[]
+});
+assert.equal(immediateAdd.actions[0].window,"NOW");
+assert.match(immediateAdd.actions[0].headline,/Add Emerging WR now/);
+
+const { buildAllPlayMetrics } = await import("../netlify/functions/lib/team-state.mjs");
+const allPlay=buildAllPlayMetrics([
+  [
+    {roster_id:1,points:100},{roster_id:2,points:130},
+    {roster_id:3,points:110},{roster_id:4,points:90}
+  ],
+  [
+    {roster_id:1,points:120},{roster_id:2,points:130},
+    {roster_id:3,points:110},{roster_id:4,points:100}
+  ]
+],1,0);
+assert.equal(allPlay.expectedWins,1);
+assert.equal(allPlay.allPlayWinPct,50);
+assert.equal(allPlay.luckWins,-1);
+
+const allPlayScheduleLoss=diagnoseTeamState([
+  {rosterId:1,wins:0,losses:2,pointsFor:220,pointsAgainst:180,benchLeakage:20,injured:[]},
+  {rosterId:2,wins:2,losses:0,pointsFor:210,pointsAgainst:260,benchLeakage:12,injured:[]},
+  {rosterId:3,wins:1,losses:1,pointsFor:200,pointsAgainst:240,benchLeakage:10,injured:[]},
+  {rosterId:4,wins:1,losses:1,pointsFor:190,pointsAgainst:220,benchLeakage:10,injured:[]},
+],{rosterId:1,wins:0,losses:2,pointsFor:220,pointsAgainst:180,benchLeakage:20,injured:[]},{allPlay});
+assert.equal(allPlayScheduleLoss.code,"SCHEDULE_VARIANCE");
+assert.equal(allPlayScheduleLoss.pointsAgainstRank,4);
+assert.equal(allPlayScheduleLoss.allPlayExpectedWins,1);
+
+console.log("Open-FA live breakout and all-play diagnosis checks passed");
