@@ -5,7 +5,9 @@ import {
   getPlayersTrim,pInfo,slotPos,store,callClaude
 } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
-import { rosterActionsCacheKey,rosterActionsLockKey } from "./lib/roster-cache.mjs";
+import {
+  rosterActionsCacheKey,rosterActionsLockKey,rosterActionsFreshnessMs,rosterFreshnessLabel
+} from "./lib/roster-cache.mjs";
 import lineup, {
   scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean,easternKickoffMs
 } from "./lineup.mjs";
@@ -35,6 +37,22 @@ export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
   }
   const delta=Math.max(0,Number(current||0)-Number(prior||0));
   return {delta:round(delta),perHour:round(delta/Math.max(.1,Number(elapsedHours)))};
+}
+
+export function postGameWaiverForecast(player,week){
+  if(!player)return 0;
+  if(!player.gameLocked)return Number(player.next3||0);
+  const vals=[week+1,week+2,week+3]
+    .map(w=>player.weeks?.[w])
+    .filter(v=>v!=null&&Number.isFinite(Number(v)))
+    .map(Number);
+  return vals.length?round(vals.reduce((a,b)=>a+b,0)/vals.length):Number(player.next3||0);
+}
+
+function actionForecast(player,week){
+  return player?.gameLocked
+    ? postGameWaiverForecast(player,week)
+    : Number(player?.next3||0);
 }
 
 export function redraftTradeEfficient({
@@ -564,7 +582,8 @@ export default async req=>{
 
     const s=store(),cacheKey=rosterActionsCacheKey(chosen.id);
     const cached=await s.get(cacheKey,{type:"json"}).catch(()=>null);
-    if(!force&&cached&&Date.now()-(cached.at||0)<4*60*60*1000){
+    const now=Date.now(),freshnessMs=rosterActionsFreshnessMs(now);
+    if(!force&&cached&&now-(cached.at||0)<freshnessMs){
       return new Response(JSON.stringify(cached),{headers:{"content-type":"application/json","cache-control":"no-store"}});
     }
 
