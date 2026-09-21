@@ -1194,3 +1194,61 @@ assert.ok(sundayPulse.config?.schedule.includes("*/30"));
 assert.ok(lineupPulse.config?.schedule.includes("*/15"));
 
 console.log("Sunday pulse freshness and next-waiver scouting checks passed");
+
+
+const { diagnoseTeamState } = await import("../netlify/functions/lib/team-state.mjs");
+
+const scheduleVariance=diagnoseTeamState([
+  {rosterId:1,wins:0,losses:2,pointsFor:220,pointsAgainst:300,benchLeakage:10,injured:[]},
+  {rosterId:2,wins:2,losses:0,pointsFor:210,pointsAgainst:180,benchLeakage:14,injured:[]},
+  {rosterId:3,wins:1,losses:1,pointsFor:200,pointsAgainst:200,benchLeakage:12,injured:[]},
+  {rosterId:4,wins:1,losses:1,pointsFor:190,pointsAgainst:190,benchLeakage:10,injured:[]},
+],{rosterId:1,wins:0,losses:2,pointsFor:220,pointsAgainst:300,benchLeakage:10,injured:[]});
+assert.equal(scheduleVariance.code,"SCHEDULE_VARIANCE");
+assert.ok(scheduleVariance.aggression<1);
+assert.equal(scheduleVariance.tradePosture,"hold_value");
+
+const lineupLeak=diagnoseTeamState([
+  {rosterId:1,wins:0,losses:2,pointsFor:180,pointsAgainst:220,benchLeakage:80,injured:[]},
+  {rosterId:2,wins:2,losses:0,pointsFor:230,pointsAgainst:180,benchLeakage:10,injured:[]},
+  {rosterId:3,wins:1,losses:1,pointsFor:210,pointsAgainst:200,benchLeakage:10,injured:[]},
+  {rosterId:4,wins:1,losses:1,pointsFor:200,pointsAgainst:190,benchLeakage:10,injured:[]},
+],{rosterId:1,wins:0,losses:2,pointsFor:180,pointsAgainst:220,benchLeakage:80,injured:[]});
+assert.equal(lineupLeak.code,"LINEUP_LEAK");
+assert.equal(lineupLeak.tradePosture,"fix_lineup");
+
+const rosterWeak=diagnoseTeamState([
+  {rosterId:1,wins:0,losses:2,pointsFor:160,pointsAgainst:220,benchLeakage:10,injured:[]},
+  {rosterId:2,wins:2,losses:0,pointsFor:240,pointsAgainst:180,benchLeakage:16,injured:[]},
+  {rosterId:3,wins:1,losses:1,pointsFor:220,pointsAgainst:200,benchLeakage:14,injured:[]},
+  {rosterId:4,wins:1,losses:1,pointsFor:205,pointsAgainst:190,benchLeakage:12,injured:[]},
+],{rosterId:1,wins:0,losses:2,pointsFor:160,pointsAgainst:220,benchLeakage:10,injured:[]});
+assert.equal(rosterWeak.code,"ROSTER_UPGRADE");
+assert.ok(rosterWeak.aggression>1);
+assert.equal(rosterWeak.tradePosture,"consolidate");
+
+const aggressiveFaab=deterministicRosterFallback({
+  mode:"REDRAFT",usesFaab:true,faabRemainingPct:100,
+  teamState:rosterWeak,
+  waivers:[{add:"Upgrade",drop:"Bench",weeklyDelta:2,depthDelta:2,trending:0}],
+  trades:[]
+});
+const patientFaab=deterministicRosterFallback({
+  mode:"REDRAFT",usesFaab:true,faabRemainingPct:100,
+  teamState:scheduleVariance,
+  waivers:[{add:"Upgrade",drop:"Bench",weeklyDelta:2,depthDelta:2,trending:0}],
+  trades:[]
+});
+assert.ok(aggressiveFaab.actions[0].faabPct>patientFaab.actions[0].faabPct);
+
+const noPanicTrade=deterministicRosterFallback({
+  mode:"REDRAFT",usesFaab:false,teamState:scheduleVariance,
+  waivers:[],
+  trades:[{
+    target:"Marginal Target",partner:"Rival",weeklyDelta:1.1,partnerWeeklyDelta:.2,
+    why:"Small improvement",send:[{type:"player",name:"Bench"}]
+  }]
+});
+assert.equal(noPanicTrade.actions[0].type,"HOLD");
+
+console.log("Team-state diagnosis and anti-panic behavior checks passed");
