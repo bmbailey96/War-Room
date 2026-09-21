@@ -899,9 +899,8 @@ export default async req=>{
       for(const drop of drops.slice(0,8)){
         if(add.pid===drop.pid)continue;
 
-        // A player whose NFL game has started is no longer an immediate add,
-        // but Sunday scouting should preserve him for the next waiver run.
-        // For those players, value FUTURE weeks only.
+        // Started-player acquisition is league-specific. The fun league
+        // pushes him to the next waiver run; Team Ocho remains open FA.
         if(add.gameLocked && SPECIALIST_POSITIONS.has(add.pos))continue;
         const addForSim=add.gameLocked
           ? {...add,next3:postGameWaiverForecast(add,week)}
@@ -923,6 +922,7 @@ export default async req=>{
           : {thisWeekEdge:null,next3Edge:null};
 
         const roleSurge=Math.max(0,Number(add.roleRatio||1)-1);
+        const liveRoleSignal=add.liveRole?.strong?2:add.liveRole?1:0;
         const trendSignal=Math.log10(1+Number(add.trending||0));
         const velocitySignal=Math.log10(1+Number(add.trendVelocity||0));
         const injurySignal=add.injuryOpportunity?.applied
@@ -930,10 +930,10 @@ export default async req=>{
           : 0;
         const mirageRisk=Math.max(0,Number(add.mirageRisk||0));
         const breakoutScore=round(
-          roleSurge*10+trendSignal+velocitySignal*1.5+injurySignal*.7-mirageRisk*3
+          roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+injurySignal*.7-mirageRisk*3
         );
         const independentOpportunity=
-          roleSurge>=.08 || injurySignal>=1.5;
+          roleSurge>=.08 || injurySignal>=1.5 || !!add.liveRole?.strong;
         const stash=!SPECIALIST_POSITIONS.has(add.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
           (
@@ -947,8 +947,9 @@ export default async req=>{
         const agreement=waiverSignalAgreement({
           weeklyDelta,depthDelta,marketDelta,
           addRoleRatio:add.roleRatio,injuryOpportunity:add.injuryOpportunity,
+          liveRole:add.liveRole,
           fastTrending:add.fastTrending,trendVelocity:add.trendVelocity,
-          mirageRisk:add.mirageRisk,waiverOnly:add.gameLocked
+          mirageRisk:add.mirageRisk,waiverOnly:add.waiverOnly
         });
         const agreementBonus=Math.max(0,agreement.count-1)*1.1;
         const score=mode==="DYNASTY"
@@ -964,9 +965,11 @@ export default async req=>{
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
           fastTrending:add.fastTrending??0,
           trendDelta:add.trendDelta,trendVelocity:add.trendVelocity,
-          waiverOnly:!!add.gameLocked,kickoffAt:add.kickoffAt||null,
+          waiverOnly:!!add.waiverOnly,immediateFreeAgent:!!add.immediateFreeAgent,
+          kickoffAt:add.kickoffAt||null,
           signalCount:agreement.count,signalAgreement:agreement,
           injuryOpportunity:add.injuryOpportunity||null,
+          liveRole:add.liveRole||null,
           injuryOpportunityBonus:add.injuryOpportunityBonus||0,
           tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
