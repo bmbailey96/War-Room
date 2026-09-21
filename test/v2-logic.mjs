@@ -863,11 +863,17 @@ console.log("Ranked waiver-plan checks passed");
 
 
 const {
-  ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey
+  ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey,
+  rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
-assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v5");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v5_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v5_123");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v6");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v6_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v6_123");
+const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
+const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
+assert.equal(rosterActionsFreshnessMs(sundayNoon),20*60*1000);
+assert.equal(rosterFreshnessLabel(sundayNoon),"SUNDAY_PULSE");
+assert.equal(rosterActionsFreshnessMs(wednesdayNoon),4*60*60*1000);
 
 let dynastySpecialist=specialistRosterDecision({
   mode:"DYNASTY",
@@ -1122,3 +1128,66 @@ assert.equal(reserveEligibility("Suspended",{reserve_allow_sus:0}),false);
 assert.equal(reserveEligibility("Questionable",{reserve_allow_out:1}),false);
 
 console.log("League-specific IR eligibility checks passed");
+
+
+const {
+  postGameWaiverForecast,waiverSignalAgreement
+} = await import("../netlify/functions/roster-actions-background.mjs");
+
+assert.equal(postGameWaiverForecast({
+  gameLocked:true,next3:20,weeks:{3:20,4:11,5:13,6:15}
+},3),13);
+assert.equal(postGameWaiverForecast({
+  gameLocked:false,next3:12,weeks:{4:20,5:20}
+},3),12);
+
+let agreement=waiverSignalAgreement({
+  waiverOnly:true,fastTrending:80,trendVelocity:25,
+  weeklyDelta:0,depthDelta:0,roleRatio:1,mirageRisk:0
+});
+assert.equal(agreement.market,true);
+assert.equal(agreement.count,1);
+assert.equal(agreement.actionable,false);
+
+agreement=waiverSignalAgreement({
+  waiverOnly:true,fastTrending:80,trendVelocity:25,
+  weeklyDelta:1.4,depthDelta:1.8,roleRatio:1,mirageRisk:0
+});
+assert.equal(agreement.count,2);
+assert.equal(agreement.actionable,true);
+
+agreement=waiverSignalAgreement({
+  waiverOnly:true,fastTrending:80,weeklyDelta:1.4,
+  roleRatio:1,mirageRisk:.7
+});
+assert.equal(agreement.actionable,false);
+
+const sundayClaim=deterministicRosterFallback({
+  mode:"REDRAFT",usesFaab:true,faabRemainingPct:100,
+  waivers:[{
+    add:"Sunday Breakout",drop:"Bench End",waiverOnly:true,
+    weeklyDelta:1.4,depthDelta:1.8,fastTrending:80,trendVelocity:25,
+    signalCount:2,signalAgreement:waiverSignalAgreement({
+      waiverOnly:true,fastTrending:80,trendVelocity:25,weeklyDelta:1.4,depthDelta:1.8
+    }),
+    trending:300,stash:false
+  }],
+  trades:[]
+});
+assert.ok(sundayClaim.actions[0].headline.startsWith("Claim Sunday Breakout"));
+assert.equal(sundayClaim.actions[0].window,"NEXT WAIVER RUN");
+assert.equal(sundayClaim.actions[0].waiverOnly,true);
+assert.ok(sundayClaim.actions[0].faabPct<=8);
+
+const sundayPulse=await import("../netlify/functions/roster-sunday-pulse.mjs");
+const sundayLatePulse=await import("../netlify/functions/roster-sunday-late-pulse.mjs");
+const lineupPulse=await import("../netlify/functions/lineup-sunday-pulse.mjs");
+const lineupLatePulse=await import("../netlify/functions/lineup-sunday-late-pulse.mjs");
+assert.equal(typeof sundayPulse.default,"function");
+assert.equal(typeof sundayLatePulse.default,"function");
+assert.equal(typeof lineupPulse.default,"function");
+assert.equal(typeof lineupLatePulse.default,"function");
+assert.ok(sundayPulse.config?.schedule.includes("*/30"));
+assert.ok(lineupPulse.config?.schedule.includes("*/15"));
+
+console.log("Sunday pulse freshness and next-waiver scouting checks passed");
