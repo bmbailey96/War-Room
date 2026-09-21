@@ -412,15 +412,39 @@ export function positionalDepthDecision({
   return {allowed:true,reason:null};
 }
 
+export function waiverSignalAgreement(x={}){
+  const role=Number(x.addRoleRatio||x.roleRatio||1)>=1.08;
+  const injury=!!x.injuryOpportunity?.applied && Number(x.injuryOpportunity?.edgePct||0)>=1.5;
+  const market=Number(x.fastTrending||0)>=15 || Number(x.trendVelocity||0)>=8;
+  const value=Number(x.weeklyDelta||0)>=.75 || Number(x.depthDelta||0)>=1.5 ||
+    Number(x.marketDelta||0)>=6;
+  const mirage=Number(x.mirageRisk||0)>=.45;
+  const count=[role,injury,market,value].filter(Boolean).length;
+  return {
+    count,role,injury,market,value,mirage,
+    strong:count>=3&&!mirage,
+    actionable:count>=2 && (value||injury) && !(mirage&&count<3)
+  };
+}
+
 export function waiverMoveActionable(x,mode="REDRAFT"){
   if(!x)return false;
+  const agreement=waiverSignalAgreement(x);
+
+  // Once the player's game has started, this is scouting for the NEXT
+  // waiver run. Require corroboration instead of chasing a Sunday spike.
+  if(x.waiverOnly){
+    if(mode==="DYNASTY" && Number(x.marketDelta||0)>=8 && agreement.count>=2)return true;
+    return agreement.actionable;
+  }
+
   if(mode==="DYNASTY")return (x.weeklyDelta??0)>=.5 || (x.marketDelta??0)>=6;
   if(x.specialistMode==="STREAM_SWAP"){
     if(x.streamWeekEdge!=null)return x.streamWeekEdge>=1 || (x.streamNext3Edge??0)>=1;
     return (x.weeklyDelta??0)>=.75;
   }
   if(x.specialistMode==="BYE_HOLD")return true;
-  if(x.stash&&(x.depthDelta??0)>=1.5)return true;
+  if(x.stash&&(x.depthDelta??0)>=1.5)return agreement.count>=2;
   return (x.weeklyDelta??0)>=.75;
 }
 
@@ -852,9 +876,16 @@ export default async req=>{
             )
           );
         const specialistBonus=specialist.mode==="STREAM_SWAP"?2.5:specialist.mode==="BYE_HOLD"?0.5:0;
+        const agreement=waiverSignalAgreement({
+          weeklyDelta,depthDelta,marketDelta,
+          addRoleRatio:add.roleRatio,injuryOpportunity:add.injuryOpportunity,
+          fastTrending:add.fastTrending,trendVelocity:add.trendVelocity,
+          mirageRisk:add.mirageRisk,waiverOnly:add.gameLocked
+        });
+        const agreementBonus=Math.max(0,agreement.count-1)*1.1;
         const score=mode==="DYNASTY"
-          ? weeklyDelta*5+(marketDelta??0)*.35+depthDelta*.7+(add.screenScore-drop.dropScore)*.08+injurySignal*.35
-          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2;
+          ? weeklyDelta*5+(marketDelta??0)*.35+depthDelta*.7+(add.screenScore-drop.dropScore)*.08+injurySignal*.35+agreementBonus
+          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2+agreementBonus;
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
           specialistMode:specialist.mode,
@@ -866,6 +897,7 @@ export default async req=>{
           fastTrending:add.fastTrending??0,
           trendDelta:add.trendDelta,trendVelocity:add.trendVelocity,
           waiverOnly:!!add.gameLocked,kickoffAt:add.kickoffAt||null,
+          signalCount:agreement.count,signalAgreement:agreement,
           injuryOpportunity:add.injuryOpportunity||null,
           injuryOpportunityBonus:add.injuryOpportunityBonus||0,
           tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
