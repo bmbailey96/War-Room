@@ -70,6 +70,19 @@ function hardInjured(status){
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/i.test(String(status||""));
 }
 
+export function reserveEligibility(status,settings={}){
+  const s=String(status||"").toLowerCase();
+  if(!s)return false;
+  if(/\b(ir|pup|nfi)\b/.test(s))return true;
+  if(/\bout\b/.test(s))return Number(settings.reserve_allow_out||0)===1;
+  if(/doubtful/.test(s))return Number(settings.reserve_allow_doubtful||0)===1;
+  if(/sus|suspended/.test(s))return Number(settings.reserve_allow_sus||0)===1;
+  if(/\bna\b|not active/.test(s))return Number(settings.reserve_allow_na||0)===1;
+  if(/covid/.test(s))return Number(settings.reserve_allow_cov||0)===1;
+  if(/dnr|did not report/.test(s))return Number(settings.reserve_allow_dnr||0)===1;
+  return false;
+}
+
 export function buildTeamGameLocks(gamesCsv,season,week,nowMs=Date.now()){
   const rows=parseCsv(gamesCsv,[
     "season","week","game_type","home_team","away_team","gameday","gametime"
@@ -565,6 +578,10 @@ export default async req=>{
     const faabRemaining=Math.max(0,faabTotal-faabUsed);
     const usesFaab=faabTotal>0;
     const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
+    const reserveSettings=snapshot.settings||{};
+    const reserveSlots=Number(reserveSettings.reserve_slots||0);
+    const reserveUsed=Array.isArray(me.reserve)?me.reserve.length:0;
+    const openReserveSlots=Math.max(0,reserveSlots-reserveUsed);
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
     const [proj,formContext,lineupData,market,gamesCsv,injuryCsv]=await Promise.all([
       projectionMap(season,week,league,db),
@@ -828,6 +845,34 @@ export default async req=>{
       .filter(x=>waiverMoveActionable(x,mode))
       .slice(0,12);
     const waiverPlan=buildWaiverPlan(bestWaiverPairs,3);
+
+    const irCandidates=myRoster
+      .filter(p=>!p.onIR && reserveEligibility(p.injury,reserveSettings))
+      .sort((a,b)=>
+        mode==="DYNASTY"
+          ? Number(b.market||0)-Number(a.market||0)
+          : Number(b.next3||0)-Number(a.next3||0)
+      );
+    const irPlayer=openReserveSlots>0?irCandidates[0]||null:null;
+    const irWaiver=irPlayer&&waiverPlan.length?waiverPlan[0]:null;
+    const irAdd=irWaiver?free.find(p=>normName(p.name)===normName(irWaiver.add)):null;
+    const irWeeklyDelta=irAdd
+      ? round(simTotal(rosterAfter(myRoster,{addPlayers:[irAdd]}),activeSlots)-baselineRosterTotal)
+      : null;
+    const irPlan=irPlayer&&irAdd?{
+      type:"IR_ADD",priority:0,confidence:"HIGH",
+      headline:`Move ${irPlayer.name} to IR, add ${irAdd.name}`,
+      why:`Use an open IR slot instead of sacrificing ${irWaiver.drop}. This preserves the bench asset while adding the top cleared waiver target.`,
+      window:"NOW",
+      add:{name:irAdd.name},drop:null,
+      moveToIr:{name:irPlayer.name},
+      faabPct:null,
+      claimRank:irWaiver.claimRank||1,claimRole:irWaiver.claimRole||"PRIMARY",
+      weeklyDelta:irWeeklyDelta,
+      depthDelta:irWaiver.depthDelta??null,
+      injuryOpportunity:irWaiver.injuryOpportunity||null,
+      drivers:["roster_slot","depth"],
+    }:null;
 
     const tradeTargets=[];
     for(const team of otherTeams){
@@ -1193,9 +1238,31 @@ Return ONLY valid JSON:
       return Number(a.priority||99)-Number(b.priority||99);
     });
 
+    if(irPlan){
+      const sameAdd=normName(irPlan.add?.name||"");
+      const matched=actions.find(a=>
+        ["ADD","WAIVER","ADD_DROP"].includes(a.type) &&
+        normName(a.add?.name||"")===sameAdd
+      );
+      const upgraded={
+        ...irPlan,
+        faabPct:matched?.faabPct??null,
+        forecastSource:matched?.forecastSource||irAdd?.forecastSource||null,
+        roleRatio:matched?.roleRatio??irAdd?.roleRatio??null,
+        trendVelocity:matched?.trendVelocity??irAdd?.trendVelocity??null,
+      };
+      actions=[
+        upgraded,
+        ...actions.filter(a=>!(
+          ["ADD","WAIVER","ADD_DROP"].includes(a.type) &&
+          normName(a.add?.name||"")===sameAdd
+        ))
+      ].slice(0,6);
+    }
+
     const result={
       at:Date.now(),league:{id:chosen.id,name:league.name,mode,week,season},
-      summary:parsed.summary||actions[0]?.headline||"No urgent roster move.",
+      summary:irPlan?.headline||parsed.summary||actions[0]?.headline||"No urgent roster move.",
       actions:actions.length?actions:deterministicRosterFallback({
         waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
       }).actions,
@@ -1204,6 +1271,10 @@ Return ONLY valid JSON:
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
         waiver:{usesFaab,total:faabTotal,used:faabUsed,remaining:faabRemaining},
+        reserve:{
+          slots:reserveSlots,used:reserveUsed,open:openReserveSlots,
+          eligibleActive:irCandidates.map(p=>p.name)
+        },
         myPicks,
         marketDate:market.scrapeDate||null,
         baselineNext3Lineup:baselineRosterTotal,

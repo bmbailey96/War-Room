@@ -1107,3 +1107,18 @@ assert.ok(tdRoleBacked.forecast>tdMirageForm.forecast);
 assert.ok(tdRoleBacked.mirageRisk<tdMirageForm.mirageRisk);
 
 console.log("Touchdown-dependency regression checks passed");
+
+
+const { reserveEligibility } = await import("../netlify/functions/roster-actions-background.mjs");
+
+assert.equal(reserveEligibility("IR",{}),true);
+assert.equal(reserveEligibility("PUP",{}),true);
+assert.equal(reserveEligibility("Out",{reserve_allow_out:1}),true);
+assert.equal(reserveEligibility("Out",{reserve_allow_out:0}),false);
+assert.equal(reserveEligibility("Doubtful",{reserve_allow_doubtful:1}),true);
+assert.equal(reserveEligibility("Doubtful",{reserve_allow_doubtful:0}),false);
+assert.equal(reserveEligibility("Suspended",{reserve_allow_sus:1}),true);
+assert.equal(reserveEligibility("Suspended",{reserve_allow_sus:0}),false);
+assert.equal(reserveEligibility("Questionable",{reserve_allow_out:1}),false);
+
+console.log("League-specific IR eligibility checks passed");
