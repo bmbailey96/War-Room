@@ -1100,14 +1100,23 @@ export default async req=>{
           partner:team.name,name:p.name,pos:p.pos,age:p.age,next3:p.next3,
           market:p.market,weeklyCeiling,tradeTotal:p.tradeTotal,tradeAvg:p.tradeAvg,
           forecastSource:p.forecastSource,roleRatio:p.roleRatio,recentPts:p.recentPts,
+          baselinePts:p.baselinePts,tradeTiming:p.tradeTiming||roleMarketTiming(p),
           partnerHoles:team.holes,partnerSurplus:team.surplus
         });
       }
     }
+    const targetTimingScore=t=>{
+      const timing=t?.tradeTiming||{};
+      if(timing.code==="BUY_LOW")return Number(timing.score||0)*1.2;
+      if(timing.code==="SELL_HIGH")return -Number(timing.score||0)*.8;
+      return 0;
+    };
     tradeTargets.sort((a,b)=>
       mode==="DYNASTY"
-        ? ((b.weeklyCeiling*5+(b.market??0)*.15)-(a.weeklyCeiling*5+(a.market??0)*.15))
-        : b.weeklyCeiling-a.weeklyCeiling
+        ? ((b.weeklyCeiling*5+(b.market??0)*.15+targetTimingScore(b))-
+           (a.weeklyCeiling*5+(a.market??0)*.15+targetTimingScore(a)))
+        : ((b.weeklyCeiling+targetTimingScore(b)*.35)-
+           (a.weeklyCeiling+targetTimingScore(a)*.35))
     );
     const bestTradeTargets=tradeTargets.slice(0,24);
 
@@ -1209,7 +1218,20 @@ export default async req=>{
           ? (/rebuild|retool/i.test(partner.stance||"")?1.4:/win-now|ascending/i.test(partner.stance||"")?-.6:0)+Math.min(.8,pickHistory*.25)
           : (/win-now|ascending/i.test(partner.stance||"")?.7:0);
         const managerFit=positionTaste*.8+stanceFit;
-        const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+managerFit;
+        const targetTiming=targetPlayer.tradeTiming||roleMarketTiming(targetPlayer);
+        const sentTiming=sentPlayers.map(p=>p.tradeTiming||roleMarketTiming(p));
+        const sellHighScore=sentTiming
+          .filter(x=>x.code==="SELL_HIGH")
+          .reduce((s,x)=>s+Number(x.score||0),0);
+        const protectedBuyLowScore=sentTiming
+          .filter(x=>x.code==="BUY_LOW")
+          .reduce((s,x)=>s+Number(x.score||0),0);
+        const timingScore=
+          (targetTiming.code==="BUY_LOW"?Number(targetTiming.score||0)*1.4:0)-
+          (targetTiming.code==="SELL_HIGH"?Number(targetTiming.score||0)*.8:0)+
+          sellHighScore*.65-protectedBuyLowScore*1.15;
+        const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+
+          managerFit+timingScore;
         if(!best||score>best.score){
           best={
             score,partner:target.partner,target:target.name,
@@ -1222,6 +1244,11 @@ export default async req=>{
             tradeRatio:tradeFit.ratio,
             marketDelta,
             managerFit:round(managerFit),
+            tradeTiming:targetTiming,
+            sentTradeTiming:sentPlayers.map(p=>({
+              name:p.name,...(p.tradeTiming||roleMarketTiming(p))
+            })),
+            timingScore:round(timingScore),
             partnerCareerTrades:careerTrades,
             partnerSeasonTrades:seasonTrades,
           };
@@ -1229,9 +1256,17 @@ export default async req=>{
       }
       if(best){
         best.confidence=best.weeklyDelta>=2&&best.partnerWeeklyDelta>=-1?"HIGH":"MEDIUM";
-        best.why=mode==="DYNASTY"
+        const timingNote=best.tradeTiming?.code==="BUY_LOW"
+          ? " Role is ahead of recent fantasy scoring, so the target gets a small buy-low timing boost."
+          : best.tradeTiming?.code==="SELL_HIGH"
+            ? " Recent scoring is ahead of role, so the target is penalized as a possible sell-high profile."
+            : best.sentTradeTiming?.some(x=>x.code==="SELL_HIGH")
+              ? " The outgoing side includes a box-score-ahead-of-role asset, which modestly improves timing."
+              : "";
+        best.why=(mode==="DYNASTY"
           ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical trade behavior.`
-          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`;
+          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`
+        )+timingNote;
         deterministicTrades.push(best);
       }
     }
