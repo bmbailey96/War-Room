@@ -11,12 +11,15 @@ import {
 import lineup, {
   scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean,easternKickoffMs
 } from "./lineup.mjs";
-import { detectLeagueMode,validateActions } from "./lib/roster-v2.mjs";
+import { detectLeagueMode,validateActions,acquisitionPolicy } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
-import { diagnoseTeamState } from "./lib/team-state.mjs";
+import { diagnoseTeamState,buildAllPlayMetrics } from "./lib/team-state.mjs";
 import {
   buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge
 } from "./lib/opportunity-v2.mjs";
+import {
+  normalizeSleeperWeekStats,liveGameProgress,liveRoleEmergence
+} from "./lib/live-market.mjs";
 
 const NV="https://github.com/nflverse/nflverse-data/releases/download";
 async function j(url){
@@ -638,8 +641,8 @@ export default async req=>{
     const league=core.league,snapshot=computeSnapshot(core,db);
     const me=snapshot.teams.find(t=>t.isMe);
     if(!me)throw new Error("my roster missing");
-    const teamState=diagnoseTeamState(snapshot.teams,me);
     const mode=detectLeagueMode(league);
+    const acquisition=acquisitionPolicy(league);
     const faabTotal=Number(league.settings?.waiver_budget||0);
     const faabUsed=Number(me.waiverBudgetUsed||0);
     const faabRemaining=Math.max(0,faabTotal-faabUsed);
