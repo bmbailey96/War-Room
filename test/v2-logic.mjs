@@ -182,7 +182,7 @@ assert.equal(offlineLineup.calls[0].start,"Healthy Starter");
 assert.equal(offlineLineup.calls[0].drivers[0],"projection_only");
 assert.ok(offlineLineup.watch[0].includes("Questionable Player"));
 
-const { deterministicRosterFallback } = await import("../netlify/functions/roster-actions-background.mjs");
+const { deterministicRosterFallback,waiverMoveActionable } = await import("../netlify/functions/roster-actions-background.mjs");
 const priorityFallback = deterministicRosterFallback({
   mode:"REDRAFT",usesFaab:false,
   waivers:[{add:"Free Agent",drop:"Bench Guy",weeklyDelta:1.8,marketDelta:null,trending:250}],
