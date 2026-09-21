@@ -584,7 +584,11 @@ export function deterministicRosterFallback({
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
   }
-  for(const [i,t] of trades.slice(0,Math.max(0,3-actions.length)).entries()){
+  const tradePool=(teamState?.tradePosture==="hold_value"
+    ? trades.filter(t=>Number(t.weeklyDelta||0)>=1.5)
+    : trades
+  );
+  for(const [i,t] of tradePool.slice(0,Math.max(0,3-actions.length)).entries()){
     actions.push({
       type:"TRADE_FOR",priority:actions.length+1,
       confidence:t.confidence||"MEDIUM",
@@ -1125,6 +1129,8 @@ MODE: ${mode}
 NFL WEEK: ${week}
 MY MATCHUP WIN CHANCE: ${lineupData?.matchup?.winProbability??"unknown"}%
 MY WAIVER POSITION: ${me.waiverPosition??"unknown"}
+TEAM STATE DIAGNOSIS:
+${JSON.stringify(teamState,null,2)}
 ${modeRules}
 
 CURRENT BEST LINEUP:
@@ -1175,6 +1181,10 @@ Hard rules:
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
 - Do not recommend lateral churn.
+- Do not treat a losing record by itself as evidence the roster is bad. Respect TEAM STATE DIAGNOSIS.
+- If TEAM STATE says BAD-LUCK SCHEDULE or RESULTS LAGGING, suppress panic sells and marginal trades.
+- If TEAM STATE says LINEUP EXECUTION, do not try to solve a start/sit problem with unnecessary roster churn.
+- If TEAM STATE says NEEDS STARTER UPSIDE, prioritize real starter upgrades and consolidation over tiny depth moves.
 - Do not recommend a player who is Out, IR, PUP, Suspended or Doubtful.
 
 Return ONLY valid JSON:
