@@ -447,17 +447,23 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
           : w.specialistMode==="BYE_HOLD"
             ? `Temporary second-defense hold cleared the bye/schedule test and the proposed drop is replacement-level.`
             : w.stash
-              ? `Bench-upside screen: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value with a real role/trend breakout signal; no immediate starter gain is required.`
+              ? w.injuryOpportunity?.applied
+                ? `Injury-created stash: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value, with ${Number(w.injuryOpportunity.edgePct||0).toFixed(1)}% short-term opportunity from unavailable teammate workload.`
+                : `Bench-upside screen: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value with a real role/trend breakout signal; no immediate starter gain is required.`
               : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
       window:"BEFORE WAIVERS",
       add:{name:w.add},drop:{name:w.drop},faabPct,
-      drivers:[w.stash?"role":"depth","schedule",...(mode==="DYNASTY"?["market"]:[])],
+      drivers:[
+        w.injuryOpportunity?.applied?"injury_opportunity":(w.stash?"role":"depth"),
+        "schedule",...(mode==="DYNASTY"?["market"] : [])
+      ],
       weeklyDelta:w.weeklyDelta,depthDelta:w.depthDelta??null,stash:!!w.stash,
       specialistMode:w.specialistMode||null,
       streamWeekEdge:w.streamWeekEdge??null,streamNext3Edge:w.streamNext3Edge??null,
       rosterFitReason:w.rosterFitReason||null,
       breakoutScore:w.breakoutScore??null,marketDelta:w.marketDelta??null,
       trendDelta:w.trendDelta??null,trendVelocity:w.trendVelocity??null,
+      injuryOpportunity:w.injuryOpportunity||null,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
   }
@@ -733,14 +739,24 @@ export default async req=>{
         const roleSurge=Math.max(0,Number(add.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add.trending||0));
         const velocitySignal=Math.log10(1+Number(add.trendVelocity||0));
-        const breakoutScore=round(roleSurge*10+trendSignal+velocitySignal*1.5);
+        const injurySignal=add.injuryOpportunity?.applied
+          ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
+          : 0;
+        const breakoutScore=round(
+          roleSurge*10+trendSignal+velocitySignal*1.5+injurySignal*.7
+        );
         const stash=!SPECIALIST_POSITIONS.has(add.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
-          (roleSurge>=.08 || trendSignal>=2 || velocitySignal>=1.45);
+          (
+            roleSurge>=.08 ||
+            trendSignal>=2 ||
+            velocitySignal>=1.45 ||
+            injurySignal>=1.5
+          );
         const specialistBonus=specialist.mode==="STREAM_SWAP"?2.5:specialist.mode==="BYE_HOLD"?0.5:0;
         const score=mode==="DYNASTY"
-          ? weeklyDelta*5+(marketDelta??0)*.35+depthDelta*.7+(add.screenScore-drop.dropScore)*.08
-          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus;
+          ? weeklyDelta*5+(marketDelta??0)*.35+depthDelta*.7+(add.screenScore-drop.dropScore)*.08+injurySignal*.35
+          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2;
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
           specialistMode:specialist.mode,
@@ -750,6 +766,8 @@ export default async req=>{
           score:round(score),addNext3:add.next3,dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
           trendDelta:add.trendDelta,trendVelocity:add.trendVelocity,
+          injuryOpportunity:add.injuryOpportunity||null,
+          injuryOpportunityBonus:add.injuryOpportunityBonus||0,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
           addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio,
           replacement:Number(replacementByPos[add.pos]||0)
