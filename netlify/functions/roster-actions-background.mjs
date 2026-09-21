@@ -13,6 +13,7 @@ import lineup, {
 } from "./lineup.mjs";
 import { detectLeagueMode,validateActions } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
+import { diagnoseTeamState } from "./lib/team-state.mjs";
 import {
   buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge
 } from "./lib/opportunity-v2.mjs";
@@ -513,7 +514,9 @@ export function buildWaiverPlan(pairs=[],limit=3){
   return plan;
 }
 
-export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100}={}) {
+export function deterministicRosterFallback({
+  waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100,teamState=null
+}={}) {
   const actions=[];
   const waiverLimit=trades.length?2:3;
   for(const [i,w] of waivers.slice(0,waiverLimit).entries()){
@@ -533,6 +536,8 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
         ? Math.min(12,Math.max(2,Math.round((w.depthDelta||0)*2+Math.log10(1+(w.trending||0))*2)))
         : Math.min(28,Math.max(2,Math.round((w.weeklyDelta||0)*6+Math.log10(1+(w.trending||0))*3)));
     if(w.waiverOnly && !agreement.strong)faabBase=Math.min(faabBase,8);
+    const aggression=Math.max(.8,Math.min(1.2,Number(teamState?.aggression||1)));
+    faabBase=Math.max(1,Math.round(faabBase*aggression));
     const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
     actions.push({
       type:"ADD_DROP",priority:i+1,confidence,
@@ -579,7 +584,11 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
   }
-  for(const [i,t] of trades.slice(0,Math.max(0,3-actions.length)).entries()){
+  const tradePool=(teamState?.tradePosture==="hold_value"
+    ? trades.filter(t=>Number(t.weeklyDelta||0)>=1.5)
+    : trades
+  );
+  for(const [i,t] of tradePool.slice(0,Math.max(0,3-actions.length)).entries()){
     actions.push({
       type:"TRADE_FOR",priority:actions.length+1,
       confidence:t.confidence||"MEDIUM",
@@ -629,6 +638,7 @@ export default async req=>{
     const league=core.league,snapshot=computeSnapshot(core,db);
     const me=snapshot.teams.find(t=>t.isMe);
     if(!me)throw new Error("my roster missing");
+    const teamState=diagnoseTeamState(snapshot.teams,me);
     const mode=detectLeagueMode(league);
     const faabTotal=Number(league.settings?.waiver_budget||0);
     const faabUsed=Number(me.waiverBudgetUsed||0);
@@ -1119,6 +1129,8 @@ MODE: ${mode}
 NFL WEEK: ${week}
 MY MATCHUP WIN CHANCE: ${lineupData?.matchup?.winProbability??"unknown"}%
 MY WAIVER POSITION: ${me.waiverPosition??"unknown"}
+TEAM STATE DIAGNOSIS:
+${JSON.stringify(teamState,null,2)}
 ${modeRules}
 
 CURRENT BEST LINEUP:
@@ -1169,6 +1181,10 @@ Hard rules:
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
 - Do not recommend lateral churn.
+- Do not treat a losing record by itself as evidence the roster is bad. Respect TEAM STATE DIAGNOSIS.
+- If TEAM STATE says BAD-LUCK SCHEDULE or RESULTS LAGGING, suppress panic sells and marginal trades.
+- If TEAM STATE says LINEUP EXECUTION, do not try to solve a start/sit problem with unnecessary roster churn.
+- If TEAM STATE says NEEDS STARTER UPSIDE, prioritize real starter upgrades and consolidation over tiny depth moves.
 - Do not recommend a player who is Out, IR, PUP, Suspended or Doubtful.
 
 Return ONLY valid JSON:
@@ -1201,7 +1217,7 @@ Return ONLY valid JSON:
       }catch(e){error=e.message;}
     }
     if(!parsed)parsed=deterministicRosterFallback({
-      waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
+      waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct,teamState
     });
 
     let actions=validateActions(parsed.actions,{
@@ -1370,10 +1386,11 @@ Return ONLY valid JSON:
       at:Date.now(),league:{id:chosen.id,name:league.name,mode,week,season},
       summary:irPlan?.headline||parsed.summary||actions[0]?.headline||"No urgent roster move.",
       actions:actions.length?actions:deterministicRosterFallback({
-        waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct
+        waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct,teamState
       }).actions,
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
+        teamState,
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
         waiver:{usesFaab,total:faabTotal,used:faabUsed,remaining:faabRemaining},
