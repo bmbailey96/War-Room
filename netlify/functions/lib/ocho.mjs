@@ -102,13 +102,14 @@ export function pInfo(playersDB, pid) {
 }
 
 export async function fetchLeagueCore(leagueId) {
-  const [league, rosters, users, tradedPicks, nflState, trending] = await Promise.all([
+  const [league, rosters, users, tradedPicks, nflState, trending, trendingFast] = await Promise.all([
     j(`https://api.sleeper.app/v1/league/${leagueId}`),
     j(`https://api.sleeper.app/v1/league/${leagueId}/rosters`),
     j(`https://api.sleeper.app/v1/league/${leagueId}/users`),
     j(`https://api.sleeper.app/v1/league/${leagueId}/traded_picks`),
     j("https://api.sleeper.app/v1/state/nfl"),
-    j("https://api.sleeper.app/v1/players/nfl/trending/add?lookback_hours=48&limit=40"),
+    j("https://api.sleeper.app/v1/players/nfl/trending/add?lookback_hours=48&limit=60"),
+    j("https://api.sleeper.app/v1/players/nfl/trending/add?lookback_hours=2&limit=60").catch(()=>[]),
   ]);
   const txnWeeks = await Promise.all(
     Array.from({ length: 18 }, (_, i) =>
@@ -119,7 +120,7 @@ export async function fetchLeagueCore(leagueId) {
   // to who we are actually playing.
   const wk = Math.max(1, Math.min(18, +(nflState.week || 1) || 1));
   const matchups = await j(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${wk}`).catch(() => []);
-  return { league, rosters, users, tradedPicks, nflState, trending, txnWeeks, matchups, matchupWeek: wk };
+  return { league, rosters, users, tradedPicks, nflState, trending, trendingFast, txnWeeks, matchups, matchupWeek: wk };
 }
 
 export function computeSnapshot(core, playersDB) {
