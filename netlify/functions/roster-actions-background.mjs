@@ -535,6 +535,34 @@ export function buildWaiverPlan(pairs=[],limit=3){
   return plan;
 }
 
+export function buildIrFirstPlan({
+  irPlayer=null,irAdd=null,irWaiver=null,irWeeklyDelta=null
+}={}){
+  if(!irPlayer||!irAdd||!irWaiver)return null;
+  const claimOnly=!!irWaiver.waiverOnly;
+  return {
+    type:"IR_ADD",priority:0,confidence:"HIGH",
+    headline:claimOnly
+      ? `Move ${irPlayer.name} to IR; claim ${irAdd.name} next waiver`
+      : `Move ${irPlayer.name} to IR, add ${irAdd.name}`,
+    why:claimOnly
+      ? `Use the open IR slot now, but do not imply the target is immediately addable. ${irAdd.name} has already started and must wait for this league's next waiver run.`
+      : `Use an open IR slot instead of sacrificing ${irWaiver.drop}. This preserves the bench asset while adding the top cleared target.`,
+    window:claimOnly?"NEXT WAIVER RUN":"NOW",
+    add:{name:irAdd.name},drop:null,
+    moveToIr:{name:irPlayer.name},
+    faabPct:null,
+    waiverOnly:claimOnly,
+    immediateFreeAgent:!!irWaiver.immediateFreeAgent,
+    claimRank:irWaiver.claimRank||1,claimRole:irWaiver.claimRole||"PRIMARY",
+    weeklyDelta:irWeeklyDelta,
+    depthDelta:irWaiver.depthDelta??null,
+    injuryOpportunity:irWaiver.injuryOpportunity||null,
+    liveRole:irWaiver.liveRole||null,
+    drivers:["roster_slot","depth"],
+  };
+}
+
 export function deterministicRosterFallback({
   waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100,teamState=null
 }={}) {
@@ -1012,27 +1040,9 @@ export default async req=>{
     const irWeeklyDelta=irAdd
       ? round(simTotal(rosterAfter(myRoster,{addPlayers:[irAdd]}),activeSlots)-baselineRosterTotal)
       : null;
-    const irPlan=irPlayer&&irAdd?{
-      type:"IR_ADD",priority:0,confidence:"HIGH",
-      headline:irWaiver.waiverOnly
-        ? `Move ${irPlayer.name} to IR; claim ${irAdd.name} next waiver`
-        : `Move ${irPlayer.name} to IR, add ${irAdd.name}`,
-      why:irWaiver.waiverOnly
-        ? `Use the open IR slot now, but do not imply the target is immediately addable. ${irAdd.name} has already started and must wait for this league's next waiver run.`
-        : `Use an open IR slot instead of sacrificing ${irWaiver.drop}. This preserves the bench asset while adding the top cleared target.`,
-      window:irWaiver.waiverOnly?"NEXT WAIVER RUN":"NOW",
-      add:{name:irAdd.name},drop:null,
-      moveToIr:{name:irPlayer.name},
-      faabPct:null,
-      waiverOnly:!!irWaiver.waiverOnly,
-      immediateFreeAgent:!!irWaiver.immediateFreeAgent,
-      claimRank:irWaiver.claimRank||1,claimRole:irWaiver.claimRole||"PRIMARY",
-      weeklyDelta:irWeeklyDelta,
-      depthDelta:irWaiver.depthDelta??null,
-      injuryOpportunity:irWaiver.injuryOpportunity||null,
-      liveRole:irWaiver.liveRole||null,
-      drivers:["roster_slot","depth"],
-    }:null;
+    const irPlan=buildIrFirstPlan({
+      irPlayer,irAdd,irWaiver,irWeeklyDelta
+    });
 
     const tradeTargets=[];
     for(const team of otherTeams){
