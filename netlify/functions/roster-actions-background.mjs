@@ -228,6 +228,10 @@ async function recentFormMap(season,week,league){
       pos,currentGames:current.length,recentGames:recent.length,
       recentPts:recentPts==null?null:round(recentPts),
       baselinePts:baselinePts==null?null:round(baselinePts),
+      recentTargets:round(weightedMean(recent,r=>n(r.targets))||0),
+      baselineTargets:round(weightedMean(baseline,r=>n(r.targets))||0),
+      recentCarries:round(weightedMean(recent,r=>n(r.carries))||0),
+      baselineCarries:round(weightedMean(baseline,r=>n(r.carries))||0),
       roleRatio:round(roleRatio),
       tdDependency:tdDependency==null?null:round(tdDependency),
     };
@@ -653,18 +657,26 @@ export default async req=>{
     const reserveUsed=Array.isArray(me.reserve)?me.reserve.length:0;
     const openReserveSlots=Math.max(0,reserveSlots-reserveUsed);
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const [proj,formContext,lineupData,market,gamesCsv,injuryCsv]=await Promise.all([
+    const completedWeeks=Array.from({length:Math.max(0,week-1)},(_,i)=>i+1);
+    const [proj,formContext,lineupData,market,gamesCsv,injuryCsv,liveStatsRaw,historicalMatchups]=await Promise.all([
       projectionMap(season,week,league,db),
       recentFormMap(season,week,league),
       lineup(new Request(`${url.origin}/.netlify/functions/lineup?league=${encodeURIComponent(chosen.id)}`))
         .then(r=>r.json()).catch(()=>null),
       mode==="DYNASTY"?getDynastyMarket(s):Promise.resolve({players:{},picks:{},scrapeDate:null}),
       txt("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
-      txt(`${NV}/injuries/injuries_${season}.csv`)
+      txt(`${NV}/injuries/injuries_${season}.csv`),
+      j(`https://api.sleeper.app/v1/stats/nfl/regular/${season}/${week}`).catch(()=>({})),
+      Promise.all(completedWeeks.map(w=>
+        j(`https://api.sleeper.app/v1/league/${chosen.id}/matchups/${w}`).catch(()=>[])
+      ))
     ]);
+    const allPlay=buildAllPlayMetrics(historicalMatchups,me.rosterId,me.wins);
+    const teamState=diagnoseTeamState(snapshot.teams,me,{allPlay});
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
     const officialInjuries=currentOfficialInjuries(injuryCsv,week);
     const formMap=formContext?.map||{};
+    const liveStatsById=normalizeSleeperWeekStats(liveStatsRaw);
     const opportunityProfiles=buildOpportunityProfiles(
       formContext?.currentRows||[],formContext?.priorRows||[],week
     );
