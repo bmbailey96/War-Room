@@ -17,6 +17,8 @@ export function liveUsageCounts(stats={}){
     receptions:first(stats,["receptions","rec"]),
     offSnaps:first(stats,["off_snp","offense_snaps","off_snaps"]),
     teamOffSnaps:first(stats,["tm_off_snp","team_offense_snaps","team_off_snaps"]),
+    routes:first(stats,["routes_run","routes","route_run","rec_routes"]),
+    teamRoutes:first(stats,["tm_routes_run","team_routes_run","team_routes","tm_routes"]),
   };
 }
 
@@ -49,14 +51,17 @@ export function liveGameProgress(kickoffAt,nowMs=Date.now()){
 export function liveRoleEmergence({
   pos="UNK",stats={},progress=0,
   baselineTargets=0,baselineCarries=0,
-  baselineTargetShare=null,baselineCarryShare=null,
-  teamTargets=0,teamRbCarries=0
+  baselineTargetShare=null,baselineCarryShare=null,baselineRouteParticipation=null,
+  teamTargets=0,teamRbCarries=0,teamRoutes=0
 }={}){
   const p=clamp(Number(progress||0),0,1);
   if(p<=0)return null;
 
-  const {targets,carries,receptions,offSnaps,teamOffSnaps}=liveUsageCounts(stats);
+  const counts=liveUsageCounts(stats);
+  const {targets,carries,receptions,offSnaps,teamOffSnaps,routes}=counts;
+  const resolvedTeamRoutes=Number(teamRoutes||counts.teamRoutes||0);
   const snapShare=teamOffSnaps>0?offSnaps/teamOffSnaps:null;
+  const routeParticipation=resolvedTeamRoutes>0?routes/resolvedTeamRoutes:null;
   const paceDen=Math.max(.28,p);
   const targetPace=targets/paceDen;
   const carryPace=carries/paceDen;
@@ -65,10 +70,11 @@ export function liveRoleEmergence({
   const baseC=Math.max(0,Number(baselineCarries||0));
   const baseTs=baselineTargetShare==null?null:clamp(Number(baselineTargetShare||0),0,1);
   const baseCs=baselineCarryShare==null?null:clamp(Number(baselineCarryShare||0),0,1);
+  const baseRp=baselineRouteParticipation==null?null:clamp(Number(baselineRouteParticipation||0),0,1);
   const liveTargetShare=Number(teamTargets||0)>=8?targets/Number(teamTargets):null;
   const liveCarryShare=Number(teamRbCarries||0)>=7?carries/Number(teamRbCarries):null;
   const reasons=[];
-  let volume=false,dominant=false,shareSignal=false;
+  let volume=false,dominant=false,shareSignal=false,routeSignal=false;
 
   if(["WR","TE"].includes(String(pos).toUpperCase())){
     const threshold=Math.max(7,baseT*1.2);
@@ -80,11 +86,21 @@ export function liveRoleEmergence({
     dominant=
       (targets>=6&&targetPace>=Math.max(8.5,baseT*1.35)) ||
       (liveTargetShare!=null&&Number(teamTargets)>=12&&targets>=5&&liveTargetShare>=.34);
+    const routeFloor=Math.max(.72,(baseRp??.58)+.10);
+    routeSignal=
+      routeParticipation!=null && resolvedTeamRoutes>=20 && routes>=14 &&
+      routeParticipation>=routeFloor;
     if(volume)reasons.push(`${targets} targets // ${round(targetPace)} target pace`);
     if(shareSignal){
       reasons.push(
         `${Math.round(liveTargetShare*100)}% live target share`+
         (baseTs!=null?` vs ${Math.round(baseTs*100)}% baseline`:"")
+      );
+    }
+    if(routeSignal){
+      reasons.push(
+        `${Math.round(routeParticipation*100)}% live route participation`+
+        (baseRp!=null?` vs ${Math.round(baseRp*100)}% baseline`:"")
       );
     }
   }else if(String(pos).toUpperCase()==="RB"){
@@ -113,22 +129,26 @@ export function liveRoleEmergence({
   const strong=
     dominant ||
     (volume&&snapSignal) ||
-    (shareSignal&&(snapSignal||p>=.4)) ||
+    (shareSignal&&(snapSignal||routeSignal||p>=.4)) ||
+    (routeSignal&&(shareSignal||p>=.4)) ||
     (volume&&p>=.55);
-  if(!volume&&!shareSignal&&!snapSignal)return null;
+  if(!volume&&!shareSignal&&!snapSignal&&!routeSignal)return null;
 
   return {
     targets,carries,receptions,
     offSnaps,teamOffSnaps,
     snapShare:snapShare==null?null:round(snapShare*100),
+    routes,teamRoutes:resolvedTeamRoutes,
+    routeParticipation:routeParticipation==null?null:round(routeParticipation*100),
     liveTargetShare:liveTargetShare==null?null:round(liveTargetShare*100),
     liveCarryShare:liveCarryShare==null?null:round(liveCarryShare*100),
     baselineTargetShare:baseTs==null?null:round(baseTs*100),
     baselineCarryShare:baseCs==null?null:round(baseCs*100),
+    baselineRouteParticipation:baseRp==null?null:round(baseRp*100),
     targetPace:round(targetPace),carryPace:round(carryPace),touchPace:round(touchPace),
     progress:round(p*100),
-    volume,dominant,shareSignal,snapSignal,strong,
-    score:(dominant?3:0)+(volume?2:0)+(shareSignal?2:0)+(snapSignal?2:0),
+    volume,dominant,shareSignal,routeSignal,snapSignal,strong,
+    score:(dominant?3:0)+(volume?2:0)+(shareSignal?2:0)+(routeSignal?2:0)+(snapSignal?2:0),
     reasons
   };
 }
