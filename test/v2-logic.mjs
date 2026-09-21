@@ -1075,3 +1075,35 @@ assert.equal(lowSampleBoost.injuryOpportunity.applied,false);
 assert.equal(lowSampleBoost.next3,8);
 
 console.log("Injury-created waiver opportunity checks passed");
+
+
+const { touchdownFantasyPoints } = await import("../netlify/functions/roster-actions-background.mjs");
+
+assert.equal(
+  touchdownFantasyPoints(
+    {passing_tds:2,rushing_tds:1,receiving_tds:0},
+    {pass_td:6,rush_td:6,rec_td:6}
+  ),
+  18
+);
+
+const lowTdForm=blendedRosterForecast(10,{
+  currentGames:3,recentPts:18,baselinePts:10,roleRatio:1,
+  tdDependency:.12
+});
+const tdMirageForm=blendedRosterForecast(10,{
+  currentGames:3,recentPts:18,baselinePts:10,roleRatio:1,
+  tdDependency:.70
+});
+assert.ok(tdMirageForm.forecast<lowTdForm.forecast);
+assert.ok(tdMirageForm.mirageRisk>.4);
+assert.equal(tdMirageForm.source,"blended_form_regressed");
+
+const tdRoleBacked=blendedRosterForecast(10,{
+  currentGames:3,recentPts:18,baselinePts:10,roleRatio:1.22,
+  tdDependency:.70
+});
+assert.ok(tdRoleBacked.forecast>tdMirageForm.forecast);
+assert.ok(tdRoleBacked.mirageRisk<tdMirageForm.mirageRisk);
+
+console.log("Touchdown-dependency regression checks passed");
