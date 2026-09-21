@@ -10,7 +10,7 @@ import { store, MY_USER_ID, normName } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 
 const DEFAULT = { role:0.28, matchup:0.25, environment:0.35, scheme:0.22 };
-const MICRO_KEYS=["coverage","teCoverage","rbSplit","passRush","personnel"];
+const MICRO_KEYS=["coverage","teCoverage","rbSplit","passRush","personnel","routeProfile","vacated"];
 const DRIVER_KEYS = ["injury","role","depth_chart","scheme","weather","matchup","projection_only","other"];
 
 async function j(url) {
@@ -89,6 +89,8 @@ function microEdge(s,key){
   if(key==="teCoverage") return usable(signals.teCoverage)?Number(signals.teCoverage.edgePct)/100:null;
   if(key==="rbSplit") return usable(signals.rbMatchup)?Number(signals.rbMatchup.edgePct)/100:null;
   if(key==="passRush") return usable(signals.passRush)?Number(signals.passRush.edgePct)/100:null;
+  if(key==="routeProfile") return usable(signals.routeProfile)?Number(signals.routeProfile.edgePct)/100:null;
+  if(key==="vacated") return usable(signals.vacatedOpportunity)?Number(signals.vacatedOpportunity.edgePct)/100:null;
   if(key==="personnel"){
     const parts=[signals.frontSeven,signals.runBlocking,signals.protection]
       .filter(usable)

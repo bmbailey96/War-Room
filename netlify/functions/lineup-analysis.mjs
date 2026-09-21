@@ -113,6 +113,8 @@ export default async req => {
       runBlocking:x.player.signals?.runBlocking||null,
       passRush:x.player.signals?.passRush||null,
       protection:x.player.signals?.protection||null,
+      routeProfile:x.player.signals?.routeProfile||null,
+      vacatedOpportunity:x.player.signals?.vacatedOpportunity||null,
       opportunityShare:x.player.signals?.opportunityShare??null,
       opportunityLabel:x.player.signals?.opportunityLabel||null,
       matchupExposure:x.player.signals?.matchupExposure??1
@@ -124,6 +126,8 @@ export default async req => {
       .map(p=>({name:p.name,pos:p.slot,proj:p.projection,floor:p.floor,ceiling:p.ceiling,opp:p.opp,injury:p.injury,
         confidence:p.confidence,confidenceScore:p.confidenceScore,source:p.source,rangeSource:p.rangeSource,reasons:p.reasons,
         coverageMatchup:p.signals?.coverageMatchup||null,
+        routeProfile:p.signals?.routeProfile||null,
+        vacatedOpportunity:p.signals?.vacatedOpportunity||null,
         passRush:p.signals?.passRush||null,
         opportunityShare:p.signals?.opportunityShare??null,
         opportunityLabel:p.signals?.opportunityLabel||null,
@@ -135,11 +139,15 @@ export default async req => {
       edge:c.edge,beatProbability:c.beatProbability,decisionConfidence:c.decisionConfidence,
       startProjection:c.start?.projection,startFloor:c.start?.floor,startCeiling:c.start?.ceiling,startSource:c.start?.source,
       startCoverage:c.start?.signals?.coverageMatchup||null,
+      startRouteProfile:c.start?.signals?.routeProfile||null,
+      startVacatedOpportunity:c.start?.signals?.vacatedOpportunity||null,
       startPassRush:c.start?.signals?.passRush||null,
       startOpportunityShare:c.start?.signals?.opportunityShare??null,
       startMatchupExposure:c.start?.signals?.matchupExposure??1,
       sitProjection:c.sit?.projection,sitFloor:c.sit?.floor,sitCeiling:c.sit?.ceiling,sitSource:c.sit?.source,
       sitCoverage:c.sit?.signals?.coverageMatchup||null,
+      sitRouteProfile:c.sit?.signals?.routeProfile||null,
+      sitVacatedOpportunity:c.sit?.signals?.vacatedOpportunity||null,
       sitPassRush:c.sit?.signals?.passRush||null,
       sitOpportunityShare:c.sit?.signals?.opportunityShare??null,
       sitMatchupExposure:c.sit?.signals?.matchupExposure??1
@@ -196,9 +204,11 @@ Rules:
 11. COVERAGE MATCHUP is an inferred likely assignment from current depth metadata plus actual defender coverage results. Respect assignmentConfidence and the APPLIED/INFO gate. Never turn it into a claimed shadow assignment unless current reporting explicitly confirms one.
 12. MATCHUP EXPOSURE scales team/coverage matchup effects by actual target or workload ownership. A low-volume player should not receive the same boost from a soft defense as an alpha player.
 13. PASS RUSH is a small opponent pressure edge derived from actual defender pressure production and is already partially reflected in the projection. Do not double-count it.
-14. Never claim a defender will shadow a receiver unless current reporting actually says so.
-15. Never claim you found news you did not actually find.
-16. Keep this brutally scannable.
+14. ROUTE PROFILE is a small deterministic WR archetype matchup based on the receiver's recent aDOT and how the defense has performed against underneath/intermediate/vertical receivers. It is already applied when marked APPLIED. Treat it as a tiebreaker, not a reason to override a large projection gap.
+15. VACATED OPPORTUNITY is a conservative redistribution of historical targets/carries from teammates who are currently unavailable. It is already applied when marked APPLIED. Do not add another injury bump on top unless current reporting provides specific new role information.
+16. Never claim a defender will shadow a receiver unless current reporting actually says so.
+17. Never claim you found news you did not actually find.
+18. Keep this brutally scannable.
 
 Return ONLY valid JSON:
 {

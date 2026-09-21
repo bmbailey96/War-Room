@@ -10,6 +10,10 @@ import {
   buildRbDefenseSplits,rbUsageSplit,combineRbMicroEdge,protectionEdge,
   buildSleeperFrontSeven,frontSevenAttritionEdge,runBlockingEdge
 } from "./lib/matchup-v2.mjs";
+import {
+  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge,
+  buildWrArchetypeDefense,receiverArchetypeEdge
+} from "./lib/opportunity-v2.mjs";
 
 const NV = "https://github.com/nflverse/nflverse-data/releases/download";
 
@@ -674,7 +678,7 @@ export default async req => {
     ]);
     const model={...DEFAULT_MODEL,...(learnedModel?.weights||{})};
     const microWeights={
-      coverage:1,teCoverage:1,rbSplit:1,passRush:1,personnel:1,
+      coverage:1,teCoverage:1,rbSplit:1,passRush:1,personnel:1,routeProfile:1,vacated:1,
       ...(learnedModel?.microWeights||{})
     };
     const positionScale=learnedModel?.positionScale||{};
@@ -707,7 +711,7 @@ export default async req => {
       "player_display_name","position","week","team","opponent_team","season_type",
       "completions","attempts","passing_yards","passing_tds","passing_interceptions","passing_fumbles_lost",
       "carries","rushing_yards","rushing_tds","rushing_fumbles_lost",
-      "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost",
+      "targets","receptions","receiving_yards","receiving_tds","receiving_fumbles_lost","receiving_air_yards",
       "target_share","air_yards_share","wopr",
       "passing_first_downs","rushing_first_downs","receiving_first_downs",
       "passing_2pt_conversions","rushing_2pt_conversions","receiving_2pt_conversions"
@@ -727,6 +731,8 @@ export default async req => {
     const defenderCoverage=buildDefenderCoverage(defCoverageCsv,priorDefCoverageCsv,week);
     const teamPassRush=buildTeamPassRush(defCoverageCsv,priorDefCoverageCsv,week);
     const rbDefenseSplits=buildRbDefenseSplits(currentRows,priorRows,week);
+    const opportunityProfiles=buildOpportunityProfiles(currentRows,priorRows,week);
+    const wrArchetypeDefense=buildWrArchetypeDefense(currentRows,priorRows,week);
 
     // Official weekly injury reports are a second hard-availability source.
     // Sleeper's player metadata can lag designation changes; nflverse mirrors
@@ -757,6 +763,7 @@ export default async req => {
         .map(p=>normName(p?.n||""))
         .filter(Boolean),
     ]);
+    const vacatedByTeam=buildVacatedOpportunity(opportunityProfiles,unavailablePlayers);
 
     // Offensive snap share is a leading indicator for role changes. The
     // nflverse snap feed updates throughout the week; only use games from
@@ -932,7 +939,8 @@ export default async req => {
         : null;
       const signals={
         roleRatio:1,matchupRatio:1,environmentRatio:1,schemeRatio:1,
-        opportunityRatio:1,snapRatio:1,opportunityShare:null,matchupExposure:1
+        opportunityRatio:1,snapRatio:1,opportunityShare:null,matchupExposure:1,
+        vacatedOpportunity:null,routeProfile:null
       };
       if(projection!=null && source==="custom" && ["QB","RB","WR","TE"].includes(slot)){
         const recentUsage=weightedMean(c.slice(-3),r=>usage(r,slot));
@@ -958,6 +966,34 @@ export default async req => {
           const mult=1+model.role*(ratio-1);
           projection*=mult;
           if(Math.abs(mult-1)>=0.025) reasons.push(`${round((mult-1)*100)}% role/workload`);
+        }
+
+        // Current injuries can create opportunity before provider projections
+        // fully catch up. Redistribute only a conservative fraction of the
+        // unavailable teammate's historical share, and let the weekly learner
+        // decide how much to trust this signal over time.
+        const oppProfile=opportunityProfiles[key]||null;
+        const vacated=vacatedOpportunityEdge(
+          oppProfile,vacatedByTeam[normTeam(info.team)]||null
+        );
+        if(vacated){
+          const scaled=((vacated.multiplier||1)-1)*microWeights.vacated;
+          const applyVacated=vacated.confidence!=="LOW" && Number(vacated.reliability||0)>=35;
+          const adjusted={
+            ...vacated,
+            rawEdgePct:vacated.edgePct,
+            edgePct:round(scaled*100),
+            multiplier:1+scaled,
+            trustWeight:microWeights.vacated,
+            applied:applyVacated,
+          };
+          signals.vacatedOpportunity=adjusted;
+          if(applyVacated){
+            projection*=adjusted.multiplier;
+            if(Math.abs(scaled)>=.008){
+              reasons.push(`+${round(scaled*100)}% vacated opportunity`);
+            }
+          }
         }
 
         // Scale matchup effects by actual opportunity ownership. Great
@@ -1016,6 +1052,35 @@ export default async req => {
         }
 
         if(slot==="WR" && opp){
+          const routeEdge=receiverArchetypeEdge(
+            opportunityProfiles[key]||null,
+            opp,wrArchetypeDefense,signals.matchupExposure||1
+          );
+          if(routeEdge){
+            const raw=((routeEdge.multiplier||1)-1)*microWeights.routeProfile;
+            const applyRoute=
+              routeEdge.confidence!=="LOW" &&
+              Number(routeEdge.reliability||0)>=30 &&
+              Number(routeEdge.profileReliability||0)>=30;
+            const adjusted={
+              ...routeEdge,
+              rawEdgePct:routeEdge.edgePct,
+              edgePct:round(raw*100),
+              multiplier:1+raw,
+              trustWeight:microWeights.routeProfile,
+              applied:applyRoute,
+            };
+            signals.routeProfile=adjusted;
+            if(applyRoute){
+              projection*=adjusted.multiplier;
+              if(Math.abs(raw)>=.006){
+                reasons.push(
+                  `${round(raw*100)}% ${adjusted.archetype} receiver matchup`
+                );
+              }
+            }
+          }
+
           const receiverRank=wrRanks[`${normTeam(info.team)}|${key}`]||1;
           const depthPos=String(info.depthPos||"").toUpperCase();
           const receiverRole=/SLOT|SWR|SLWR/.test(depthPos)
@@ -1343,7 +1408,7 @@ export default async req => {
     return new Response(JSON.stringify({
       league:{id:chosen.id,name:chosen.name,season,status:league.status},
       leagues,week,opponent,
-      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Opportunity-scaled micro edges (WR coverage, TE middle coverage, RB split, pass rush and current personnel) are independently self-calibrated from prior results. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
+      sourceNote:"QB/RB/WR/TE use nflverse production, workload and context. Opportunity-scaled micro edges (WR coverage/archetype, TE middle coverage, RB split, pass rush, current personnel and vacated opportunity) are independently self-calibrated from prior results. K/DEF/IDP use actual league-scored history when available. Sleeper is the last fallback.",
       model:{
         weights:model,microWeights,microReliability:learnedModel?.microReliability||{},
         positionScale,learnedAt:learnedModel?.at||null,samples:learnedModel?.samples||0,
