@@ -724,7 +724,29 @@ export default async req=>{
         );
       })
       .map(([pid])=>pid);
+
+    // Find role changes before the market necessarily notices. Current-week
+    // Sleeper stats can promote an unrostered RB/WR/TE into the scan from
+    // targets, touches and snap share. Fantasy points alone are not a trigger.
+    const liveRoleById={};
+    for(const [pid,stats] of Object.entries(liveStatsById||{})){
+      if(!pid||rostered.has(pid))continue;
+      const info=pInfo(db,pid),pos=slotPos(info);
+      if(!["RB","WR","TE"].includes(pos)||!info.team)continue;
+      const game=gameLocks[normTeam(info.team)]||null;
+      const progress=liveGameProgress(game?.kickoffAt,Date.now());
+      if(progress<=0)continue;
+      const form=formMap[normName(info.name)]||{};
+      const liveRole=liveRoleEmergence({
+        pos,stats,progress,
+        baselineTargets:form.recentTargets||form.baselineTargets||0,
+        baselineCarries:form.recentCarries||form.baselineCarries||0
+      });
+      if(liveRole)liveRoleById[pid]=liveRole;
+    }
+    const liveRoleIds=Object.keys(liveRoleById);
     const candidateIds=[...new Set([
+      ...liveRoleIds,
       ...(core.trendingFast||[]).map(x=>x.player_id),
       ...(core.trending||[]).map(x=>x.player_id),
       ...topProj,
