@@ -182,7 +182,7 @@ assert.equal(offlineLineup.calls[0].start,"Healthy Starter");
 assert.equal(offlineLineup.calls[0].drivers[0],"projection_only");
 assert.ok(offlineLineup.watch[0].includes("Questionable Player"));
 
-const { deterministicRosterFallback } = await import("../netlify/functions/roster-actions-background.mjs");
+const { deterministicRosterFallback,waiverMoveActionable } = await import("../netlify/functions/roster-actions-background.mjs");
 const priorityFallback = deterministicRosterFallback({
   mode:"REDRAFT",usesFaab:false,
   waivers:[{add:"Free Agent",drop:"Bench Guy",weeklyDelta:1.8,marketDelta:null,trending:250}],
@@ -652,7 +652,7 @@ console.log("Risk-aware floor/ceiling tiebreak checks passed");
 
 
 const {
-  specialistRosterDecision,waiverMoveActionable
+  specialistRosterDecision
 } = await import("../netlify/functions/roster-actions-background.mjs");
 
 const rosterWithDef=[
@@ -869,12 +869,12 @@ const {
   ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey,
   rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
-assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v6");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v6_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v6_123");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v7");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v7_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v7_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
-assert.equal(rosterActionsFreshnessMs(sundayNoon),20*60*1000);
+assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);
 assert.equal(rosterFreshnessLabel(sundayNoon),"SUNDAY_PULSE");
 assert.equal(rosterActionsFreshnessMs(wednesdayNoon),4*60*60*1000);
 
@@ -1134,7 +1134,7 @@ console.log("League-specific IR eligibility checks passed");
 
 
 const {
-  postGameWaiverForecast,waiverSignalAgreement
+  postGameWaiverForecast,waiverSignalAgreement,buildIrFirstPlan
 } = await import("../netlify/functions/roster-actions-background.mjs");
 
 assert.equal(postGameWaiverForecast({
@@ -1182,6 +1182,32 @@ assert.equal(sundayClaim.actions[0].window,"NEXT WAIVER RUN");
 assert.equal(sundayClaim.actions[0].waiverOnly,true);
 assert.ok(sundayClaim.actions[0].faabPct<=8);
 
+const lockedIrClaim=buildIrFirstPlan({
+  irPlayer:{name:"Injured Starter"},
+  irAdd:{name:"Sunday Breakout"},
+  irWaiver:{
+    add:"Sunday Breakout",drop:"Bench End",waiverOnly:true,
+    claimRank:1,claimRole:"PRIMARY",depthDelta:2
+  },
+  irWeeklyDelta:0
+});
+assert.equal(lockedIrClaim.window,"NEXT WAIVER RUN");
+assert.equal(lockedIrClaim.waiverOnly,true);
+assert.match(lockedIrClaim.headline,/claim Sunday Breakout next waiver/i);
+
+const openFaIrAdd=buildIrFirstPlan({
+  irPlayer:{name:"Injured Starter"},
+  irAdd:{name:"Emerging WR"},
+  irWaiver:{
+    add:"Emerging WR",drop:"Bench End",immediateFreeAgent:true,
+    claimRank:1,claimRole:"PRIMARY",depthDelta:2
+  },
+  irWeeklyDelta:0
+});
+assert.equal(openFaIrAdd.window,"NOW");
+assert.equal(openFaIrAdd.immediateFreeAgent,true);
+assert.match(openFaIrAdd.headline,/add Emerging WR/i);
+
 const sundayPulse=await import("../netlify/functions/roster-sunday-pulse.mjs");
 const sundayLatePulse=await import("../netlify/functions/roster-sunday-late-pulse.mjs");
 const lineupPulse=await import("../netlify/functions/lineup-sunday-pulse.mjs");
@@ -1190,7 +1216,7 @@ assert.equal(typeof sundayPulse.default,"function");
 assert.equal(typeof sundayLatePulse.default,"function");
 assert.equal(typeof lineupPulse.default,"function");
 assert.equal(typeof lineupLatePulse.default,"function");
-assert.ok(sundayPulse.config?.schedule.includes("*/30"));
+assert.ok(sundayPulse.config?.schedule.includes("*/10"));
 assert.ok(lineupPulse.config?.schedule.includes("*/15"));
 
 console.log("Sunday pulse freshness and next-waiver scouting checks passed");
@@ -1252,3 +1278,95 @@ const noPanicTrade=deterministicRosterFallback({
 assert.equal(noPanicTrade.actions[0].type,"HOLD");
 
 console.log("Team-state diagnosis and anti-panic behavior checks passed");
+
+
+const { acquisitionPolicy } = await import("../netlify/functions/lib/roster-v2.mjs");
+const {
+  normalizeSleeperWeekStats,liveRoleEmergence
+} = await import("../netlify/functions/lib/live-market.mjs");
+
+const ochoPolicy=acquisitionPolicy({name:"The Ocho"});
+assert.equal(ochoPolicy.mode,"OPEN_FA");
+assert.equal(ochoPolicy.canAddStartedPlayers,true);
+const funPolicy=acquisitionPolicy({name:"Teenypetes"});
+assert.equal(funPolicy.mode,"WAIVERS");
+assert.equal(funPolicy.canAddStartedPlayers,false);
+
+const liveWr=liveRoleEmergence({
+  pos:"WR",progress:.5,baselineTargets:5,
+  stats:{rec_tgt:6,off_snp:32,tm_off_snp:45}
+});
+assert.equal(liveWr.strong,true);
+assert.ok(liveWr.targetPace>=12);
+assert.ok(liveWr.snapShare>=70);
+
+const touchdownOnly=liveRoleEmergence({
+  pos:"WR",progress:.5,baselineTargets:5,
+  stats:{rec_td:2,rec_yd:82}
+});
+assert.equal(touchdownOnly,null);
+
+const liveRb=liveRoleEmergence({
+  pos:"RB",progress:.55,baselineCarries:7,baselineTargets:2,
+  stats:{rush_att:8,rec_tgt:3,off_snp:30,tm_off_snp:43}
+});
+assert.equal(liveRb.strong,true);
+assert.ok(liveRb.touchPace>=19);
+
+const normalized=normalizeSleeperWeekStats({
+  "wr1":{rec_tgt:5},
+  "rb1":{stats:{rush_att:9}}
+});
+assert.equal(normalized.wr1.rec_tgt,5);
+assert.equal(normalized.rb1.rush_att,9);
+
+const liveAgreement=waiverSignalAgreement({
+  liveRole:liveWr,depthDelta:2,weeklyDelta:0,marketDelta:0,
+  fastTrending:0,trendVelocity:0,mirageRisk:0
+});
+assert.equal(liveAgreement.liveRole,true);
+assert.equal(liveAgreement.actionable,true);
+
+assert.equal(waiverMoveActionable({
+  immediateFreeAgent:true,liveRole:liveWr,depthDelta:2,weeklyDelta:0,
+  marketDelta:0,fastTrending:0,trendVelocity:0,mirageRisk:0,stash:true
+},"DYNASTY"),true);
+
+const immediateAdd=deterministicRosterFallback({
+  mode:"DYNASTY",usesFaab:false,
+  waivers:[{
+    add:"Emerging WR",drop:"Bench WR",weeklyDelta:0,depthDelta:2,
+    marketDelta:0,liveRole:liveWr,immediateFreeAgent:true,stash:true,
+    signalAgreement:liveAgreement
+  }],
+  trades:[]
+});
+assert.equal(immediateAdd.actions[0].window,"NOW");
+assert.match(immediateAdd.actions[0].headline,/Add Emerging WR now/);
+
+const { buildAllPlayMetrics } = await import("../netlify/functions/lib/team-state.mjs");
+const allPlay=buildAllPlayMetrics([
+  [
+    {roster_id:1,points:100},{roster_id:2,points:130},
+    {roster_id:3,points:110},{roster_id:4,points:90}
+  ],
+  [
+    {roster_id:1,points:120},{roster_id:2,points:130},
+    {roster_id:3,points:110},{roster_id:4,points:100}
+  ]
+],1,0);
+assert.equal(allPlay.expectedWins,1);
+assert.equal(allPlay.allPlayWinPct,50);
+assert.equal(allPlay.luckWins,-1);
+
+const allPlayScheduleLoss=diagnoseTeamState([
+  {rosterId:1,wins:0,losses:2,pointsFor:220,pointsAgainst:180,benchLeakage:20,injured:[]},
+  {rosterId:2,wins:2,losses:0,pointsFor:210,pointsAgainst:260,benchLeakage:12,injured:[]},
+  {rosterId:3,wins:1,losses:1,pointsFor:200,pointsAgainst:240,benchLeakage:10,injured:[]},
+  {rosterId:4,wins:1,losses:1,pointsFor:190,pointsAgainst:220,benchLeakage:10,injured:[]},
+],{rosterId:1,wins:0,losses:2,pointsFor:220,pointsAgainst:180,benchLeakage:20,injured:[]},{allPlay});
+assert.equal(allPlayScheduleLoss.code,"SCHEDULE_VARIANCE");
+assert.equal(allPlayScheduleLoss.pointsAgainstRank,4);
+assert.equal(allPlayScheduleLoss.allPlayExpectedWins,1);
+
+console.log("Open-FA live breakout and all-play diagnosis checks passed");

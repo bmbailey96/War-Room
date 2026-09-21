@@ -11,12 +11,15 @@ import {
 import lineup, {
   scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean,easternKickoffMs
 } from "./lineup.mjs";
-import { detectLeagueMode,validateActions } from "./lib/roster-v2.mjs";
+import { detectLeagueMode,validateActions,acquisitionPolicy } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
-import { diagnoseTeamState } from "./lib/team-state.mjs";
+import { diagnoseTeamState,buildAllPlayMetrics } from "./lib/team-state.mjs";
 import {
   buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge
 } from "./lib/opportunity-v2.mjs";
+import {
+  normalizeSleeperWeekStats,liveGameProgress,liveRoleEmergence
+} from "./lib/live-market.mjs";
 
 const NV="https://github.com/nflverse/nflverse-data/releases/download";
 async function j(url){
@@ -31,6 +34,18 @@ async function txt(url){
 }
 const n=v=>v==null||v===""||Number.isNaN(+v)?0:+v;
 const round=x=>Math.round(x*10)/10;
+
+async function allPlayHistory(s,leagueId,week){
+  const key=`all_play_${leagueId}_${week}`;
+  const cached=await s.get(key,{type:"json"}).catch(()=>null);
+  if(cached&&Date.now()-Number(cached.at||0)<6*60*60*1000)return cached.weeks||[];
+  const completed=Array.from({length:Math.max(0,Number(week)-1)},(_,i)=>i+1);
+  const weeks=await Promise.all(completed.map(w=>
+    j(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${w}`).catch(()=>[])
+  ));
+  await s.setJSON(key,{at:Date.now(),weeks}).catch(()=>{});
+  return weeks;
+}
 
 export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
   if(elapsedHours==null || !Number.isFinite(Number(elapsedHours)) || Number(elapsedHours)<=0){
@@ -225,6 +240,10 @@ async function recentFormMap(season,week,league){
       pos,currentGames:current.length,recentGames:recent.length,
       recentPts:recentPts==null?null:round(recentPts),
       baselinePts:baselinePts==null?null:round(baselinePts),
+      recentTargets:round(weightedMean(recent,r=>n(r.targets))||0),
+      baselineTargets:round(weightedMean(baseline,r=>n(r.targets))||0),
+      recentCarries:round(weightedMean(recent,r=>n(r.carries))||0),
+      baselineCarries:round(weightedMean(baseline,r=>n(r.carries))||0),
       roleRatio:round(roleRatio),
       tdDependency:tdDependency==null?null:round(tdDependency),
     };
@@ -414,7 +433,8 @@ export function positionalDepthDecision({
 }
 
 export function waiverSignalAgreement(x={}){
-  const role=Number(x.addRoleRatio||x.roleRatio||1)>=1.08;
+  const liveRole=!!x.liveRole?.strong;
+  const role=liveRole || Number(x.addRoleRatio||x.roleRatio||1)>=1.08;
   const injury=!!x.injuryOpportunity?.applied && Number(x.injuryOpportunity?.edgePct||0)>=1.5;
   const market=Number(x.fastTrending||0)>=15 || Number(x.trendVelocity||0)>=8;
   const value=Number(x.weeklyDelta||0)>=.75 || Number(x.depthDelta||0)>=1.5 ||
@@ -422,9 +442,9 @@ export function waiverSignalAgreement(x={}){
   const mirage=Number(x.mirageRisk||0)>=.45;
   const count=[role,injury,market,value].filter(Boolean).length;
   return {
-    count,role,injury,market,value,mirage,
+    count,role,liveRole,injury,market,value,mirage,
     strong:count>=3&&!mirage,
-    actionable:count>=2 && (value||injury) && !(mirage&&count<3)
+    actionable:count>=2 && (value||injury||liveRole) && !(mirage&&count<3)
   };
 }
 
@@ -439,13 +459,14 @@ export function waiverMoveActionable(x,mode="REDRAFT"){
     return agreement.actionable;
   }
 
+  if(x.immediateFreeAgent&&x.liveRole?.strong&&agreement.actionable)return true;
+  if(x.stash&&(x.depthDelta??0)>=1.5)return agreement.count>=2;
   if(mode==="DYNASTY")return (x.weeklyDelta??0)>=.5 || (x.marketDelta??0)>=6;
   if(x.specialistMode==="STREAM_SWAP"){
     if(x.streamWeekEdge!=null)return x.streamWeekEdge>=1 || (x.streamNext3Edge??0)>=1;
     return (x.weeklyDelta??0)>=.75;
   }
   if(x.specialistMode==="BYE_HOLD")return true;
-  if(x.stash&&(x.depthDelta??0)>=1.5)return agreement.count>=2;
   return (x.weeklyDelta??0)>=.75;
 }
 
@@ -514,6 +535,34 @@ export function buildWaiverPlan(pairs=[],limit=3){
   return plan;
 }
 
+export function buildIrFirstPlan({
+  irPlayer=null,irAdd=null,irWaiver=null,irWeeklyDelta=null
+}={}){
+  if(!irPlayer||!irAdd||!irWaiver)return null;
+  const claimOnly=!!irWaiver.waiverOnly;
+  return {
+    type:"IR_ADD",priority:0,confidence:"HIGH",
+    headline:claimOnly
+      ? `Move ${irPlayer.name} to IR; claim ${irAdd.name} next waiver`
+      : `Move ${irPlayer.name} to IR, add ${irAdd.name}`,
+    why:claimOnly
+      ? `Use the open IR slot now, but do not imply the target is immediately addable. ${irAdd.name} has already started and must wait for this league's next waiver run.`
+      : `Use an open IR slot instead of sacrificing ${irWaiver.drop}. This preserves the bench asset while adding the top cleared target.`,
+    window:claimOnly?"NEXT WAIVER RUN":"NOW",
+    add:{name:irAdd.name},drop:null,
+    moveToIr:{name:irPlayer.name},
+    faabPct:null,
+    waiverOnly:claimOnly,
+    immediateFreeAgent:!!irWaiver.immediateFreeAgent,
+    claimRank:irWaiver.claimRank||1,claimRole:irWaiver.claimRole||"PRIMARY",
+    weeklyDelta:irWeeklyDelta,
+    depthDelta:irWaiver.depthDelta??null,
+    injuryOpportunity:irWaiver.injuryOpportunity||null,
+    liveRole:irWaiver.liveRole||null,
+    drivers:["roster_slot","depth"],
+  };
+}
+
 export function deterministicRosterFallback({
   waivers=[],trades=[],mode="REDRAFT",usesFaab=false,faabRemainingPct=100,teamState=null
 }={}) {
@@ -527,7 +576,7 @@ export function deterministicRosterFallback({
     );
     const agreement=w.signalAgreement||waiverSignalAgreement(w);
     let confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
-    if(w.waiverOnly){
+    if(w.waiverOnly||w.immediateFreeAgent){
       confidence=agreement.strong?"HIGH":agreement.actionable?"MEDIUM":"LOW";
     }
     let faabBase=mode==="DYNASTY"
@@ -544,7 +593,9 @@ export function deterministicRosterFallback({
       claimRank:w.claimRank??i+1,claimRole:w.claimRole||(i===0?"PRIMARY":"BACKUP"),
       headline:w.waiverOnly
         ? `Claim ${w.add}, drop ${w.drop}`
-        : w.specialistMode==="STREAM_SWAP"
+        : w.immediateFreeAgent
+          ? `Add ${w.add} now, drop ${w.drop}`
+          : w.specialistMode==="STREAM_SWAP"
           ? `Stream ${w.add}, drop ${w.drop}`
           : w.specialistMode==="BYE_HOLD"
             ? `Short-term hold ${w.add}, drop ${w.drop}`
@@ -554,7 +605,9 @@ export function deterministicRosterFallback({
             agreement.role?"role":null,agreement.injury?"injury opportunity":null,
             agreement.market?"add heat":null,agreement.value?"future value":null
           ].filter(Boolean).join(", ")}.`
-        : mode==="DYNASTY"
+        : w.immediateFreeAgent
+          ? `Open-FA alert: this player is available now. ${w.liveRole?.reasons?.length?`Live role evidence: ${w.liveRole.reasons.join(" // ")}.`:w.injuryOpportunity?.applied?`Opportunity has opened because unavailable teammate workload is being redistributed.`:Number(w.fastTrending||0)>=15||Number(w.trendVelocity||0)>=8?`The market is accelerating and the roster-value screen also cleared.`:`The roster-value screen cleared; no live role change is being claimed.`}`
+          : mode==="DYNASTY"
           ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
         : w.specialistMode==="STREAM_SWAP"
           ? `DST/K roster construction: this is a specialist-for-specialist stream, not a second specialist using a skill-position bench spot. ${w.streamWeekEdge==null?"":`This week ${w.streamWeekEdge>=0?"+":""}${w.streamWeekEdge.toFixed(1)}; `}${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} projected points/week across the short horizon.`
@@ -565,7 +618,7 @@ export function deterministicRosterFallback({
                 ? `Injury-created stash: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value, with ${Number(w.injuryOpportunity.edgePct||0).toFixed(1)}% short-term opportunity from unavailable teammate workload.`
                 : `Bench-upside screen: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value with a real role/trend breakout signal; no immediate starter gain is required.`
               : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
-      window:w.waiverOnly?"NEXT WAIVER RUN":"BEFORE WAIVERS",
+      window:w.waiverOnly?"NEXT WAIVER RUN":w.immediateFreeAgent?"NOW":"BEFORE WAIVERS",
       add:{name:w.add},drop:{name:w.drop},faabPct,
       drivers:[
         w.injuryOpportunity?.applied?"injury_opportunity":(w.stash?"role":"depth"),
@@ -578,8 +631,10 @@ export function deterministicRosterFallback({
       breakoutScore:w.breakoutScore??null,marketDelta:w.marketDelta??null,
       trendDelta:w.trendDelta??null,trendVelocity:w.trendVelocity??null,
       fastTrending:w.fastTrending??0,waiverOnly:!!w.waiverOnly,
+      immediateFreeAgent:!!w.immediateFreeAgent,
       signalCount:agreement.count,signalAgreement:agreement,
       injuryOpportunity:w.injuryOpportunity||null,
+      liveRole:w.liveRole||null,
       tdDependency:w.tdDependency??null,mirageRisk:w.mirageRisk??0,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
@@ -638,8 +693,8 @@ export default async req=>{
     const league=core.league,snapshot=computeSnapshot(core,db);
     const me=snapshot.teams.find(t=>t.isMe);
     if(!me)throw new Error("my roster missing");
-    const teamState=diagnoseTeamState(snapshot.teams,me);
     const mode=detectLeagueMode(league);
+    const acquisition=acquisitionPolicy(league);
     const faabTotal=Number(league.settings?.waiver_budget||0);
     const faabUsed=Number(me.waiverBudgetUsed||0);
     const faabRemaining=Math.max(0,faabTotal-faabUsed);
@@ -650,18 +705,23 @@ export default async req=>{
     const reserveUsed=Array.isArray(me.reserve)?me.reserve.length:0;
     const openReserveSlots=Math.max(0,reserveSlots-reserveUsed);
     const week=Number(core.nflState?.week)||1,season=Number(core.nflState?.season)||Number(league.season);
-    const [proj,formContext,lineupData,market,gamesCsv,injuryCsv]=await Promise.all([
+    const [proj,formContext,lineupData,market,gamesCsv,injuryCsv,liveStatsRaw,historicalMatchups]=await Promise.all([
       projectionMap(season,week,league,db),
       recentFormMap(season,week,league),
       lineup(new Request(`${url.origin}/.netlify/functions/lineup?league=${encodeURIComponent(chosen.id)}`))
         .then(r=>r.json()).catch(()=>null),
       mode==="DYNASTY"?getDynastyMarket(s):Promise.resolve({players:{},picks:{},scrapeDate:null}),
       txt("https://github.com/nflverse/nfldata/raw/master/data/games.csv"),
-      txt(`${NV}/injuries/injuries_${season}.csv`)
+      txt(`${NV}/injuries/injuries_${season}.csv`),
+      j(`https://api.sleeper.app/v1/stats/nfl/regular/${season}/${week}`).catch(()=>({})),
+      allPlayHistory(s,chosen.id,week)
     ]);
+    const allPlay=buildAllPlayMetrics(historicalMatchups,me.rosterId,me.wins);
+    const teamState=diagnoseTeamState(snapshot.teams,me,{allPlay});
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
     const officialInjuries=currentOfficialInjuries(injuryCsv,week);
     const formMap=formContext?.map||{};
+    const liveStatsById=normalizeSleeperWeekStats(liveStatsRaw);
     const opportunityProfiles=buildOpportunityProfiles(
       formContext?.currentRows||[],formContext?.priorRows||[],week
     );
@@ -709,7 +769,29 @@ export default async req=>{
         );
       })
       .map(([pid])=>pid);
+
+    // Find role changes before the market necessarily notices. Current-week
+    // Sleeper stats can promote an unrostered RB/WR/TE into the scan from
+    // targets, touches and snap share. Fantasy points alone are not a trigger.
+    const liveRoleById={};
+    for(const [pid,stats] of Object.entries(liveStatsById||{})){
+      if(!pid||rostered.has(pid))continue;
+      const info=pInfo(db,pid),pos=slotPos(info);
+      if(!["RB","WR","TE"].includes(pos)||!info.team)continue;
+      const game=gameLocks[normTeam(info.team)]||null;
+      const progress=liveGameProgress(game?.kickoffAt,Date.now());
+      if(progress<=0)continue;
+      const form=formMap[normName(info.name)]||{};
+      const liveRole=liveRoleEmergence({
+        pos,stats,progress,
+        baselineTargets:form.recentTargets||form.baselineTargets||0,
+        baselineCarries:form.recentCarries||form.baselineCarries||0
+      });
+      if(liveRole)liveRoleById[pid]=liveRole;
+    }
+    const liveRoleIds=Object.keys(liveRoleById);
     const candidateIds=[...new Set([
+      ...liveRoleIds,
       ...(core.trendingFast||[]).map(x=>x.player_id),
       ...(core.trending||[]).map(x=>x.player_id),
       ...topProj,
@@ -735,14 +817,19 @@ export default async req=>{
       const velocityBonus=Math.log10(1+trendVelocity)*1.5;
       const fastBonus=Math.log10(1+fastTrend)*(mode==="DYNASTY"?1.0:1.8);
       const injuryBonus=Number(p.injuryOpportunityBonus||0);
+      const liveRole=liveRoleById[pid]||null;
+      const liveRoleBonus=liveRole?Number(liveRole.score||0)*2.2:0;
       const forecast=postGameWaiverForecast(p,week);
       const score=mode==="DYNASTY"
-        ? (mv??0)*.7+forecast*1.25+Math.log10(1+trend)*3+velocityBonus+fastBonus+ageBonus+injuryBonus*.35
-        : forecast*4+Math.log10(1+trend)*3+velocityBonus+fastBonus+injuryBonus*1.25;
+        ? (mv??0)*.7+forecast*1.25+Math.log10(1+trend)*3+velocityBonus+fastBonus+ageBonus+injuryBonus*.35+liveRoleBonus
+        : forecast*4+Math.log10(1+trend)*3+velocityBonus+fastBonus+injuryBonus*1.25+liveRoleBonus*1.4;
+      const waiverOnly=!!p.gameLocked&&!acquisition.canAddStartedPlayers;
       return {
         ...p,market:mv,trending:trend,fastTrending:fastTrend,
         trendDelta:round(trendDelta),trendVelocity:round(trendVelocity),
-        waiverNext3:forecast,waiverOnly:!!p.gameLocked,screenScore:round(score)
+        liveRole,
+        immediateFreeAgent:!!p.gameLocked&&acquisition.canAddStartedPlayers,
+        waiverNext3:forecast,waiverOnly,screenScore:round(score)
       };
     }).filter(p=>p.name&&p.team&&!hardInjured(p.injury))
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,30);
@@ -855,9 +942,8 @@ export default async req=>{
       for(const drop of drops.slice(0,8)){
         if(add.pid===drop.pid)continue;
 
-        // A player whose NFL game has started is no longer an immediate add,
-        // but Sunday scouting should preserve him for the next waiver run.
-        // For those players, value FUTURE weeks only.
+        // Started-player acquisition is league-specific. The fun league
+        // pushes him to the next waiver run; Team Ocho remains open FA.
         if(add.gameLocked && SPECIALIST_POSITIONS.has(add.pos))continue;
         const addForSim=add.gameLocked
           ? {...add,next3:postGameWaiverForecast(add,week)}
@@ -879,6 +965,7 @@ export default async req=>{
           : {thisWeekEdge:null,next3Edge:null};
 
         const roleSurge=Math.max(0,Number(add.roleRatio||1)-1);
+        const liveRoleSignal=add.liveRole?.strong?2:add.liveRole?1:0;
         const trendSignal=Math.log10(1+Number(add.trending||0));
         const velocitySignal=Math.log10(1+Number(add.trendVelocity||0));
         const injurySignal=add.injuryOpportunity?.applied
@@ -886,10 +973,10 @@ export default async req=>{
           : 0;
         const mirageRisk=Math.max(0,Number(add.mirageRisk||0));
         const breakoutScore=round(
-          roleSurge*10+trendSignal+velocitySignal*1.5+injurySignal*.7-mirageRisk*3
+          roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+injurySignal*.7-mirageRisk*3
         );
         const independentOpportunity=
-          roleSurge>=.08 || injurySignal>=1.5;
+          roleSurge>=.08 || injurySignal>=1.5 || !!add.liveRole?.strong;
         const stash=!SPECIALIST_POSITIONS.has(add.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
           (
@@ -903,8 +990,9 @@ export default async req=>{
         const agreement=waiverSignalAgreement({
           weeklyDelta,depthDelta,marketDelta,
           addRoleRatio:add.roleRatio,injuryOpportunity:add.injuryOpportunity,
+          liveRole:add.liveRole,
           fastTrending:add.fastTrending,trendVelocity:add.trendVelocity,
-          mirageRisk:add.mirageRisk,waiverOnly:add.gameLocked
+          mirageRisk:add.mirageRisk,waiverOnly:add.waiverOnly
         });
         const agreementBonus=Math.max(0,agreement.count-1)*1.1;
         const score=mode==="DYNASTY"
@@ -920,9 +1008,11 @@ export default async req=>{
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
           fastTrending:add.fastTrending??0,
           trendDelta:add.trendDelta,trendVelocity:add.trendVelocity,
-          waiverOnly:!!add.gameLocked,kickoffAt:add.kickoffAt||null,
+          waiverOnly:!!add.waiverOnly,immediateFreeAgent:!!add.immediateFreeAgent,
+          kickoffAt:add.kickoffAt||null,
           signalCount:agreement.count,signalAgreement:agreement,
           injuryOpportunity:add.injuryOpportunity||null,
+          liveRole:add.liveRole||null,
           injuryOpportunityBonus:add.injuryOpportunityBonus||0,
           tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
@@ -950,20 +1040,9 @@ export default async req=>{
     const irWeeklyDelta=irAdd
       ? round(simTotal(rosterAfter(myRoster,{addPlayers:[irAdd]}),activeSlots)-baselineRosterTotal)
       : null;
-    const irPlan=irPlayer&&irAdd?{
-      type:"IR_ADD",priority:0,confidence:"HIGH",
-      headline:`Move ${irPlayer.name} to IR, add ${irAdd.name}`,
-      why:`Use an open IR slot instead of sacrificing ${irWaiver.drop}. This preserves the bench asset while adding the top cleared waiver target.`,
-      window:"NOW",
-      add:{name:irAdd.name},drop:null,
-      moveToIr:{name:irPlayer.name},
-      faabPct:null,
-      claimRank:irWaiver.claimRank||1,claimRole:irWaiver.claimRole||"PRIMARY",
-      weeklyDelta:irWeeklyDelta,
-      depthDelta:irWaiver.depthDelta??null,
-      injuryOpportunity:irWaiver.injuryOpportunity||null,
-      drivers:["roster_slot","depth"],
-    }:null;
+    const irPlan=buildIrFirstPlan({
+      irPlayer,irAdd,irWaiver,irWeeklyDelta
+    });
 
     const tradeTargets=[];
     for(const team of otherTeams){
@@ -1126,6 +1205,7 @@ export default async req=>{
 
 LEAGUE: ${league.name}
 MODE: ${mode}
+ACQUISITION POLICY: ${acquisition.label} (${acquisition.source})
 NFL WEEK: ${week}
 MY MATCHUP WIN CHANCE: ${lineupData?.matchup?.winProbability??"unknown"}%
 MY WAIVER POSITION: ${me.waiverPosition??"unknown"}
@@ -1167,7 +1247,8 @@ Use web search for current injury/practice news, depth-chart movement, snap/rout
 
 Hard rules:
 - A pickup must be from ACTUALLY UNROSTERED CANDIDATES.
-- If a candidate has waiverOnly=true, that player's game has already started. Never describe that as an immediate add. It is a NEXT WAIVER RUN claim only.
+- If a candidate has waiverOnly=true, that player's game has already started and this league locks him. It is a NEXT WAIVER RUN claim only.
+- If a candidate has immediateFreeAgent=true, this league permits the acquisition despite the game already starting. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
 - Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
 - Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
 - If an add needs a roster spot, give an exact drop from MY ROSTER.
@@ -1247,30 +1328,34 @@ Return ONLY valid JSON:
           ? specialistScheduleEdge(addForSim,drop,week)
           : {thisWeekEdge:null,next3Edge:null};
         const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
+        const liveRoleSignal=add?.liveRole?.strong?2:add?.liveRole?1:0;
         const trendSignal=Math.log10(1+Number(add?.trending||0));
         const velocitySignal=Math.log10(1+Number(add?.trendVelocity||0));
         const fastSignal=Math.log10(1+Number(add?.fastTrending||0));
         const injurySignal=add?.injuryOpportunity?.applied
           ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
           : 0;
-        const breakoutScore=round(roleSurge*10+trendSignal+velocitySignal*1.5+fastSignal+injurySignal*.7);
+        const breakoutScore=round(roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+fastSignal+injurySignal*.7);
         const stash=!SPECIALIST_POSITIONS.has(add?.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
-          (roleSurge>=.08 || injurySignal>=1.5 || trendSignal>=2 || velocitySignal>=1.45);
+          (roleSurge>=.08 || injurySignal>=1.5 || !!add?.liveRole?.strong || trendSignal>=2 || velocitySignal>=1.45);
         const agreement=waiverSignalAgreement({
           weeklyDelta,depthDelta,marketDelta,
           addRoleRatio:add?.roleRatio,injuryOpportunity:add?.injuryOpportunity,
+          liveRole:add?.liveRole,
           fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity,
-          mirageRisk:add?.mirageRisk,waiverOnly:add?.gameLocked
+          mirageRisk:add?.mirageRisk,waiverOnly:add?.waiverOnly
         });
         return {
           ...a,
-          headline:add?.gameLocked&&add?.name
+          headline:add?.waiverOnly&&add?.name
             ? `Claim ${add.name}${drop?.name?`, drop ${drop.name}`:""}`
-            : a.headline,
-          window:add?.gameLocked?"NEXT WAIVER RUN":a.window,
+            : add?.immediateFreeAgent&&add?.name
+              ? `Add ${add.name} now${drop?.name?`, drop ${drop.name}`:""}`
+              : a.headline,
+          window:add?.waiverOnly?"NEXT WAIVER RUN":add?.immediateFreeAgent?"NOW":a.window,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
-          waiverOnly:!!add?.gameLocked,
+          waiverOnly:!!add?.waiverOnly,immediateFreeAgent:!!add?.immediateFreeAgent,
           signalCount:agreement.count,signalAgreement:agreement,
           fastTrending:add?.fastTrending??0,
           trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
@@ -1283,6 +1368,7 @@ Return ONLY valid JSON:
           recentPts:add?.recentPts??null,
           providerNext3:add?.providerNext3??null,
           injuryOpportunity:add?.injuryOpportunity||null,
+          liveRole:add?.liveRole||null,
           mirageRisk:add?.mirageRisk??0,
         };
       }
@@ -1391,6 +1477,7 @@ Return ONLY valid JSON:
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
         teamState,
+        acquisition,
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
         waiver:{usesFaab,total:faabTotal,used:faabUsed,remaining:faabRemaining},
@@ -1403,10 +1490,16 @@ Return ONLY valid JSON:
         baselineNext3Lineup:baselineRosterTotal,
         waiverPlan,
         deterministicWaiverPairs:bestWaiverPairs.slice(0,5),
+        liveRoleAlerts:free.filter(p=>p.liveRole).slice(0,8).map(p=>({
+          name:p.name,pos:p.pos,team:p.team,waiverOnly:p.waiverOnly,
+          immediateFreeAgent:p.immediateFreeAgent,liveRole:p.liveRole
+        })),
         rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
         noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
         depthProtection:"redraft protects one RB and WR beyond dedicated starting slots unless a cross-position move adds at least 2.5 pts/week",
-        gameDayLegality:"played/playing free agents remain visible as next-waiver targets; they are never presented as immediate adds. Specialist streams still require an unlocked game.",
+        gameDayLegality:acquisition.canAddStartedPlayers
+          ?"Team Ocho uses open free agency: live RB/WR/TE breakouts can be immediate adds when role evidence clears the actionability screen."
+          :"Started players are next-waiver targets only; unlocked free agents can still be added immediately.",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         trendingSnapshot:trendById,
