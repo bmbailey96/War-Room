@@ -869,9 +869,9 @@ const {
   ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey,
   rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
-assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v8");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v8_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v8_123");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v9");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v9_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v9_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
 assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);
@@ -967,6 +967,13 @@ const buyLowTiming=roleMarketTiming({
 });
 assert.equal(buyLowTiming.code,"BUY_LOW");
 assert.ok(buyLowTiming.score>0);
+
+const buyRoleTiming=roleMarketTiming({
+  currentGames:3,recentPts:10.8,baselinePts:10,roleRatio:1.18,
+  tdDependency:.12,mirageRisk:.08
+});
+assert.equal(buyRoleTiming.code,"BUY_ROLE");
+assert.ok(buyRoleTiming.score>0);
 
 const sellHighTiming=roleMarketTiming({
   currentGames:3,recentPts:18,baselinePts:10,roleRatio:.98,
@@ -1162,7 +1169,7 @@ console.log("League-specific IR eligibility checks passed");
 
 
 const {
-  postGameWaiverForecast,waiverSignalAgreement,buildIrFirstPlan
+  postGameWaiverForecast,waiverSignalAgreement,buildIrFirstPlan,reserveMoveAvailability
 } = await import("../netlify/functions/roster-actions-background.mjs");
 
 assert.equal(postGameWaiverForecast({
@@ -1210,6 +1217,13 @@ assert.equal(sundayClaim.actions[0].window,"NEXT WAIVER RUN");
 assert.equal(sundayClaim.actions[0].waiverOnly,true);
 assert.ok(sundayClaim.actions[0].faabPct<=8);
 
+assert.equal(reserveMoveAvailability({
+  name:"Injured Starter",reserveEligible:true,gameLocked:true
+}).canMoveNow,false);
+assert.equal(reserveMoveAvailability({
+  name:"Injured Starter",reserveEligible:true,gameLocked:false
+}).canMoveNow,true);
+
 const lockedIrClaim=buildIrFirstPlan({
   irPlayer:{name:"Injured Starter"},
   irAdd:{name:"Sunday Breakout"},
@@ -1217,11 +1231,15 @@ const lockedIrClaim=buildIrFirstPlan({
     add:"Sunday Breakout",drop:"Bench End",waiverOnly:true,
     claimRank:1,claimRole:"PRIMARY",depthDelta:2
   },
-  irWeeklyDelta:0
+  irWeeklyDelta:0,
+  canMoveToIrNow:false,
+  waiverWindowLabel:"AFTER WEEK / BEFORE WED WAIVERS"
 });
-assert.equal(lockedIrClaim.window,"NEXT WAIVER RUN");
+assert.equal(lockedIrClaim.window,"AFTER WEEK / BEFORE WED WAIVERS");
 assert.equal(lockedIrClaim.waiverOnly,true);
-assert.match(lockedIrClaim.headline,/claim Sunday Breakout next waiver/i);
+assert.equal(lockedIrClaim.deferred,true);
+assert.match(lockedIrClaim.headline,/Prep Sunday Breakout/i);
+assert.doesNotMatch(lockedIrClaim.headline,/^Move .* to IR/i);
 
 const openFaIrAdd=buildIrFirstPlan({
   irPlayer:{name:"Injured Starter"},
@@ -1308,7 +1326,7 @@ assert.equal(noPanicTrade.actions[0].type,"HOLD");
 console.log("Team-state diagnosis and anti-panic behavior checks passed");
 
 
-const { acquisitionPolicy } = await import("../netlify/functions/lib/roster-v2.mjs");
+const { acquisitionPolicy,waiverScheduleFromSettings } = await import("../netlify/functions/lib/roster-v2.mjs");
 const {
   normalizeSleeperWeekStats,liveRoleEmergence,liveUsageCounts
 } = await import("../netlify/functions/lib/live-market.mjs");
@@ -1316,9 +1334,22 @@ const {
 const ochoPolicy=acquisitionPolicy({name:"The Ocho"});
 assert.equal(ochoPolicy.mode,"OPEN_FA");
 assert.equal(ochoPolicy.canAddStartedPlayers,true);
+const renamedOcho=acquisitionPolicy({
+  league_id:"1205222463223365632",name:"Renamed Dynasty League"
+});
+assert.equal(renamedOcho.mode,"OPEN_FA");
+const nameCollision=acquisitionPolicy({league_id:"different-league",name:"The Ocho"});
+assert.equal(nameCollision.mode,"WAIVERS");
 const funPolicy=acquisitionPolicy({name:"Teenypetes"});
 assert.equal(funPolicy.mode,"WAIVERS");
 assert.equal(funPolicy.canAddStartedPlayers,false);
+
+const waiverSchedule=waiverScheduleFromSettings({
+  waiver_day_of_week:2,waiver_clear_days:2,daily_waivers:0
+});
+assert.equal(waiverSchedule.afterGameDay,"TUE");
+assert.equal(waiverSchedule.afterGameProcessDay,"WED");
+assert.equal(waiverSchedule.dropClearDays,2);
 
 const liveWr=liveRoleEmergence({
   pos:"WR",progress:.5,baselineTargets:5,
@@ -1368,9 +1399,19 @@ assert.equal(emergingRbShare.shareSignal,true);
 assert.equal(emergingRbShare.strong,true);
 assert.ok(emergingRbShare.liveCarryShare>=66);
 
+const emergingRouteRole=liveRoleEmergence({
+  pos:"WR",progress:.45,baselineTargets:4,baselineRouteParticipation:.55,
+  teamTargets:20,teamRoutes:26,
+  stats:{rec_tgt:3,routes_run:22}
+});
+assert.equal(emergingRouteRole.routeSignal,true);
+assert.equal(emergingRouteRole.strong,true);
+assert.ok(emergingRouteRole.routeParticipation>=84);
+assert.ok(emergingRouteRole.reasons.some(x=>x.includes("route participation")));
+
 assert.deepEqual(
   liveUsageCounts({rec_tgt:4,rush_att:3,off_snp:20,tm_off_snp:35}),
-  {targets:4,carries:3,receptions:0,offSnaps:20,teamOffSnaps:35}
+  {targets:4,carries:3,receptions:0,offSnaps:20,teamOffSnaps:35,routes:0,teamRoutes:0}
 );
 
 const normalized=normalizeSleeperWeekStats({
@@ -1429,4 +1470,24 @@ assert.equal(allPlayScheduleLoss.code,"SCHEDULE_VARIANCE");
 assert.equal(allPlayScheduleLoss.pointsAgainstRank,4);
 assert.equal(allPlayScheduleLoss.allPlayExpectedWins,1);
 
-console.log("Open-FA live breakout and all-play diagnosis checks passed");
+const { buildPulseAlerts } = await import("../netlify/functions/roster-market-pulse.mjs");
+const pulseAlerts=buildPulseAlerts({
+  rosters:[{players:["rostered-wr"]}],
+  db:{
+    "rostered-wr":{n:"Rostered WR",p:"WR",fp:["WR"],t:"GB"},
+    "free-wr":{n:"Free WR",p:"WR",fp:["WR"],t:"GB"}
+  },
+  liveStatsRaw:{
+    "rostered-wr":{rec_tgt:6},
+    "free-wr":{rec_tgt:5}
+  },
+  gameLocks:{GB:{
+    kickoffAt:new Date(Date.now()-2*60*60*1000).toISOString(),locked:true
+  }},
+  acquisition:{canAddStartedPlayers:true}
+});
+assert.equal(pulseAlerts.length,1);
+assert.equal(pulseAlerts[0].name,"Free WR");
+assert.equal(pulseAlerts[0].immediateFreeAgent,true);
+
+console.log("Open-FA live breakout, pulse, and all-play diagnosis checks passed");
