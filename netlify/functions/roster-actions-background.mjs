@@ -100,6 +100,43 @@ export function dynastyTradeEfficient({
   }
   return {allowed:true,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:null};
 }
+
+export function roleMarketTiming(player={}){
+  const games=Number(player.currentGames||0);
+  const recent=Number(player.recentPts);
+  const baseline=Number(player.baselinePts);
+  const role=Math.max(.65,Math.min(1.4,Number(player.roleRatio||1)));
+  const mirage=Math.max(0,Math.min(1,Number(player.mirageRisk||0)));
+  const td=Math.max(0,Number(player.tdDependency||0));
+  if(games<2 || !Number.isFinite(recent) || !Number.isFinite(baseline) || baseline<3){
+    return {code:"NEUTRAL",label:null,score:0,roleRatio:round(role),pointRatio:null};
+  }
+  const pointRatio=Math.max(.35,Math.min(2.2,recent/baseline));
+  const divergence=role-pointRatio;
+
+  // Buy-low means the underlying role improved before the fantasy box score
+  // followed it. Sell-high requires the opposite plus touchdown/mirage support.
+  // Neither signal changes trade fairness. It is only a timing/ranking input.
+  const buyScore=Math.max(0,(role-1)*5)+Math.max(0,divergence)*4;
+  const sellScore=Math.max(0,(pointRatio-1)*3)+Math.max(0,1.04-role)*4+mirage*2.5;
+  if(role>=1.08 && pointRatio<=.98 && divergence>=.12 && buyScore>=.8){
+    return {
+      code:"BUY_LOW",label:"ROLE AHEAD OF BOX SCORE",score:round(Math.min(3,buyScore)),
+      roleRatio:round(role),pointRatio:round(pointRatio),mirageRisk:round(mirage)
+    };
+  }
+  if(pointRatio>=1.18 && role<=1.05 && (mirage>=.25 || td>=.38) && sellScore>=1){
+    return {
+      code:"SELL_HIGH",label:"BOX SCORE AHEAD OF ROLE",score:round(Math.min(3,sellScore)),
+      roleRatio:round(role),pointRatio:round(pointRatio),mirageRisk:round(mirage)
+    };
+  }
+  return {
+    code:"NEUTRAL",label:null,score:0,
+    roleRatio:round(role),pointRatio:round(pointRatio),mirageRisk:round(mirage)
+  };
+}
+
 function hardInjured(status){
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/i.test(String(status||""));
 }
@@ -360,6 +397,10 @@ function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
     forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
     baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
     mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
+    tradeTiming:roleMarketTiming({
+      currentGames:form.currentGames,recentPts:form.recentPts,baselinePts:form.baselinePts,
+      roleRatio:form.roleRatio,tdDependency:form.tdDependency,mirageRisk:form.mirageRisk
+    }),
     kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
   };
 }
@@ -657,6 +698,9 @@ export function deterministicRosterFallback({
       horizonSend:t.horizonSend??null,horizonReceive:t.horizonReceive??null,
       tradeRatio:t.tradeRatio??null,
       marketDelta:t.marketDelta??null,managerFit:t.managerFit??null,
+      tradeTiming:t.tradeTiming||null,
+      sentTradeTiming:t.sentTradeTiming||[],
+      timingScore:t.timingScore??null,
       partnerCareerTrades:t.partnerCareerTrades??null,
     });
   }
@@ -868,6 +912,10 @@ export default async req=>{
         forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
         baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
         mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
+        tradeTiming:roleMarketTiming({
+          currentGames:form.currentGames,recentPts:form.recentPts,baselinePts:form.baselinePts,
+          roleRatio:form.roleRatio,tdDependency:form.tdDependency,mirageRisk:form.mirageRisk
+        }),
         kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
       };
       return injuryOpportunityForecast(
@@ -1072,14 +1120,23 @@ export default async req=>{
           partner:team.name,name:p.name,pos:p.pos,age:p.age,next3:p.next3,
           market:p.market,weeklyCeiling,tradeTotal:p.tradeTotal,tradeAvg:p.tradeAvg,
           forecastSource:p.forecastSource,roleRatio:p.roleRatio,recentPts:p.recentPts,
+          baselinePts:p.baselinePts,tradeTiming:p.tradeTiming||roleMarketTiming(p),
           partnerHoles:team.holes,partnerSurplus:team.surplus
         });
       }
     }
+    const targetTimingScore=t=>{
+      const timing=t?.tradeTiming||{};
+      if(timing.code==="BUY_LOW")return Number(timing.score||0)*1.2;
+      if(timing.code==="SELL_HIGH")return -Number(timing.score||0)*.8;
+      return 0;
+    };
     tradeTargets.sort((a,b)=>
       mode==="DYNASTY"
-        ? ((b.weeklyCeiling*5+(b.market??0)*.15)-(a.weeklyCeiling*5+(a.market??0)*.15))
-        : b.weeklyCeiling-a.weeklyCeiling
+        ? ((b.weeklyCeiling*5+(b.market??0)*.15+targetTimingScore(b))-
+           (a.weeklyCeiling*5+(a.market??0)*.15+targetTimingScore(a)))
+        : ((b.weeklyCeiling+targetTimingScore(b)*.35)-
+           (a.weeklyCeiling+targetTimingScore(a)*.35))
     );
     const bestTradeTargets=tradeTargets.slice(0,24);
 
@@ -1181,7 +1238,20 @@ export default async req=>{
           ? (/rebuild|retool/i.test(partner.stance||"")?1.4:/win-now|ascending/i.test(partner.stance||"")?-.6:0)+Math.min(.8,pickHistory*.25)
           : (/win-now|ascending/i.test(partner.stance||"")?.7:0);
         const managerFit=positionTaste*.8+stanceFit;
-        const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+managerFit;
+        const targetTiming=targetPlayer.tradeTiming||roleMarketTiming(targetPlayer);
+        const sentTiming=sentPlayers.map(p=>p.tradeTiming||roleMarketTiming(p));
+        const sellHighScore=sentTiming
+          .filter(x=>x.code==="SELL_HIGH")
+          .reduce((s,x)=>s+Number(x.score||0),0);
+        const protectedBuyLowScore=sentTiming
+          .filter(x=>x.code==="BUY_LOW")
+          .reduce((s,x)=>s+Number(x.score||0),0);
+        const timingScore=
+          (targetTiming.code==="BUY_LOW"?Number(targetTiming.score||0)*1.4:0)-
+          (targetTiming.code==="SELL_HIGH"?Number(targetTiming.score||0)*.8:0)+
+          sellHighScore*.65-protectedBuyLowScore*1.15;
+        const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+
+          managerFit+timingScore;
         if(!best||score>best.score){
           best={
             score,partner:target.partner,target:target.name,
@@ -1194,6 +1264,11 @@ export default async req=>{
             tradeRatio:tradeFit.ratio,
             marketDelta,
             managerFit:round(managerFit),
+            tradeTiming:targetTiming,
+            sentTradeTiming:sentPlayers.map(p=>({
+              name:p.name,...(p.tradeTiming||roleMarketTiming(p))
+            })),
+            timingScore:round(timingScore),
             partnerCareerTrades:careerTrades,
             partnerSeasonTrades:seasonTrades,
           };
@@ -1201,9 +1276,17 @@ export default async req=>{
       }
       if(best){
         best.confidence=best.weeklyDelta>=2&&best.partnerWeeklyDelta>=-1?"HIGH":"MEDIUM";
-        best.why=mode==="DYNASTY"
+        const timingNote=best.tradeTiming?.code==="BUY_LOW"
+          ? " Role is ahead of recent fantasy scoring, so the target gets a small buy-low timing boost."
+          : best.tradeTiming?.code==="SELL_HIGH"
+            ? " Recent scoring is ahead of role, so the target is penalized as a possible sell-high profile."
+            : best.sentTradeTiming?.some(x=>x.code==="SELL_HIGH")
+              ? " The outgoing side includes a box-score-ahead-of-role asset, which modestly improves timing."
+              : "";
+        best.why=(mode==="DYNASTY"
           ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical trade behavior.`
-          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`;
+          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`
+        )+timingNote;
         deterministicTrades.push(best);
       }
     }
@@ -1279,6 +1362,8 @@ Hard rules:
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
 - Do not recommend lateral churn.
+- Role-vs-box-score trade timing is a SOFT factor only. BUY_LOW means underlying role is ahead of recent fantasy scoring; SELL_HIGH means recent scoring is ahead of role with touchdown/mirage support. Never let timing make an unfair trade fair.
+- Avoid selling my BUY_LOW players merely because the recent box score is weak. Prefer SELL_HIGH outgoing assets only when the trade already improves my roster.
 - Do not treat a losing record by itself as evidence the roster is bad. Respect TEAM STATE DIAGNOSIS.
 - If TEAM STATE says BAD-LUCK SCHEDULE or RESULTS LAGGING, suppress panic sells and marginal trades.
 - If TEAM STATE says LINEUP EXECUTION, do not try to solve a start/sit problem with unnecessary roster churn.
@@ -1433,6 +1518,10 @@ Return ONLY valid JSON:
           roleRatio:primaryGet?.roleRatio??null,
           recentPts:primaryGet?.recentPts??null,
           providerNext3:primaryGet?.providerNext3??null,
+          tradeTiming:primaryGet?.tradeTiming||roleMarketTiming(primaryGet||{}),
+          sentTradeTiming:sentPlayers.map(p=>({
+            name:p.name,...(p.tradeTiming||roleMarketTiming(p))
+          })),
         };
       }
       return a;
@@ -1527,6 +1616,7 @@ Return ONLY valid JSON:
         redraftTradeHorizon:"up to six projected weeks, blended with current form and official injury status",
         replacementByPos,
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
+        tradeTimingModel:"role vs recent box score is a soft ranking factor; it never overrides lineup gain, partner plausibility, or dynasty/redraft value efficiency",
       },
       reasoningMode:(coreOnly||error)?"deterministic":"live_news",
       reasoningAvailable:!coreOnly&&!error,
