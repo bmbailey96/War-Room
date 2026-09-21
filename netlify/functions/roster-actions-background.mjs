@@ -421,7 +421,8 @@ export function positionalDepthDecision({
 }
 
 export function waiverSignalAgreement(x={}){
-  const role=Number(x.addRoleRatio||x.roleRatio||1)>=1.08;
+  const liveRole=!!x.liveRole?.strong;
+  const role=liveRole || Number(x.addRoleRatio||x.roleRatio||1)>=1.08;
   const injury=!!x.injuryOpportunity?.applied && Number(x.injuryOpportunity?.edgePct||0)>=1.5;
   const market=Number(x.fastTrending||0)>=15 || Number(x.trendVelocity||0)>=8;
   const value=Number(x.weeklyDelta||0)>=.75 || Number(x.depthDelta||0)>=1.5 ||
@@ -429,9 +430,9 @@ export function waiverSignalAgreement(x={}){
   const mirage=Number(x.mirageRisk||0)>=.45;
   const count=[role,injury,market,value].filter(Boolean).length;
   return {
-    count,role,injury,market,value,mirage,
+    count,role,liveRole,injury,market,value,mirage,
     strong:count>=3&&!mirage,
-    actionable:count>=2 && (value||injury) && !(mirage&&count<3)
+    actionable:count>=2 && (value||injury||liveRole) && !(mirage&&count<3)
   };
 }
 
@@ -446,13 +447,14 @@ export function waiverMoveActionable(x,mode="REDRAFT"){
     return agreement.actionable;
   }
 
+  if(x.immediateFreeAgent&&x.liveRole?.strong&&agreement.actionable)return true;
+  if(x.stash&&(x.depthDelta??0)>=1.5)return agreement.count>=2;
   if(mode==="DYNASTY")return (x.weeklyDelta??0)>=.5 || (x.marketDelta??0)>=6;
   if(x.specialistMode==="STREAM_SWAP"){
     if(x.streamWeekEdge!=null)return x.streamWeekEdge>=1 || (x.streamNext3Edge??0)>=1;
     return (x.weeklyDelta??0)>=.75;
   }
   if(x.specialistMode==="BYE_HOLD")return true;
-  if(x.stash&&(x.depthDelta??0)>=1.5)return agreement.count>=2;
   return (x.weeklyDelta??0)>=.75;
 }
 
@@ -772,14 +774,19 @@ export default async req=>{
       const velocityBonus=Math.log10(1+trendVelocity)*1.5;
       const fastBonus=Math.log10(1+fastTrend)*(mode==="DYNASTY"?1.0:1.8);
       const injuryBonus=Number(p.injuryOpportunityBonus||0);
+      const liveRole=liveRoleById[pid]||null;
+      const liveRoleBonus=liveRole?Number(liveRole.score||0)*2.2:0;
       const forecast=postGameWaiverForecast(p,week);
       const score=mode==="DYNASTY"
-        ? (mv??0)*.7+forecast*1.25+Math.log10(1+trend)*3+velocityBonus+fastBonus+ageBonus+injuryBonus*.35
-        : forecast*4+Math.log10(1+trend)*3+velocityBonus+fastBonus+injuryBonus*1.25;
+        ? (mv??0)*.7+forecast*1.25+Math.log10(1+trend)*3+velocityBonus+fastBonus+ageBonus+injuryBonus*.35+liveRoleBonus
+        : forecast*4+Math.log10(1+trend)*3+velocityBonus+fastBonus+injuryBonus*1.25+liveRoleBonus*1.4;
+      const waiverOnly=!!p.gameLocked&&!acquisition.canAddStartedPlayers;
       return {
         ...p,market:mv,trending:trend,fastTrending:fastTrend,
         trendDelta:round(trendDelta),trendVelocity:round(trendVelocity),
-        waiverNext3:forecast,waiverOnly:!!p.gameLocked,screenScore:round(score)
+        liveRole,
+        immediateFreeAgent:!!p.gameLocked&&acquisition.canAddStartedPlayers,
+        waiverNext3:forecast,waiverOnly,screenScore:round(score)
       };
     }).filter(p=>p.name&&p.team&&!hardInjured(p.injury))
       .sort((a,b)=>b.screenScore-a.screenScore).slice(0,30);
