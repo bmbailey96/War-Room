@@ -1033,3 +1033,45 @@ assert.equal(crispDrivers[1].edgePct,2);
 assert.equal(crispDrivers.some(x=>x.label==="TEAM TOTAL"),false);
 
 console.log("Crisp lineup-driver differential checks passed");
+
+
+const { injuryOpportunityForecast } = await import("../netlify/functions/roster-actions-background.mjs");
+
+const injuryBoosted=injuryOpportunityForecast(
+  {
+    name:"Backup WR",pos:"WR",next3:10,weeks:{3:10,4:10,5:10},
+    forecastSource:"blended_form"
+  },
+  {
+    name:"Backup WR",key:"backup wr",team:"GB",pos:"WR",
+    targetShare:.24,carryShare:null,aDot:11,effectiveTargets:30
+  },
+  {
+    activeTargetShare:.45,vacatedTargetShare:.30,
+    activeRbCarryShare:0,vacatedRbCarryShare:0,
+    vacatedNames:["Alpha WR"],activeNames:["Backup WR"]
+  },
+  3
+);
+assert.equal(injuryBoosted.injuryOpportunity.applied,true);
+assert.ok(injuryBoosted.next3>10);
+assert.ok(injuryBoosted.weeks[3]>injuryBoosted.next3);
+assert.ok(injuryBoosted.forecastSource.includes("vacated"));
+
+const lowSampleBoost=injuryOpportunityForecast(
+  {name:"Unknown WR",pos:"WR",next3:8,weeks:{3:8},forecastSource:"provider"},
+  {
+    name:"Unknown WR",key:"unknown wr",team:"GB",pos:"WR",
+    targetShare:.08,carryShare:null,aDot:10,effectiveTargets:1
+  },
+  {
+    activeTargetShare:.45,vacatedTargetShare:.30,
+    activeRbCarryShare:0,vacatedRbCarryShare:0,
+    vacatedNames:["Alpha WR"],activeNames:["Unknown WR"]
+  },
+  3
+);
+assert.equal(lowSampleBoost.injuryOpportunity.applied,false);
+assert.equal(lowSampleBoost.next3,8);
+
+console.log("Injury-created waiver opportunity checks passed");
