@@ -1143,8 +1143,11 @@ export default async req=>{
     const irLockedCandidates=irCandidates.filter(p=>!reserveMoveAvailability(p).canMoveNow);
     const immediateIrPlayer=openReserveSlots>0?irMoveableCandidates[0]||null:null;
     const deferredIrPlayer=openReserveSlots>0?irLockedCandidates[0]||null:null;
-    const irPlayer=immediateIrPlayer || (acquisition.mode==="WAIVERS"?deferredIrPlayer:null);
-    const irWaiver=irPlayer&&waiverPlan.length?waiverPlan[0]:null;
+    const topWaiver=waiverPlan[0]||null;
+    const canPreserveBenchLater=
+      acquisition.mode==="WAIVERS" && !!topWaiver?.waiverOnly;
+    const irPlayer=immediateIrPlayer || (canPreserveBenchLater?deferredIrPlayer:null);
+    const irWaiver=irPlayer?topWaiver:null;
     const irAdd=irWaiver?free.find(p=>normName(p.name)===normName(irWaiver.add)):null;
     const irWeeklyDelta=irAdd
       ? round(simTotal(rosterAfter(myRoster,{addPlayers:[irAdd]}),activeSlots)-baselineRosterTotal)
