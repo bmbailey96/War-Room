@@ -9,6 +9,30 @@ export function detectLeagueMode(league={}) {
   return dynasty ? "DYNASTY" : "REDRAFT";
 }
 
+export function acquisitionPolicy(league={}) {
+  const name=String(league.name||"");
+  // User-confirmed league rule: Team Ocho is open free agency. A player can
+  // still be acquired after his NFL game starts, so Sunday scouting must not
+  // automatically demote every started player to "next waivers".
+  if(/ocho/i.test(name)){
+    return {
+      mode:"OPEN_FA",
+      canAddStartedPlayers:true,
+      label:"OPEN FREE AGENCY",
+      source:"USER_CONFIRMED"
+    };
+  }
+
+  // The other active league is waiver-based. Keep this conservative rather
+  // than guessing from undocumented Sleeper numeric settings.
+  return {
+    mode:"WAIVERS",
+    canAddStartedPlayers:false,
+    label:"WAIVERS",
+    source:"LEAGUE_DEFAULT"
+  };
+}
+
 export function teamNameMap(users=[]) {
   return Object.fromEntries(users.map(u=>[
     u.user_id,
