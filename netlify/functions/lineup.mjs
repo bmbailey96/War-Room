@@ -593,7 +593,10 @@ function lineupCallDrivers(start,sit,limit=3) {
   return [...totals.entries()]
     .map(([label,edgePct])=>({label,edgePct:round(edgePct)}))
     .filter(x=>Math.abs(x.edgePct)>=.7)
-    .sort((a,b)=>Math.abs(b.edgePct)-Math.abs(a.edgePct))
+    .sort((a,b)=>
+      (Math.abs(b.edgePct)-Math.abs(a.edgePct)) ||
+      a.label.localeCompare(b.label)
+    )
     .slice(0,limit);
 }
 
