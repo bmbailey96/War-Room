@@ -1134,7 +1134,7 @@ console.log("League-specific IR eligibility checks passed");
 
 
 const {
-  postGameWaiverForecast,waiverSignalAgreement
+  postGameWaiverForecast,waiverSignalAgreement,buildIrFirstPlan
 } = await import("../netlify/functions/roster-actions-background.mjs");
 
 assert.equal(postGameWaiverForecast({
@@ -1181,6 +1181,32 @@ assert.ok(sundayClaim.actions[0].headline.startsWith("Claim Sunday Breakout"));
 assert.equal(sundayClaim.actions[0].window,"NEXT WAIVER RUN");
 assert.equal(sundayClaim.actions[0].waiverOnly,true);
 assert.ok(sundayClaim.actions[0].faabPct<=8);
+
+const lockedIrClaim=buildIrFirstPlan({
+  irPlayer:{name:"Injured Starter"},
+  irAdd:{name:"Sunday Breakout"},
+  irWaiver:{
+    add:"Sunday Breakout",drop:"Bench End",waiverOnly:true,
+    claimRank:1,claimRole:"PRIMARY",depthDelta:2
+  },
+  irWeeklyDelta:0
+});
+assert.equal(lockedIrClaim.window,"NEXT WAIVER RUN");
+assert.equal(lockedIrClaim.waiverOnly,true);
+assert.match(lockedIrClaim.headline,/claim Sunday Breakout next waiver/i);
+
+const openFaIrAdd=buildIrFirstPlan({
+  irPlayer:{name:"Injured Starter"},
+  irAdd:{name:"Emerging WR"},
+  irWaiver:{
+    add:"Emerging WR",drop:"Bench End",immediateFreeAgent:true,
+    claimRank:1,claimRole:"PRIMARY",depthDelta:2
+  },
+  irWeeklyDelta:0
+});
+assert.equal(openFaIrAdd.window,"NOW");
+assert.equal(openFaIrAdd.immediateFreeAgent,true);
+assert.match(openFaIrAdd.headline,/add Emerging WR/i);
 
 const sundayPulse=await import("../netlify/functions/roster-sunday-pulse.mjs");
 const sundayLatePulse=await import("../netlify/functions/roster-sunday-late-pulse.mjs");
