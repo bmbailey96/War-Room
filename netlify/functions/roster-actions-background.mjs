@@ -606,7 +606,7 @@ export function deterministicRosterFallback({
             agreement.market?"add heat":null,agreement.value?"future value":null
           ].filter(Boolean).join(", ")}.`
         : w.immediateFreeAgent
-          ? `Open-FA alert: this player is available now and the current game shows a real role change, not just points. ${w.liveRole?.reasons?.join(" // ")||"Live usage is materially above baseline"}.`
+          ? `Open-FA alert: this player is available now. ${w.liveRole?.reasons?.length?`Live role evidence: ${w.liveRole.reasons.join(" // ")}.`:w.injuryOpportunity?.applied?`Opportunity has opened because unavailable teammate workload is being redistributed.`:Number(w.fastTrending||0)>=15||Number(w.trendVelocity||0)>=8?`The market is accelerating and the roster-value screen also cleared.`:`The roster-value screen cleared; no live role change is being claimed.`}`
           : mode==="DYNASTY"
           ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
         : w.specialistMode==="STREAM_SWAP"
