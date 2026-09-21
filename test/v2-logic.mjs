@@ -874,7 +874,7 @@ assert.equal(rosterActionsCacheKey("123"),"roster_actions_v6_123");
 assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v6_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
-assert.equal(rosterActionsFreshnessMs(sundayNoon),20*60*1000);
+assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);
 assert.equal(rosterFreshnessLabel(sundayNoon),"SUNDAY_PULSE");
 assert.equal(rosterActionsFreshnessMs(wednesdayNoon),4*60*60*1000);
 
