@@ -951,3 +951,62 @@ assert.equal(dynastyFit.allowed,false);
 assert.equal(dynastyFit.reason,"too much dynasty value for the weekly gain");
 
 console.log("Trade horizon, injury, and efficiency checks passed");
+
+
+const {
+  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge,
+  receiverArchetype,buildWrArchetypeDefense,receiverArchetypeEdge
+} = await import("../netlify/functions/lib/opportunity-v2.mjs");
+
+assert.equal(receiverArchetype(5),"underneath");
+assert.equal(receiverArchetype(10),"intermediate");
+assert.equal(receiverArchetype(16),"vertical");
+
+const opportunityRows=[
+  {player_display_name:"Alpha WR",position:"WR",team:"GB",week:"1",targets:"10",target_share:"0.25",receiving_air_yards:"150"},
+  {player_display_name:"Alpha WR",position:"WR",team:"GB",week:"2",targets:"9",target_share:"0.24",receiving_air_yards:"135"},
+  {player_display_name:"Bravo WR",position:"WR",team:"GB",week:"1",targets:"11",target_share:"0.30",receiving_air_yards:"110"},
+  {player_display_name:"Bravo WR",position:"WR",team:"GB",week:"2",targets:"10",target_share:"0.29",receiving_air_yards:"100"},
+  {player_display_name:"Lead RB",position:"RB",team:"DAL",week:"1",carries:"18",targets:"4",target_share:"0.10"},
+  {player_display_name:"Lead RB",position:"RB",team:"DAL",week:"2",carries:"16",targets:"3",target_share:"0.08"},
+  {player_display_name:"Backup RB",position:"RB",team:"DAL",week:"1",carries:"8",targets:"3",target_share:"0.08"},
+  {player_display_name:"Backup RB",position:"RB",team:"DAL",week:"2",carries:"9",targets:"3",target_share:"0.08"},
+];
+const profiles=buildOpportunityProfiles(opportunityRows,[],3);
+assert.ok(profiles["alpha wr"].targetShare>.2);
+assert.ok(profiles["alpha wr"].aDot>13);
+
+const vacated=buildVacatedOpportunity(
+  profiles,new Set(["bravo wr","lead rb"])
+);
+const alphaVac=vacatedOpportunityEdge(profiles["alpha wr"],vacated.GB);
+assert.ok(alphaVac.edgePct>0);
+assert.ok(alphaVac.names.includes("Bravo WR"));
+
+const backupVac=vacatedOpportunityEdge(profiles["backup rb"],vacated.DAL);
+assert.ok(backupVac.edgePct>0);
+assert.ok(backupVac.vacatedCarryPct>0);
+assert.equal(vacatedOpportunityEdge(profiles["alpha wr"],{
+  activeTargetShare:.5,vacatedTargetShare:0,
+  activeRbCarryShare:0,vacatedRbCarryShare:0,
+  vacatedNames:[]
+}),null);
+
+const archetypeRows=[
+  {player_display_name:"Vertical One",position:"WR",team:"BUF",opponent_team:"NYJ",week:"1",targets:"20",receptions:"14",receiving_yards:"360",receiving_tds:"3",receiving_air_yards:"360"},
+  {player_display_name:"Vertical Two",position:"WR",team:"MIA",opponent_team:"LAR",week:"1",targets:"20",receptions:"8",receiving_yards:"120",receiving_tds:"0",receiving_air_yards:"340"},
+  {player_display_name:"Short One",position:"WR",team:"BUF",opponent_team:"NYJ",week:"1",targets:"20",receptions:"14",receiving_yards:"100",receiving_tds:"0",receiving_air_yards:"100"},
+  {player_display_name:"Short Two",position:"WR",team:"MIA",opponent_team:"LAR",week:"1",targets:"20",receptions:"18",receiving_yards:"180",receiving_tds:"1",receiving_air_yards:"100"},
+];
+const archetypeDefense=buildWrArchetypeDefense(archetypeRows,[],2);
+const verticalProfile={
+  pos:"WR",aDot:17,effectiveTargets:30
+};
+const verticalEdge=receiverArchetypeEdge(
+  verticalProfile,"NYJ",archetypeDefense,1
+);
+assert.ok(verticalEdge.edgePct>0);
+assert.equal(verticalEdge.archetype,"vertical");
+assert.ok(Math.abs(verticalEdge.edgePct)<=2.4);
+
+console.log("Vacated-opportunity and WR-archetype checks passed");
