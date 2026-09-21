@@ -643,6 +643,7 @@ export default async req=>{
     const rostered=new Set();
     for(const r of core.rosters)for(const pid of r.players||[])rostered.add(pid);
     const trendById=Object.fromEntries((core.trending||[]).map(x=>[x.player_id,n(x.count)]));
+    const fastTrendById=Object.fromEntries((core.trendingFast||[]).map(x=>[x.player_id,n(x.count)]));
     const priorTrendById=cached?.context?.trendingSnapshot||{};
     const trendElapsedHours=cached?.at
       ? Math.max(.1,(Date.now()-cached.at)/3600000)
@@ -661,6 +662,7 @@ export default async req=>{
       })
       .map(([pid])=>pid);
     const candidateIds=[...new Set([
+      ...(core.trendingFast||[]).map(x=>x.player_id),
       ...(core.trending||[]).map(x=>x.player_id),
       ...topProj,
       ...injuryOpportunityIds
@@ -675,6 +677,7 @@ export default async req=>{
         week
       );
       const trend=trendById[pid]||0;
+      const fastTrend=fastTrendById[pid]||0;
       const priorTrend=Number(priorTrendById[pid]||0);
       const velocity=computeTrendVelocity(trend,priorTrend,trendElapsedHours);
       const trendDelta=velocity.delta;
@@ -682,16 +685,19 @@ export default async req=>{
       const mv=mode==="DYNASTY"?marketValue(p.name):null;
       const ageBonus=mode==="DYNASTY"&&p.age?Math.max(-5,Math.min(6,(27-p.age)*1.1)):0;
       const velocityBonus=Math.log10(1+trendVelocity)*1.5;
+      const fastBonus=Math.log10(1+fastTrend)*(mode==="DYNASTY"?1.0:1.8);
       const injuryBonus=Number(p.injuryOpportunityBonus||0);
+      const forecast=postGameWaiverForecast(p,week);
       const score=mode==="DYNASTY"
-        ? (mv??0)*.7+(p.next3||0)*1.25+Math.log10(1+trend)*3+velocityBonus+ageBonus+injuryBonus*.35
-        : (p.next3||0)*4+Math.log10(1+trend)*3+velocityBonus+injuryBonus*1.25;
+        ? (mv??0)*.7+forecast*1.25+Math.log10(1+trend)*3+velocityBonus+fastBonus+ageBonus+injuryBonus*.35
+        : forecast*4+Math.log10(1+trend)*3+velocityBonus+fastBonus+injuryBonus*1.25;
       return {
-        ...p,market:mv,trending:trend,trendDelta:round(trendDelta),
-        trendVelocity:round(trendVelocity),screenScore:round(score)
+        ...p,market:mv,trending:trend,fastTrending:fastTrend,
+        trendDelta:round(trendDelta),trendVelocity:round(trendVelocity),
+        waiverNext3:forecast,waiverOnly:!!p.gameLocked,screenScore:round(score)
       };
-    }).filter(p=>p.name&&p.team&&!hardInjured(p.injury)&&!p.gameLocked)
-      .sort((a,b)=>b.screenScore-a.screenScore).slice(0,24);
+    }).filter(p=>p.name&&p.team&&!hardInjured(p.injury))
+      .sort((a,b)=>b.screenScore-a.screenScore).slice(0,30);
 
     const enrichForecast=p=>{
       const key=normName(p.name),provider=proj[p.pid]?.avg??0;
