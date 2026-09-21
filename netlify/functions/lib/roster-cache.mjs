@@ -1,4 +1,4 @@
-export const ROSTER_ACTIONS_CACHE_VERSION="v6";
+export const ROSTER_ACTIONS_CACHE_VERSION="v7";
 
 export function rosterActionsCacheKey(leagueId){
   return `roster_actions_${ROSTER_ACTIONS_CACHE_VERSION}_${leagueId}`;
@@ -16,7 +16,7 @@ export function rosterActionsFreshnessMs(nowMs=Date.now()){
 
   // Sunday 9 AM-ish Mountain through the end of Sunday Night Football.
   const sundaySlate=(day===0&&hour>=15)||(day===1&&hour<=5);
-  if(sundaySlate)return 20*60*1000;
+  if(sundaySlate)return 6*60*1000;
 
   // Monday/Thursday primetime windows get a modestly faster board too.
   const primetime=
@@ -29,7 +29,7 @@ export function rosterActionsFreshnessMs(nowMs=Date.now()){
 
 export function rosterFreshnessLabel(nowMs=Date.now()){
   const ms=rosterActionsFreshnessMs(nowMs);
-  if(ms<=20*60*1000)return "SUNDAY_PULSE";
+  if(ms<=10*60*1000)return "SUNDAY_PULSE";
   if(ms<=30*60*1000)return "PRIMETIME";
   return "NORMAL";
 }
