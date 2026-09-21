@@ -307,7 +307,8 @@ function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
     next3:form.forecast,providerNext3:provider,weeks:proj[pid]?.weeks||{},
     tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
     forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
-    baselinePts:form.baselinePts,currentGames:form.currentGames,
+    baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
+    mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
     kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
   };
 }
@@ -505,6 +506,7 @@ export function deterministicRosterFallback({waivers=[],trades=[],mode="REDRAFT"
       breakoutScore:w.breakoutScore??null,marketDelta:w.marketDelta??null,
       trendDelta:w.trendDelta??null,trendVelocity:w.trendVelocity??null,
       injuryOpportunity:w.injuryOpportunity||null,
+      tdDependency:w.tdDependency??null,mirageRisk:w.mirageRisk??0,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
   }
@@ -670,7 +672,8 @@ export default async req=>{
         next3:form.forecast,providerNext3:provider,weeks:proj[p.pid]?.weeks||{},
         tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
         forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
-        baselinePts:form.baselinePts,currentGames:form.currentGames,
+        baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
+        mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
         kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
       };
       return injuryOpportunityForecast(
@@ -783,16 +786,20 @@ export default async req=>{
         const injurySignal=add.injuryOpportunity?.applied
           ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
           : 0;
+        const mirageRisk=Math.max(0,Number(add.mirageRisk||0));
         const breakoutScore=round(
-          roleSurge*10+trendSignal+velocitySignal*1.5+injurySignal*.7
+          roleSurge*10+trendSignal+velocitySignal*1.5+injurySignal*.7-mirageRisk*3
         );
+        const independentOpportunity=
+          roleSurge>=.08 || injurySignal>=1.5;
         const stash=!SPECIALIST_POSITIONS.has(add.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
           (
-            roleSurge>=.08 ||
-            trendSignal>=2 ||
-            velocitySignal>=1.45 ||
-            injurySignal>=1.5
+            independentOpportunity ||
+            (
+              mirageRisk<.45 &&
+              (trendSignal>=2 || velocitySignal>=1.45)
+            )
           );
         const specialistBonus=specialist.mode==="STREAM_SWAP"?2.5:specialist.mode==="BYE_HOLD"?0.5:0;
         const score=mode==="DYNASTY"
@@ -809,6 +816,7 @@ export default async req=>{
           trendDelta:add.trendDelta,trendVelocity:add.trendVelocity,
           injuryOpportunity:add.injuryOpportunity||null,
           injuryOpportunityBonus:add.injuryOpportunityBonus||0,
+          tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
           addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio,
           replacement:Number(replacementByPos[add.pos]||0)
