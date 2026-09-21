@@ -536,7 +536,7 @@ export function deterministicRosterFallback({
     );
     const agreement=w.signalAgreement||waiverSignalAgreement(w);
     let confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
-    if(w.waiverOnly){
+    if(w.waiverOnly||w.immediateFreeAgent){
       confidence=agreement.strong?"HIGH":agreement.actionable?"MEDIUM":"LOW";
     }
     let faabBase=mode==="DYNASTY"
@@ -553,7 +553,9 @@ export function deterministicRosterFallback({
       claimRank:w.claimRank??i+1,claimRole:w.claimRole||(i===0?"PRIMARY":"BACKUP"),
       headline:w.waiverOnly
         ? `Claim ${w.add}, drop ${w.drop}`
-        : w.specialistMode==="STREAM_SWAP"
+        : w.immediateFreeAgent
+          ? `Add ${w.add} now, drop ${w.drop}`
+          : w.specialistMode==="STREAM_SWAP"
           ? `Stream ${w.add}, drop ${w.drop}`
           : w.specialistMode==="BYE_HOLD"
             ? `Short-term hold ${w.add}, drop ${w.drop}`
@@ -563,7 +565,9 @@ export function deterministicRosterFallback({
             agreement.role?"role":null,agreement.injury?"injury opportunity":null,
             agreement.market?"add heat":null,agreement.value?"future value":null
           ].filter(Boolean).join(", ")}.`
-        : mode==="DYNASTY"
+        : w.immediateFreeAgent
+          ? `Open-FA alert: this player is available now and the current game shows a real role change, not just points. ${w.liveRole?.reasons?.join(" // ")||"Live usage is materially above baseline"}.`
+          : mode==="DYNASTY"
           ? `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best lineup and ${w.marketDelta==null?"no market reading":`${w.marketDelta>=0?"+":""}${w.marketDelta.toFixed(0)} market value`}.`
         : w.specialistMode==="STREAM_SWAP"
           ? `DST/K roster construction: this is a specialist-for-specialist stream, not a second specialist using a skill-position bench spot. ${w.streamWeekEdge==null?"":`This week ${w.streamWeekEdge>=0?"+":""}${w.streamWeekEdge.toFixed(1)}; `}${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} projected points/week across the short horizon.`
@@ -574,7 +578,7 @@ export function deterministicRosterFallback({
                 ? `Injury-created stash: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value, with ${Number(w.injuryOpportunity.edgePct||0).toFixed(1)}% short-term opportunity from unavailable teammate workload.`
                 : `Bench-upside screen: ${w.depthDelta>=0?"+":""}${Number(w.depthDelta||0).toFixed(1)} replacement-adjusted bench value with a real role/trend breakout signal; no immediate starter gain is required.`
               : `Deterministic screen: ${w.weeklyDelta>=0?"+":""}${w.weeklyDelta.toFixed(1)} points/week to the best legal lineup over the next three weeks.`,
-      window:w.waiverOnly?"NEXT WAIVER RUN":"BEFORE WAIVERS",
+      window:w.waiverOnly?"NEXT WAIVER RUN":w.immediateFreeAgent?"NOW":"BEFORE WAIVERS",
       add:{name:w.add},drop:{name:w.drop},faabPct,
       drivers:[
         w.injuryOpportunity?.applied?"injury_opportunity":(w.stash?"role":"depth"),
@@ -587,8 +591,10 @@ export function deterministicRosterFallback({
       breakoutScore:w.breakoutScore??null,marketDelta:w.marketDelta??null,
       trendDelta:w.trendDelta??null,trendVelocity:w.trendVelocity??null,
       fastTrending:w.fastTrending??0,waiverOnly:!!w.waiverOnly,
+      immediateFreeAgent:!!w.immediateFreeAgent,
       signalCount:agreement.count,signalAgreement:agreement,
       injuryOpportunity:w.injuryOpportunity||null,
+      liveRole:w.liveRole||null,
       tdDependency:w.tdDependency??null,mirageRisk:w.mirageRisk??0,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
     });
