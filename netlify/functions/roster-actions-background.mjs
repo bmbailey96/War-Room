@@ -100,6 +100,43 @@ export function dynastyTradeEfficient({
   }
   return {allowed:true,ratio:round(ratio),overpay:round(overpay),efficiency:efficiency==null?null:round(efficiency),reason:null};
 }
+
+export function roleMarketTiming(player={}){
+  const games=Number(player.currentGames||0);
+  const recent=Number(player.recentPts);
+  const baseline=Number(player.baselinePts);
+  const role=Math.max(.65,Math.min(1.4,Number(player.roleRatio||1)));
+  const mirage=Math.max(0,Math.min(1,Number(player.mirageRisk||0)));
+  const td=Math.max(0,Number(player.tdDependency||0));
+  if(games<2 || !Number.isFinite(recent) || !Number.isFinite(baseline) || baseline<3){
+    return {code:"NEUTRAL",label:null,score:0,roleRatio:round(role),pointRatio:null};
+  }
+  const pointRatio=Math.max(.35,Math.min(2.2,recent/baseline));
+  const divergence=role-pointRatio;
+
+  // Buy-low means the underlying role improved before the fantasy box score
+  // followed it. Sell-high requires the opposite plus touchdown/mirage support.
+  // Neither signal changes trade fairness. It is only a timing/ranking input.
+  const buyScore=Math.max(0,(role-1)*5)+Math.max(0,divergence)*4;
+  const sellScore=Math.max(0,(pointRatio-1)*3)+Math.max(0,1.04-role)*4+mirage*2.5;
+  if(role>=1.08 && pointRatio<=.98 && divergence>=.12 && buyScore>=.8){
+    return {
+      code:"BUY_LOW",label:"ROLE AHEAD OF BOX SCORE",score:round(Math.min(3,buyScore)),
+      roleRatio:round(role),pointRatio:round(pointRatio),mirageRisk:round(mirage)
+    };
+  }
+  if(pointRatio>=1.18 && role<=1.05 && (mirage>=.25 || td>=.38) && sellScore>=1){
+    return {
+      code:"SELL_HIGH",label:"BOX SCORE AHEAD OF ROLE",score:round(Math.min(3,sellScore)),
+      roleRatio:round(role),pointRatio:round(pointRatio),mirageRisk:round(mirage)
+    };
+  }
+  return {
+    code:"NEUTRAL",label:null,score:0,
+    roleRatio:round(role),pointRatio:round(pointRatio),mirageRisk:round(mirage)
+  };
+}
+
 function hardInjured(status){
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/i.test(String(status||""));
 }
@@ -360,6 +397,10 @@ function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
     forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
     baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
     mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
+    tradeTiming:roleMarketTiming({
+      currentGames:form.currentGames,recentPts:form.recentPts,baselinePts:form.baselinePts,
+      roleRatio:form.roleRatio,tdDependency:form.tdDependency,mirageRisk:form.mirageRisk
+    }),
     kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
   };
 }
@@ -851,6 +892,10 @@ export default async req=>{
         forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
         baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
         mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
+        tradeTiming:roleMarketTiming({
+          currentGames:form.currentGames,recentPts:form.recentPts,baselinePts:form.baselinePts,
+          roleRatio:form.roleRatio,tdDependency:form.tdDependency,mirageRisk:form.mirageRisk
+        }),
         kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
       };
       return injuryOpportunityForecast(
