@@ -271,6 +271,29 @@ function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
   };
 }
 
+export function injuryOpportunityForecast(player,profile,teamContext,week){
+  if(!player)return player;
+  const edge=vacatedOpportunityEdge(profile,teamContext);
+  if(!edge)return {...player,injuryOpportunity:null,injuryOpportunityBonus:0};
+  const apply=edge.confidence!=="LOW" && Number(edge.reliability||0)>=35;
+  const raw=Number(edge.edgePct||0)/100;
+  const weeks={...(player.weeks||{})};
+  if(apply && weeks[week]!=null){
+    weeks[week]=round(Number(weeks[week])*(1+raw));
+  }
+  const next3=apply
+    ? round(Number(player.next3||0)*(1+raw*.55))
+    : Number(player.next3||0);
+  return {
+    ...player,next3,weeks,
+    injuryOpportunity:{...edge,applied:apply},
+    injuryOpportunityBonus:apply?round(Number(edge.edgePct||0)*.9):0,
+    forecastSource:apply
+      ? `${player.forecastSource||"provider"}+vacated`
+      : player.forecastSource,
+  };
+}
+
 function simPlayer(p){
   return {
     pid:p.pid,name:p.name,slot:p.pos||p.slot||"UNK",
@@ -540,11 +563,33 @@ export default async req=>{
       ? Math.max(.1,(Date.now()-cached.at)/3600000)
       : null;
     const topProj=Object.entries(proj).sort((a,b)=>(b[1].avg||0)-(a[1].avg||0)).slice(0,220).map(([pid])=>pid);
-    const candidateIds=[...new Set([...(core.trending||[]).map(x=>x.player_id),...topProj])]
-      .filter(pid=>pid&&!rostered.has(pid));
+    const injuryOpportunityIds=Object.entries(db||{})
+      .filter(([pid,p])=>{
+        if(!pid||rostered.has(pid)||!p?.t)return false;
+        const pos=slotPos(pInfo(db,pid));
+        if(!["RB","WR","TE"].includes(pos))return false;
+        const ctx=vacatedByTeam[normTeam(p.t)];
+        return !!ctx && (
+          Number(ctx.vacatedTargetShare||0)>=.06 ||
+          Number(ctx.vacatedRbCarryShare||0)>=.08
+        );
+      })
+      .map(([pid])=>pid);
+    const candidateIds=[...new Set([
+      ...(core.trending||[]).map(x=>x.player_id),
+      ...topProj,
+      ...injuryOpportunityIds
+    ])].filter(pid=>pid&&!rostered.has(pid));
 
     let free=candidateIds.map(pid=>{
-      const p=playerView(pid,db,proj,formMap,gameLocks,officialInjuries),trend=trendById[pid]||0;
+      const basePlayer=playerView(pid,db,proj,formMap,gameLocks,officialInjuries);
+      const p=injuryOpportunityForecast(
+        basePlayer,
+        opportunityProfiles[normName(basePlayer.name)]||null,
+        vacatedByTeam[normTeam(basePlayer.team)]||null,
+        week
+      );
+      const trend=trendById[pid]||0;
       const priorTrend=Number(priorTrendById[pid]||0);
       const velocity=computeTrendVelocity(trend,priorTrend,trendElapsedHours);
       const trendDelta=velocity.delta;
@@ -552,9 +597,10 @@ export default async req=>{
       const mv=mode==="DYNASTY"?marketValue(p.name):null;
       const ageBonus=mode==="DYNASTY"&&p.age?Math.max(-5,Math.min(6,(27-p.age)*1.1)):0;
       const velocityBonus=Math.log10(1+trendVelocity)*1.5;
+      const injuryBonus=Number(p.injuryOpportunityBonus||0);
       const score=mode==="DYNASTY"
-        ? (mv??0)*.7+(p.next3||0)*1.25+Math.log10(1+trend)*3+velocityBonus+ageBonus
-        : (p.next3||0)*4+Math.log10(1+trend)*3+velocityBonus;
+        ? (mv??0)*.7+(p.next3||0)*1.25+Math.log10(1+trend)*3+velocityBonus+ageBonus+injuryBonus*.35
+        : (p.next3||0)*4+Math.log10(1+trend)*3+velocityBonus+injuryBonus*1.25;
       return {
         ...p,market:mv,trending:trend,trendDelta:round(trendDelta),
         trendVelocity:round(trendVelocity),screenScore:round(score)
@@ -570,7 +616,7 @@ export default async req=>{
       const game=gameLocks[normTeam(p.team)]||null;
       const official=officialInjuries[key]||null;
       const tradeWeeks=proj[p.pid]?.tradeWeeks||0;
-      return {
+      const baseForecast={
         ...p,eligibleSlots:p.fps||[],
         injury:official?.status||p.inj||p.injury||null,
         practiceStatus:official?.practice||null,injuryDetail:official?.injury||null,
@@ -580,6 +626,12 @@ export default async req=>{
         baselinePts:form.baselinePts,currentGames:form.currentGames,
         kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
       };
+      return injuryOpportunityForecast(
+        baseForecast,
+        opportunityProfiles[key]||null,
+        vacatedByTeam[normTeam(p.team)]||null,
+        week
+      );
     };
     const lineupByName=new Map((lineupData?.players||[]).map(p=>[normName(p.name),p]));
     const myRoster=me.players.map(p=>({
