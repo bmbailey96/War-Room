@@ -870,8 +870,8 @@ const {
   rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
 assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v7");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v6_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v6_123");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v7_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v7_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
 assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);
