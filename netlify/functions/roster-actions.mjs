@@ -1,6 +1,8 @@
 import { store } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
-import { rosterActionsCacheKey,rosterActionsLockKey } from "./lib/roster-cache.mjs";
+import {
+  rosterActionsCacheKey,rosterActionsLockKey,rosterActionsFreshnessMs,rosterFreshnessLabel
+} from "./lib/roster-cache.mjs";
 
 export default async req=>{
   try{
@@ -19,8 +21,11 @@ export default async req=>{
     ]);
     const force=url.searchParams.get("refresh")==="1";
     const coreOnly=url.searchParams.get("core")==="1";
-    const stale=!cached||Date.now()-(cached.at||0)>4*60*60*1000;
-    const locked=lock&&Date.now()-(lock.at||0)<10*60*1000;
+    const now=Date.now();
+    const freshnessMs=rosterActionsFreshnessMs(now);
+    const ageMs=cached?Math.max(0,now-(cached.at||0)):null;
+    const stale=!cached||ageMs>freshnessMs;
+    const locked=lock&&now-(lock.at||0)<10*60*1000;
     const shouldTrigger=(force||stale)&&!locked;
 
     if(shouldTrigger){
@@ -37,7 +42,12 @@ export default async req=>{
     if(cached){
       return new Response(JSON.stringify({
         ...cached,
-        refreshing:shouldTrigger||locked||stale
+        refreshing:shouldTrigger||locked||stale,
+        freshness:{
+          mode:rosterFreshnessLabel(now),
+          targetMinutes:Math.round(freshnessMs/60000),
+          ageMinutes:ageMs==null?null:Math.round(ageMs/60000)
+        }
       }),{headers:{"content-type":"application/json","cache-control":"no-store"}});
     }
 
