@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
-  projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable,
+  projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, lineupCallDrivers, hardUnavailable,
   matchupExposureFor, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall,
   buildStrategicTiebreaks
 } from "../netlify/functions/lineup.mjs";
@@ -1010,3 +1010,26 @@ assert.equal(verticalEdge.archetype,"vertical");
 assert.ok(Math.abs(verticalEdge.edgePct)<=2.4);
 
 console.log("Vacated-opportunity and WR-archetype checks passed");
+
+
+const crispDrivers=lineupCallDrivers(
+  {reasons:[
+    "+5% role/workload",
+    "+3% team total",
+    "+2% vacated opportunity",
+    "-1% coverage drag vs Corner"
+  ]},
+  {reasons:[
+    "+2% role/workload",
+    "+3% team total",
+    "-2% recent scheme",
+    "-1% injury uncertainty"
+  ]},
+  3
+);
+assert.deepEqual(crispDrivers.map(x=>x.label),["ROLE","SCHEME","VACATED WORK"]);
+assert.equal(crispDrivers[0].edgePct,3);
+assert.equal(crispDrivers[1].edgePct,2);
+assert.equal(crispDrivers.some(x=>x.label==="TEAM TOTAL"),false);
+
+console.log("Crisp lineup-driver differential checks passed");

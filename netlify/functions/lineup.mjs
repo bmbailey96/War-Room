@@ -549,6 +549,57 @@ function lineupChanges(current, optimal) {
   };
 }
 
+function reasonCategory(text="") {
+  const s=String(text).toLowerCase();
+  if(/vacated/.test(s))return "VACATED WORK";
+  if(/vertical receiver|intermediate receiver|underneath receiver/.test(s)){
+    if(/vertical/.test(s))return "VERTICAL MATCHUP";
+    if(/intermediate/.test(s))return "INTERMEDIATE MATCHUP";
+    return "UNDERNEATH MATCHUP";
+  }
+  if(/coverage edge|coverage drag/.test(s))return "COVERAGE";
+  if(/role\/workload/.test(s))return "ROLE";
+  if(/recent scheme/.test(s))return "SCHEME";
+  if(/team total/.test(s))return "TEAM TOTAL";
+  if(/middle-coverage/.test(s))return "TE COVERAGE";
+  if(/rb .*edge/.test(s))return "RB MATCHUP";
+  if(/defensive-front/.test(s))return "FRONT 7";
+  if(/run-blocking/.test(s))return "RUN BLOCK";
+  if(/pass-rush/.test(s))return "PASS RUSH";
+  if(/protection injury/.test(s))return "PROTECTION";
+  if(/injury uncertainty/.test(s))return "INJURY";
+  if(/learned .*baseline/.test(s))return "BASELINE";
+  if(/matchup/.test(s))return "MATCHUP";
+  return null;
+}
+
+function reasonImpact(text="") {
+  const m=String(text).match(/([+-]?\d+(?:\.\d+)?)%/);
+  return m?Number(m[1]):null;
+}
+
+function lineupCallDrivers(start,sit,limit=3) {
+  const totals=new Map();
+  const add=(player,direction)=>{
+    for(const text of player?.reasons||[]){
+      const category=reasonCategory(text),impact=reasonImpact(text);
+      if(!category || impact==null || !Number.isFinite(impact))continue;
+      totals.set(category,(totals.get(category)||0)+impact*direction);
+    }
+  };
+  add(start,1);
+  add(sit,-1);
+
+  return [...totals.entries()]
+    .map(([label,edgePct])=>({label,edgePct:round(edgePct)}))
+    .filter(x=>Math.abs(x.edgePct)>=.7)
+    .sort((a,b)=>
+      (Math.abs(b.edgePct)-Math.abs(a.edgePct)) ||
+      a.label.localeCompare(b.label)
+    )
+    .slice(0,limit);
+}
+
 function hardUnavailable(sleeperStatus="", officialStatus="") {
   const combined=`${sleeperStatus||""} ${officialStatus||""}`.toLowerCase();
   return /\b(out|ir|pup|sus|suspended|doubtful)\b/.test(combined);
@@ -1326,6 +1377,7 @@ export default async req => {
         actionable:action.actionable,
         callStrength:action.strength,
         actionReason:action.reason,
+        whyDrivers:lineupCallDrivers(call.start,call.sit),
       };
     });
     decision.calls=changes;
@@ -1351,7 +1403,8 @@ export default async req => {
       ? clamp(normalCdf(projectedMargin/diffSigma),.03,.97)
       : (projectedMargin>0?.97:projectedMargin<0?.03:.5);
     const posture=winProbability>=.65?"protect_floor":winProbability<=.35?"chase_ceiling":"neutral";
-    const strategicLeans=buildStrategicTiebreaks(optimal.picked,rosterPlayers,posture);
+    const strategicLeans=buildStrategicTiebreaks(optimal.picked,rosterPlayers,posture)
+      .map(call=>({...call,whyDrivers:lineupCallDrivers(call.start,call.sit)}));
     const allCalls=[...changes,...strategicLeans];
     decision.calls=allCalls;
     decision.actionableCalls=changes.filter(x=>x.actionable);
@@ -1440,4 +1493,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall, buildStrategicTiebreaks, lineupChanges, confidenceGrade };
+export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall, buildStrategicTiebreaks, lineupChanges, confidenceGrade, lineupCallDrivers };
