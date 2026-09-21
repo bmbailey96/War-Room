@@ -10,6 +10,16 @@ function first(row,keys){
   return 0;
 }
 
+export function liveUsageCounts(stats={}){
+  return {
+    targets:first(stats,["targets","rec_tgt","receiving_targets","tgt"]),
+    carries:first(stats,["carries","rush_att","rushing_attempts","rush_attempts"]),
+    receptions:first(stats,["receptions","rec"]),
+    offSnaps:first(stats,["off_snp","offense_snaps","off_snaps"]),
+    teamOffSnaps:first(stats,["tm_off_snp","team_offense_snaps","team_off_snaps"]),
+  };
+}
+
 export function normalizeSleeperWeekStats(raw){
   const out={};
   if(Array.isArray(raw)){
@@ -37,16 +47,15 @@ export function liveGameProgress(kickoffAt,nowMs=Date.now()){
 }
 
 export function liveRoleEmergence({
-  pos="UNK",stats={},progress=0,baselineTargets=0,baselineCarries=0
+  pos="UNK",stats={},progress=0,
+  baselineTargets=0,baselineCarries=0,
+  baselineTargetShare=null,baselineCarryShare=null,
+  teamTargets=0,teamRbCarries=0
 }={}){
   const p=clamp(Number(progress||0),0,1);
   if(p<=0)return null;
 
-  const targets=first(stats,["targets","rec_tgt","receiving_targets","tgt"]);
-  const carries=first(stats,["carries","rush_att","rushing_attempts","rush_attempts"]);
-  const receptions=first(stats,["receptions","rec"]);
-  const offSnaps=first(stats,["off_snp","offense_snaps","off_snaps"]);
-  const teamOffSnaps=first(stats,["tm_off_snp","team_offense_snaps","team_off_snaps"]);
+  const {targets,carries,receptions,offSnaps,teamOffSnaps}=liveUsageCounts(stats);
   const snapShare=teamOffSnaps>0?offSnaps/teamOffSnaps:null;
   const paceDen=Math.max(.28,p);
   const targetPace=targets/paceDen;
@@ -54,36 +63,72 @@ export function liveRoleEmergence({
   const touchPace=(targets+carries)/paceDen;
   const baseT=Math.max(0,Number(baselineTargets||0));
   const baseC=Math.max(0,Number(baselineCarries||0));
+  const baseTs=baselineTargetShare==null?null:clamp(Number(baselineTargetShare||0),0,1);
+  const baseCs=baselineCarryShare==null?null:clamp(Number(baselineCarryShare||0),0,1);
+  const liveTargetShare=Number(teamTargets||0)>=8?targets/Number(teamTargets):null;
+  const liveCarryShare=Number(teamRbCarries||0)>=7?carries/Number(teamRbCarries):null;
   const reasons=[];
-  let volume=false,dominant=false;
+  let volume=false,dominant=false,shareSignal=false;
 
   if(["WR","TE"].includes(String(pos).toUpperCase())){
     const threshold=Math.max(7,baseT*1.2);
     volume=(targets>=4&&targetPace>=threshold)||targets>=7;
-    dominant=targets>=6&&targetPace>=Math.max(8.5,baseT*1.35);
+    const shareFloor=Math.max(.24,(baseTs??.16)+.08);
+    shareSignal=
+      liveTargetShare!=null && Number(teamTargets)>=10 && targets>=4 &&
+      liveTargetShare>=shareFloor;
+    dominant=
+      (targets>=6&&targetPace>=Math.max(8.5,baseT*1.35)) ||
+      (liveTargetShare!=null&&Number(teamTargets)>=12&&targets>=5&&liveTargetShare>=.34);
     if(volume)reasons.push(`${targets} targets // ${round(targetPace)} target pace`);
+    if(shareSignal){
+      reasons.push(
+        `${Math.round(liveTargetShare*100)}% live target share`+
+        (baseTs!=null?` vs ${Math.round(baseTs*100)}% baseline`:"")
+      );
+    }
   }else if(String(pos).toUpperCase()==="RB"){
     const carryThreshold=Math.max(11,baseC*1.15);
     volume=(carries>=6&&carryPace>=carryThreshold)||(targets>=3&&targetPace>=4.5);
-    dominant=(carries+targets)>=9&&touchPace>=Math.max(14,(baseC+baseT)*1.2);
+    const shareFloor=Math.max(.48,(baseCs??.32)+.12);
+    shareSignal=
+      liveCarryShare!=null && Number(teamRbCarries)>=9 && carries>=5 &&
+      liveCarryShare>=shareFloor;
+    dominant=
+      ((carries+targets)>=9&&touchPace>=Math.max(14,(baseC+baseT)*1.2)) ||
+      (liveCarryShare!=null&&Number(teamRbCarries)>=12&&carries>=7&&liveCarryShare>=.62);
     if(volume)reasons.push(`${carries} carries + ${targets} targets // ${round(touchPace)} touch pace`);
+    if(shareSignal){
+      reasons.push(
+        `${Math.round(liveCarryShare*100)}% live RB carries`+
+        (baseCs!=null?` vs ${Math.round(baseCs*100)}% baseline`:"")
+      );
+    }
   }else{
     return null;
   }
 
   const snapSignal=snapShare!=null&&offSnaps>=16&&snapShare>=.62;
   if(snapSignal)reasons.push(`${Math.round(snapShare*100)}% offensive snaps`);
-  const strong=dominant||(volume&&snapSignal)||(volume&&p>=.55);
-  if(!volume&&!snapSignal)return null;
+  const strong=
+    dominant ||
+    (volume&&snapSignal) ||
+    (shareSignal&&(snapSignal||p>=.4)) ||
+    (volume&&p>=.55);
+  if(!volume&&!shareSignal&&!snapSignal)return null;
 
   return {
     targets,carries,receptions,
     offSnaps,teamOffSnaps,
     snapShare:snapShare==null?null:round(snapShare*100),
+    liveTargetShare:liveTargetShare==null?null:round(liveTargetShare*100),
+    liveCarryShare:liveCarryShare==null?null:round(liveCarryShare*100),
+    baselineTargetShare:baseTs==null?null:round(baseTs*100),
+    baselineCarryShare:baseCs==null?null:round(baseCs*100),
     targetPace:round(targetPace),carryPace:round(carryPace),touchPace:round(touchPace),
     progress:round(p*100),
-    volume,dominant,snapSignal,strong,
-    score:(dominant?3:0)+(volume?2:0)+(snapSignal?2:0),
+    volume,dominant,shareSignal,snapSignal,strong,
+    score:(dominant?3:0)+(volume?2:0)+(shareSignal?2:0)+(snapSignal?2:0),
     reasons
   };
 }

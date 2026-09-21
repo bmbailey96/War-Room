@@ -1282,7 +1282,7 @@ console.log("Team-state diagnosis and anti-panic behavior checks passed");
 
 const { acquisitionPolicy } = await import("../netlify/functions/lib/roster-v2.mjs");
 const {
-  normalizeSleeperWeekStats,liveRoleEmergence
+  normalizeSleeperWeekStats,liveRoleEmergence,liveUsageCounts
 } = await import("../netlify/functions/lib/live-market.mjs");
 
 const ochoPolicy=acquisitionPolicy({name:"The Ocho"});
@@ -1312,6 +1312,38 @@ const liveRb=liveRoleEmergence({
 });
 assert.equal(liveRb.strong,true);
 assert.ok(liveRb.touchPace>=19);
+
+const emergingWrShare=liveRoleEmergence({
+  pos:"WR",progress:.45,baselineTargets:3,baselineTargetShare:.12,
+  teamTargets:12,
+  stats:{rec_tgt:5}
+});
+assert.equal(emergingWrShare.shareSignal,true);
+assert.equal(emergingWrShare.strong,true);
+assert.ok(emergingWrShare.liveTargetShare>=41);
+assert.ok(emergingWrShare.reasons.some(x=>x.includes("live target share")));
+
+const ordinaryWrShare=liveRoleEmergence({
+  pos:"WR",progress:.45,baselineTargets:5,baselineTargetShare:.18,
+  teamTargets:24,
+  stats:{rec_tgt:4}
+});
+assert.equal(ordinaryWrShare.shareSignal,false);
+assert.equal(ordinaryWrShare.strong,false);
+
+const emergingRbShare=liveRoleEmergence({
+  pos:"RB",progress:.45,baselineCarries:5,baselineCarryShare:.30,
+  teamRbCarries:9,
+  stats:{rush_att:6}
+});
+assert.equal(emergingRbShare.shareSignal,true);
+assert.equal(emergingRbShare.strong,true);
+assert.ok(emergingRbShare.liveCarryShare>=66);
+
+assert.deepEqual(
+  liveUsageCounts({rec_tgt:4,rush_att:3,off_snp:20,tm_off_snp:35}),
+  {targets:4,carries:3,receptions:0,offSnaps:20,teamOffSnaps:35}
+);
 
 const normalized=normalizeSleeperWeekStats({
   "wr1":{rec_tgt:5},

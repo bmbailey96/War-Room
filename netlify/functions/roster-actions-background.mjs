@@ -18,7 +18,7 @@ import {
   buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge
 } from "./lib/opportunity-v2.mjs";
 import {
-  normalizeSleeperWeekStats,liveGameProgress,liveRoleEmergence
+  normalizeSleeperWeekStats,liveGameProgress,liveRoleEmergence,liveUsageCounts
 } from "./lib/live-market.mjs";
 
 const NV="https://github.com/nflverse/nflverse-data/releases/download";
@@ -770,6 +770,16 @@ export default async req=>{
       })
       .map(([pid])=>pid);
 
+    const liveTeamTotals={};
+    for(const [pid,stats] of Object.entries(liveStatsById||{})){
+      const info=pInfo(db,pid),team=normTeam(info.team);
+      if(!team)continue;
+      const counts=liveUsageCounts(stats);
+      const t=liveTeamTotals[team]||(liveTeamTotals[team]={targets:0,rbCarries:0});
+      t.targets+=Number(counts.targets||0);
+      if(slotPos(info)==="RB")t.rbCarries+=Number(counts.carries||0);
+    }
+
     // Find role changes before the market necessarily notices. Current-week
     // Sleeper stats can promote an unrostered RB/WR/TE into the scan from
     // targets, touches and snap share. Fantasy points alone are not a trigger.
@@ -781,11 +791,18 @@ export default async req=>{
       const game=gameLocks[normTeam(info.team)]||null;
       const progress=liveGameProgress(game?.kickoffAt,Date.now());
       if(progress<=0)continue;
-      const form=formMap[normName(info.name)]||{};
+      const key=normName(info.name);
+      const form=formMap[key]||{};
+      const profile=opportunityProfiles[key]||{};
+      const liveTotals=liveTeamTotals[normTeam(info.team)]||{};
       const liveRole=liveRoleEmergence({
         pos,stats,progress,
         baselineTargets:form.recentTargets||form.baselineTargets||0,
-        baselineCarries:form.recentCarries||form.baselineCarries||0
+        baselineCarries:form.recentCarries||form.baselineCarries||0,
+        baselineTargetShare:profile.targetShare??null,
+        baselineCarryShare:profile.carryShare??null,
+        teamTargets:liveTotals.targets||0,
+        teamRbCarries:liveTotals.rbCarries||0
       });
       if(liveRole)liveRoleById[pid]=liveRole;
     }
