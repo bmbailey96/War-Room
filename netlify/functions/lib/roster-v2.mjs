@@ -9,30 +9,73 @@ export function detectLeagueMode(league={}) {
   return dynasty ? "DYNASTY" : "REDRAFT";
 }
 
-export function acquisitionPolicy(league={}) {
+const OCHO_LEAGUE_ID="1205222463223365632";
+const DAY_NAMES=["SUN","MON","TUE","WED","THU","FRI","SAT"];
+
+export function leagueRuleProfile(league={}) {
+  const id=String(league.league_id||league.id||"");
   const name=String(league.name||"");
-  // User-confirmed league rule: Team Ocho is open free agency. A player can
-  // still be acquired after his NFL game starts, so Sunday scouting must not
-  // automatically demote every started player to "next waivers".
-  if(/ocho/i.test(name)){
+
+  // Prefer the stable Sleeper league id. The name fallback keeps older/test
+  // fixtures working if the id is absent, but renaming the live league no
+  // longer changes transaction behavior.
+  if(id===OCHO_LEAGUE_ID || (!id&&/ocho/i.test(name))){
     return {
-      mode:"OPEN_FA",
+      acquisitionMode:"OPEN_FA",
       canAddStartedPlayers:true,
-      label:"OPEN FREE AGENCY",
-      source:"USER_CONFIRMED"
+      source:id===OCHO_LEAGUE_ID?"USER_CONFIRMED_ID":"USER_CONFIRMED_NAME_FALLBACK"
     };
   }
 
-  // The other active league is waiver-based. Keep this conservative rather
-  // than guessing from undocumented Sleeper numeric settings.
+  // This private War Room currently has one other active league, and the user
+  // confirmed that league uses waivers. Keep this explicit rather than trying
+  // to infer transaction legality from loosely documented numeric settings.
   return {
-    mode:"WAIVERS",
+    acquisitionMode:"WAIVERS",
     canAddStartedPlayers:false,
-    label:"WAIVERS",
-    source:"LEAGUE_DEFAULT"
+    source:"USER_CONFIRMED_WAIVER_LEAGUE"
   };
 }
 
+export function acquisitionPolicy(league={}) {
+  const rules=leagueRuleProfile(league);
+  return {
+    mode:rules.acquisitionMode,
+    canAddStartedPlayers:rules.canAddStartedPlayers,
+    label:rules.acquisitionMode==="OPEN_FA"?"OPEN FREE AGENCY":"WAIVERS",
+    source:rules.source
+  };
+}
+
+export function waiverScheduleFromSettings(settings={}) {
+  const dayRaw=Number(settings.waiver_day_of_week);
+  const hasDay=Number.isInteger(dayRaw)&&dayRaw>=0&&dayRaw<=6;
+  const afterGameDay=hasDay?DAY_NAMES[dayRaw]:null;
+  const afterGameProcessDay=hasDay?DAY_NAMES[(dayRaw+1)%7]:null;
+  const hourRaw=Number(settings.daily_waivers_hour);
+  const processHour=Number.isInteger(hourRaw)&&hourRaw>=0&&hourRaw<=23?hourRaw:null;
+  const dropRaw=Number(settings.waiver_clear_days);
+  const dropClearDays=Number.isFinite(dropRaw)&&dropRaw>=0?dropRaw:null;
+  const dailyEnabled=Number(settings.daily_waivers||0)===1;
+
+  return {
+    afterGameDayIndex:hasDay?dayRaw:null,
+    afterGameDay,
+    afterGameProcessDay,
+    afterGameLabel:hasDay?(afterGameDay+" AFTER DAY → "+afterGameProcessDay):null,
+    dailyEnabled,
+    dailyWaiversDays:settings.daily_waivers_days??null,
+    processHour,
+    dropClearDays,
+    raw:{
+      waiver_day_of_week:settings.waiver_day_of_week??null,
+      daily_waivers:settings.daily_waivers??null,
+      daily_waivers_days:settings.daily_waivers_days??null,
+      daily_waivers_hour:settings.daily_waivers_hour??null,
+      waiver_clear_days:settings.waiver_clear_days??null,
+    }
+  };
+}
 export function teamNameMap(users=[]) {
   return Object.fromEntries(users.map(u=>[
     u.user_id,
