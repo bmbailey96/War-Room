@@ -869,9 +869,9 @@ const {
   ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey,
   rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
-assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v7");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v7_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v7_123");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v8");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v8_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v8_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
 assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);
@@ -921,7 +921,7 @@ console.log("Versioned roster-cache and dynasty specialist checks passed");
 
 
 const {
-  currentOfficialInjuries,redraftTradeEfficient,dynastyTradeEfficient
+  currentOfficialInjuries,redraftTradeEfficient,dynastyTradeEfficient,roleMarketTiming
 } = await import("../netlify/functions/roster-actions-background.mjs");
 
 const officialInjuryCsv=[
@@ -960,6 +960,34 @@ assert.equal(dynastyFit.allowed,false);
 assert.equal(dynastyFit.reason,"too much dynasty value for the weekly gain");
 
 console.log("Trade horizon, injury, and efficiency checks passed");
+
+const buyLowTiming=roleMarketTiming({
+  currentGames:3,recentPts:8,baselinePts:12,roleRatio:1.18,
+  tdDependency:.10,mirageRisk:0
+});
+assert.equal(buyLowTiming.code,"BUY_LOW");
+assert.ok(buyLowTiming.score>0);
+
+const sellHighTiming=roleMarketTiming({
+  currentGames:3,recentPts:18,baselinePts:10,roleRatio:.98,
+  tdDependency:.58,mirageRisk:.62
+});
+assert.equal(sellHighTiming.code,"SELL_HIGH");
+assert.ok(sellHighTiming.score>0);
+
+const earnedBreakoutTiming=roleMarketTiming({
+  currentGames:3,recentPts:16,baselinePts:10,roleRatio:1.18,
+  tdDependency:.42,mirageRisk:.08
+});
+assert.equal(earnedBreakoutTiming.code,"NEUTRAL");
+
+const tooEarlyTiming=roleMarketTiming({
+  currentGames:1,recentPts:5,baselinePts:12,roleRatio:1.25,
+  tdDependency:0,mirageRisk:0
+});
+assert.equal(tooEarlyTiming.code,"NEUTRAL");
+
+console.log("Role-versus-box-score trade timing checks passed");
 
 
 const {
