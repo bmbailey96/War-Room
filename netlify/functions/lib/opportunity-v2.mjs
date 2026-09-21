@@ -172,7 +172,7 @@ export function vacatedOpportunityEdge(profile,teamContext){
   if(edge<.004)return null;
   const reliability=clamp(
     (Number(profile.effectiveTargets||0)/24)+
-    (profile.pos==="RB"&&profile.carryShare!=null?.18:0),
+    (profile.pos==="RB" && profile.carryShare!=null ? .18 : 0),
     .15,1
   );
   return {
