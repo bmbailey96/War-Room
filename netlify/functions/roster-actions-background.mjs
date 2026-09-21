@@ -797,21 +797,29 @@ export default async req=>{
     // can be replaced from waivers in this specific league.
     const replacementByPos={};
     for(const pos of ["QB","RB","WR","TE","K","DEF","DL","LB","DB"]){
-      const vals=free.filter(p=>p.pos===pos).map(p=>Number(p.next3||0)).sort((a,b)=>b-a);
+      const vals=free.filter(p=>p.pos===pos).map(p=>actionForecast(p,week)).sort((a,b)=>b-a);
       replacementByPos[pos]=vals.length?vals[Math.min(2,vals.length-1)]:0;
     }
-    const marginal=p=>p?Math.max(0,Number(p.next3||0)-Number(replacementByPos[p.pos]||0)):0;
+    const marginal=p=>p?Math.max(0,actionForecast(p,week)-Number(replacementByPos[p.pos]||0)):0;
 
     const waiverPairs=[];
-    for(const add of free.slice(0,18)){
+    for(const add of free.slice(0,22)){
       for(const drop of drops.slice(0,8)){
         if(add.pid===drop.pid)continue;
-        const after=simTotal(rosterAfter(myRoster,{removeNames:[drop.name],addPlayers:[add]}),activeSlots);
+
+        // A player whose NFL game has started is no longer an immediate add,
+        // but Sunday scouting should preserve him for the next waiver run.
+        // For those players, value FUTURE weeks only.
+        if(add.gameLocked && SPECIALIST_POSITIONS.has(add.pos))continue;
+        const addForSim=add.gameLocked
+          ? {...add,next3:postGameWaiverForecast(add,week)}
+          : add;
+        const after=simTotal(rosterAfter(myRoster,{removeNames:[drop.name],addPlayers:[addForSim]}),activeSlots);
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add.market!=null&&drop.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
         const specialist=specialistRosterDecision({
-          mode,add,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
+          mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
         if(!specialist.allowed)continue;
         const depthFit=positionalDepthDecision({
@@ -853,9 +861,11 @@ export default async req=>{
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
           rosterFitReason:specialist.reason||depthFit.reason||null,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
-          score:round(score),addNext3:add.next3,dropNext3:drop.next3,
+          score:round(score),addNext3:actionForecast(add,week),dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
+          fastTrending:add.fastTrending??0,
           trendDelta:add.trendDelta,trendVelocity:add.trendVelocity,
+          waiverOnly:!!add.gameLocked,kickoffAt:add.kickoffAt||null,
           injuryOpportunity:add.injuryOpportunity||null,
           injuryOpportunityBonus:add.injuryOpportunityBonus||0,
           tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
