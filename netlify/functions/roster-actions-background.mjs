@@ -1155,6 +1155,8 @@ Use web search for current injury/practice news, depth-chart movement, snap/rout
 
 Hard rules:
 - A pickup must be from ACTUALLY UNROSTERED CANDIDATES.
+- If a candidate has waiverOnly=true, that player's game has already started. Never describe that as an immediate add. It is a NEXT WAIVER RUN claim only.
+- Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
 - Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
 - If an add needs a roster spot, give an exact drop from MY ROSTER.
 - A trade target must be on the named partner's roster.
@@ -1178,7 +1180,7 @@ Return ONLY valid JSON:
     "confidence":"HIGH|MEDIUM|LOW",
     "headline":"exact action",
     "why":"2 concise sentences",
-    "window":"NOW|BEFORE WAIVERS|THIS WEEK|WATCH",
+    "window":"NOW|BEFORE WAIVERS|NEXT WAIVER RUN|THIS WEEK|WATCH",
     "add":{"name":"exact player"} or null,
     "drop":{"name":"exact player"} or null,
     "partner":"exact team name" or null,
@@ -1210,30 +1212,51 @@ Return ONLY valid JSON:
       if(["ADD","WAIVER","ADD_DROP"].includes(a.type)){
         const add=freeByName.get(normName(a.add?.name||""));
         const drop=rosterByName.get(normName(a.drop?.name||""));
+        const addForSim=add?.gameLocked
+          ? {...add,next3:postGameWaiverForecast(add,week)}
+          : add;
         const after=simTotal(rosterAfter(myRoster,{
-          removeNames:drop?[drop.name]:[],addPlayers:add?[add]:[]
+          removeNames:drop?[drop.name]:[],addPlayers:addForSim?[addForSim]:[]
         }),activeSlots);
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
         const specialist=specialistRosterDecision({
-          mode,add,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
+          mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
         const depthFit=positionalDepthDecision({
-          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta
+          mode,add:addForSim,drop,roster:myRoster,activeSlots,weeklyDelta
         });
         const stream=specialist.mode==="STREAM_SWAP"
-          ? specialistScheduleEdge(add,drop,week)
+          ? specialistScheduleEdge(addForSim,drop,week)
           : {thisWeekEdge:null,next3Edge:null};
         const roleSurge=Math.max(0,Number(add?.roleRatio||1)-1);
         const trendSignal=Math.log10(1+Number(add?.trending||0));
         const velocitySignal=Math.log10(1+Number(add?.trendVelocity||0));
-        const breakoutScore=round(roleSurge*10+trendSignal+velocitySignal*1.5);
+        const fastSignal=Math.log10(1+Number(add?.fastTrending||0));
+        const injurySignal=add?.injuryOpportunity?.applied
+          ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
+          : 0;
+        const breakoutScore=round(roleSurge*10+trendSignal+velocitySignal*1.5+fastSignal+injurySignal*.7);
         const stash=!SPECIALIST_POSITIONS.has(add?.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
-          (roleSurge>=.08 || trendSignal>=2 || velocitySignal>=1.45);
+          (roleSurge>=.08 || injurySignal>=1.5 || trendSignal>=2 || velocitySignal>=1.45);
+        const agreement=waiverSignalAgreement({
+          weeklyDelta,depthDelta,marketDelta,
+          addRoleRatio:add?.roleRatio,injuryOpportunity:add?.injuryOpportunity,
+          fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity,
+          mirageRisk:add?.mirageRisk,waiverOnly:add?.gameLocked
+        });
         return {
-          ...a,weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          ...a,
+          headline:add?.gameLocked&&add?.name
+            ? `Claim ${add.name}${drop?.name?`, drop ${drop.name}`:""}`
+            : a.headline,
+          window:add?.gameLocked?"NEXT WAIVER RUN":a.window,
+          weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          waiverOnly:!!add?.gameLocked,
+          signalCount:agreement.count,signalAgreement:agreement,
+          fastTrending:add?.fastTrending??0,
           trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
           rosterFitBlocked:!specialist.allowed||!depthFit.allowed,
           specialistMode:specialist.mode||null,
@@ -1243,6 +1266,8 @@ Return ONLY valid JSON:
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
           providerNext3:add?.providerNext3??null,
+          injuryOpportunity:add?.injuryOpportunity||null,
+          mirageRisk:add?.mirageRisk??0,
         };
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
@@ -1364,10 +1389,12 @@ Return ONLY valid JSON:
         rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
         noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
         depthProtection:"redraft protects one RB and WR beyond dedicated starting slots unless a cross-position move adds at least 2.5 pts/week",
-        gameDayLegality:"free agents are removed once their NFL game has started; specialist streams are evaluated on this-week edge first",
+        gameDayLegality:"played/playing free agents remain visible as next-waiver targets; they are never presented as immediate adds. Specialist streams still require an unlocked game.",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
         trendingSnapshot:trendById,
+        fastTrendingSnapshot:fastTrendById,
+        freshness:{mode:rosterFreshnessLabel(Date.now()),targetMinutes:Math.round(rosterActionsFreshnessMs(Date.now())/60000)},
         trendSnapshotAgeMinutes:cached?.at?round((Date.now()-cached.at)/60000):null,
         forecastModel:"provider + recent league-scored production + workload trend",
         redraftTradeHorizon:"up to six projected weeks, blended with current form and official injury status",
