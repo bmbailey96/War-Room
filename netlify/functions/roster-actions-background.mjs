@@ -11,7 +11,7 @@ import {
 import lineup, {
   scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean,easternKickoffMs
 } from "./lineup.mjs";
-import { detectLeagueMode,validateActions,acquisitionPolicy } from "./lib/roster-v2.mjs";
+import { detectLeagueMode,validateActions,acquisitionPolicy,waiverScheduleFromSettings } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 import { diagnoseTeamState,buildAllPlayMetrics } from "./lib/team-state.mjs";
 import {
@@ -125,6 +125,13 @@ export function roleMarketTiming(player={}){
       roleRatio:round(role),pointRatio:round(pointRatio),mirageRisk:round(mirage)
     };
   }
+  const earlyRoleScore=Math.max(0,(role-1)*6)+Math.max(0,1.12-pointRatio)*2;
+  if(role>=1.12 && pointRatio<=1.12 && mirage<=.28 && earlyRoleScore>=.8){
+    return {
+      code:"BUY_ROLE",label:"ROLE RISING BEFORE MARKET",score:round(Math.min(3,earlyRoleScore)),
+      roleRatio:round(role),pointRatio:round(pointRatio),mirageRisk:round(mirage)
+    };
+  }
   if(pointRatio>=1.18 && role<=1.05 && (mirage>=.25 || td>=.38) && sellScore>=1){
     return {
       code:"SELL_HIGH",label:"BOX SCORE AHEAD OF ROLE",score:round(Math.min(3,sellScore)),
@@ -152,6 +159,18 @@ export function reserveEligibility(status,settings={}){
   if(/covid/.test(s))return Number(settings.reserve_allow_cov||0)===1;
   if(/dnr|did not report/.test(s))return Number(settings.reserve_allow_dnr||0)===1;
   return false;
+}
+
+export function reserveMoveAvailability(player={}){
+  const eligible=!!player.reserveEligible;
+  if(!eligible)return {eligible:false,canMoveNow:false,reason:"NOT_IR_ELIGIBLE"};
+  if(player.gameLocked){
+    return {
+      eligible:true,canMoveNow:false,reason:"PLAYER_LOCKED_THIS_WEEK",
+      unlockLabel:"AFTER WEEK"
+    };
+  }
+  return {eligible:true,canMoveNow:true,reason:null,unlockLabel:"NOW"};
 }
 
 export function buildTeamGameLocks(gamesCsv,season,week,nowMs=Date.now()){
@@ -577,10 +596,26 @@ export function buildWaiverPlan(pairs=[],limit=3){
 }
 
 export function buildIrFirstPlan({
-  irPlayer=null,irAdd=null,irWaiver=null,irWeeklyDelta=null
+  irPlayer=null,irAdd=null,irWaiver=null,irWeeklyDelta=null,
+  canMoveToIrNow=true,waiverWindowLabel=null
 }={}){
   if(!irPlayer||!irAdd||!irWaiver)return null;
   const claimOnly=!!irWaiver.waiverOnly;
+  if(!canMoveToIrNow){
+    return {
+      type:"IR_ADD",priority:0,confidence:"HIGH",deferred:true,
+      headline:`Prep ${irAdd.name}; move ${irPlayer.name} to IR after the week unlocks`,
+      why:`The roster is full and ${irPlayer.name} is IR-eligible but transaction-locked by this week's game. Do not treat this as a submit-now claim. Move him to IR after the week unlocks, then submit the waiver move before it processes.`,
+      window:waiverWindowLabel||"AFTER WEEK / BEFORE WAIVERS",
+      add:{name:irAdd.name},drop:null,moveToIr:{name:irPlayer.name},
+      faabPct:null,waiverOnly:true,immediateFreeAgent:false,
+      claimRank:irWaiver.claimRank||1,claimRole:irWaiver.claimRole||"PRIMARY",
+      weeklyDelta:irWeeklyDelta,depthDelta:irWaiver.depthDelta??null,
+      injuryOpportunity:irWaiver.injuryOpportunity||null,
+      liveRole:irWaiver.liveRole||null,
+      drivers:["roster_slot","waiver_timing","depth"],
+    };
+  }
   return {
     type:"IR_ADD",priority:0,confidence:"HIGH",
     headline:claimOnly
@@ -739,6 +774,7 @@ export default async req=>{
     if(!me)throw new Error("my roster missing");
     const mode=detectLeagueMode(league);
     const acquisition=acquisitionPolicy(league);
+    const waiverSchedule=waiverScheduleFromSettings(league.settings||{});
     const faabTotal=Number(league.settings?.waiver_budget||0);
     const faabUsed=Number(me.waiverBudgetUsed||0);
     const faabRemaining=Math.max(0,faabTotal-faabUsed);
@@ -819,9 +855,10 @@ export default async req=>{
       const info=pInfo(db,pid),team=normTeam(info.team);
       if(!team)continue;
       const counts=liveUsageCounts(stats);
-      const t=liveTeamTotals[team]||(liveTeamTotals[team]={targets:0,rbCarries:0});
+      const t=liveTeamTotals[team]||(liveTeamTotals[team]={targets:0,rbCarries:0,routes:0});
       t.targets+=Number(counts.targets||0);
       if(slotPos(info)==="RB")t.rbCarries+=Number(counts.carries||0);
+      t.routes=Math.max(t.routes,Number(counts.teamRoutes||0));
     }
 
     // Find role changes before the market necessarily notices. Current-week
@@ -845,8 +882,10 @@ export default async req=>{
         baselineCarries:form.recentCarries||form.baselineCarries||0,
         baselineTargetShare:profile.targetShare??null,
         baselineCarryShare:profile.carryShare??null,
+        baselineRouteParticipation:profile.routeParticipation??profile.routeShare??null,
         teamTargets:liveTotals.targets||0,
-        teamRbCarries:liveTotals.rbCarries||0
+        teamRbCarries:liveTotals.rbCarries||0,
+        teamRoutes:liveTotals.routes||0
       });
       if(liveRole)liveRoleById[pid]=liveRole;
     }
@@ -1093,20 +1132,31 @@ export default async req=>{
     const waiverPlan=buildWaiverPlan(bestWaiverPairs,3);
 
     const irCandidates=myRoster
-      .filter(p=>!p.onIR && reserveEligibility(p.injury,reserveSettings))
+      .map(p=>({...p,reserveEligible:reserveEligibility(p.injury,reserveSettings)}))
+      .filter(p=>!p.onIR && p.reserveEligible)
       .sort((a,b)=>
         mode==="DYNASTY"
           ? Number(b.market||0)-Number(a.market||0)
           : Number(b.next3||0)-Number(a.next3||0)
       );
-    const irPlayer=openReserveSlots>0?irCandidates[0]||null:null;
+    const irMoveableCandidates=irCandidates.filter(p=>reserveMoveAvailability(p).canMoveNow);
+    const irLockedCandidates=irCandidates.filter(p=>!reserveMoveAvailability(p).canMoveNow);
+    const immediateIrPlayer=openReserveSlots>0?irMoveableCandidates[0]||null:null;
+    const deferredIrPlayer=openReserveSlots>0?irLockedCandidates[0]||null:null;
+    const irPlayer=immediateIrPlayer || (acquisition.mode==="WAIVERS"?deferredIrPlayer:null);
     const irWaiver=irPlayer&&waiverPlan.length?waiverPlan[0]:null;
     const irAdd=irWaiver?free.find(p=>normName(p.name)===normName(irWaiver.add)):null;
     const irWeeklyDelta=irAdd
       ? round(simTotal(rosterAfter(myRoster,{addPlayers:[irAdd]}),activeSlots)-baselineRosterTotal)
       : null;
+    const irMove=irPlayer?reserveMoveAvailability(irPlayer):null;
+    const waiverWindowLabel=waiverSchedule.afterGameProcessDay
+      ? `AFTER WEEK / BEFORE ${waiverSchedule.afterGameProcessDay} WAIVERS`
+      : "AFTER WEEK / BEFORE WAIVERS";
     const irPlan=buildIrFirstPlan({
-      irPlayer,irAdd,irWaiver,irWeeklyDelta
+      irPlayer,irAdd,irWaiver,irWeeklyDelta,
+      canMoveToIrNow:irMove?.canMoveNow!==false,
+      waiverWindowLabel
     });
 
     const tradeTargets=[];
@@ -1128,6 +1178,7 @@ export default async req=>{
     const targetTimingScore=t=>{
       const timing=t?.tradeTiming||{};
       if(timing.code==="BUY_LOW")return Number(timing.score||0)*1.2;
+      if(timing.code==="BUY_ROLE")return Number(timing.score||0);
       if(timing.code==="SELL_HIGH")return -Number(timing.score||0)*.8;
       return 0;
     };
@@ -1243,13 +1294,14 @@ export default async req=>{
         const sellHighScore=sentTiming
           .filter(x=>x.code==="SELL_HIGH")
           .reduce((s,x)=>s+Number(x.score||0),0);
-        const protectedBuyLowScore=sentTiming
-          .filter(x=>x.code==="BUY_LOW")
+        const protectedRoleBuyScore=sentTiming
+          .filter(x=>x.code==="BUY_LOW"||x.code==="BUY_ROLE")
           .reduce((s,x)=>s+Number(x.score||0),0);
         const timingScore=
-          (targetTiming.code==="BUY_LOW"?Number(targetTiming.score||0)*1.4:0)-
+          (targetTiming.code==="BUY_LOW"?Number(targetTiming.score||0)*1.4:0)+
+          (targetTiming.code==="BUY_ROLE"?Number(targetTiming.score||0)*1.15:0)-
           (targetTiming.code==="SELL_HIGH"?Number(targetTiming.score||0)*.8:0)+
-          sellHighScore*.65-protectedBuyLowScore*1.15;
+          sellHighScore*.65-protectedRoleBuyScore*1.15;
         const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+
           managerFit+timingScore;
         if(!best||score>best.score){
@@ -1278,11 +1330,13 @@ export default async req=>{
         best.confidence=best.weeklyDelta>=2&&best.partnerWeeklyDelta>=-1?"HIGH":"MEDIUM";
         const timingNote=best.tradeTiming?.code==="BUY_LOW"
           ? " Role is ahead of recent fantasy scoring, so the target gets a small buy-low timing boost."
-          : best.tradeTiming?.code==="SELL_HIGH"
-            ? " Recent scoring is ahead of role, so the target is penalized as a possible sell-high profile."
-            : best.sentTradeTiming?.some(x=>x.code==="SELL_HIGH")
-              ? " The outgoing side includes a box-score-ahead-of-role asset, which modestly improves timing."
-              : "";
+          : best.tradeTiming?.code==="BUY_ROLE"
+            ? " Usage is rising before the box score has fully repriced the player, so the target gets a modest buy-early boost."
+            : best.tradeTiming?.code==="SELL_HIGH"
+              ? " Recent scoring is ahead of role, so the target is penalized as a possible sell-high profile."
+              : best.sentTradeTiming?.some(x=>x.code==="SELL_HIGH")
+                ? " The outgoing side includes a box-score-ahead-of-role asset, which modestly improves timing."
+                : "";
         best.why=(mode==="DYNASTY"
           ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical trade behavior.`
           : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`
@@ -1309,6 +1363,7 @@ ACQUISITION POLICY: ${acquisition.label} (${acquisition.source})
 NFL WEEK: ${week}
 MY MATCHUP WIN CHANCE: ${lineupData?.matchup?.winProbability??"unknown"}%
 MY WAIVER POSITION: ${me.waiverPosition??"unknown"}
+WAIVER SCHEDULE SETTINGS: ${JSON.stringify(waiverSchedule)}
 TEAM STATE DIAGNOSIS:
 ${JSON.stringify(teamState,null,2)}
 ${modeRules}
@@ -1362,8 +1417,8 @@ Hard rules:
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
 - Do not recommend lateral churn.
-- Role-vs-box-score trade timing is a SOFT factor only. BUY_LOW means underlying role is ahead of recent fantasy scoring; SELL_HIGH means recent scoring is ahead of role with touchdown/mirage support. Never let timing make an unfair trade fair.
-- Avoid selling my BUY_LOW players merely because the recent box score is weak. Prefer SELL_HIGH outgoing assets only when the trade already improves my roster.
+- Role-vs-box-score trade timing is a SOFT factor only. BUY_LOW means underlying role is ahead of recent fantasy scoring; BUY_ROLE means usage is rising before scoring/market fully catches up; SELL_HIGH means recent scoring is ahead of role with touchdown/mirage support. Never let timing make an unfair trade fair.
+- Avoid selling my BUY_LOW or BUY_ROLE players merely because the recent box score is weak. Prefer SELL_HIGH outgoing assets only when the trade already improves my roster.
 - Do not treat a losing record by itself as evidence the roster is bad. Respect TEAM STATE DIAGNOSIS.
 - If TEAM STATE says BAD-LUCK SCHEDULE or RESULTS LAGGING, suppress panic sells and marginal trades.
 - If TEAM STATE says LINEUP EXECUTION, do not try to solve a start/sit problem with unnecessary roster churn.
@@ -1586,10 +1641,12 @@ Return ONLY valid JSON:
         acquisition,
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
-        waiver:{usesFaab,total:faabTotal,used:faabUsed,remaining:faabRemaining},
+        waiver:{usesFaab,total:faabTotal,used:faabUsed,remaining:faabRemaining,schedule:waiverSchedule},
         reserve:{
           slots:reserveSlots,used:reserveUsed,open:openReserveSlots,
-          eligibleActive:irCandidates.map(p=>p.name)
+          eligibleActive:irCandidates.map(p=>p.name),
+          moveableNow:irMoveableCandidates.map(p=>p.name),
+          lockedUntilWeekEnds:irLockedCandidates.map(p=>p.name)
         },
         myPicks,
         marketDate:market.scrapeDate||null,
@@ -1616,7 +1673,7 @@ Return ONLY valid JSON:
         redraftTradeHorizon:"up to six projected weeks, blended with current form and official injury status",
         replacementByPos,
         tradeModel:mode==="DYNASTY"?"fair value + both lineups + manager trade history":"both lineups + roster fit",
-        tradeTimingModel:"role vs recent box score is a soft ranking factor; it never overrides lineup gain, partner plausibility, or dynasty/redraft value efficiency",
+        tradeTimingModel:"role-vs-box-score timing includes BUY_LOW, BUY_ROLE and SELL_HIGH as soft ranking factors; none overrides lineup gain, partner plausibility, or dynasty/redraft value efficiency",
       },
       reasoningMode:(coreOnly||error)?"deterministic":"live_news",
       reasoningAvailable:!coreOnly&&!error,
