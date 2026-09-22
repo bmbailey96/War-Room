@@ -1641,7 +1641,7 @@ const pulseAlerts=buildPulseAlerts({
   gameLocks:{GB:{
     kickoffAt:new Date(Date.now()-2*60*60*1000).toISOString(),locked:true
   }},
-  acquisition:{canAddStartedPlayers:true}
+  acquisition:{mode:"OPEN_FA",canAddStartedPlayers:true}
 });
 assert.equal(pulseAlerts.length,1);
 assert.equal(pulseAlerts[0].name,"Free WR");
