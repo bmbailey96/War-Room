@@ -6,8 +6,10 @@
 // It also grades the live-news reasoning layer by driver. This is not model
 // fine-tuning. It is an explicit, inspectable feedback loop stored per league.
 
-import { store, MY_USER_ID, normName } from "./lib/war-v2.mjs";
+import { store, MY_USER_ID, normName, getPlayersTrim } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
+import { fantasyPoints } from "./lineup.mjs";
+import { getDynastyMarket } from "./lib/market-v2.mjs";
 
 const DEFAULT = { role:0.28, matchup:0.25, environment:0.35, scheme:0.22 };
 const MICRO_KEYS=["coverage","teCoverage","rbSplit","passRush","personnel","routeProfile","vacated"];
@@ -142,6 +144,192 @@ function signalReliability(samples,key){
     if((ratio>1 && residual>0)||(ratio<1 && residual<0)) hit++;
   }
   return {n,hit,hitRate:n?round2(hit/n):null};
+}
+
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const rosterGradeKey=(historyAt,index,horizon)=>`${historyAt}|${index}|${horizon}`;
+
+export function rosterOutcomeScore({
+  mode="REDRAFT",horizon=1,
+  addPoints=0,dropPoints=0,addReplacement=0,dropReplacement=0,
+  initialAddMarket=null,initialDropMarket=null,currentAddMarket=null,currentDropMarket=null
+}={}){
+  const h=Math.max(1,Number(horizon||1));
+  const addVor=Number(addPoints||0)-Number(addReplacement||0)*h;
+  const dropVor=Number(dropPoints||0)-Number(dropReplacement||0)*h;
+  const productionEdge=addVor-dropVor;
+  const productionNorm=clamp(productionEdge/(3*h),-1,1);
+
+  let marketEdgeChange=null,marketNorm=0;
+  if(
+    mode==="DYNASTY" &&
+    [initialAddMarket,initialDropMarket,currentAddMarket,currentDropMarket]
+      .every(v=>Number.isFinite(Number(v)))
+  ){
+    const initialEdge=Number(initialAddMarket)-Number(initialDropMarket);
+    const currentEdge=Number(currentAddMarket)-Number(currentDropMarket);
+    marketEdgeChange=currentEdge-initialEdge;
+    marketNorm=clamp(marketEdgeChange/12,-1,1);
+  }
+
+  const bothReplaceable=addVor<=1*h&&dropVor<=1*h;
+  const tinyDifference=Math.abs(productionEdge)<1*h&&(marketEdgeChange==null||Math.abs(marketEdgeChange)<3);
+  const churnPenalty=bothReplaceable&&tinyDifference?.22:0;
+  const raw=mode==="DYNASTY"&&marketEdgeChange!=null
+    ? productionNorm*.55+marketNorm*.45-churnPenalty
+    : productionNorm-churnPenalty;
+  const score=Math.round(clamp(raw,-1,1)*100)/100;
+  return {
+    score,hit:score>.10,
+    productionEdge:Math.round(productionEdge*10)/10,
+    addVor:Math.round(addVor*10)/10,dropVor:Math.round(dropVor*10)/10,
+    marketEdgeChange:marketEdgeChange==null?null:Math.round(marketEdgeChange*10)/10,
+    unnecessaryChurn:bothReplaceable&&tinyDifference
+  };
+}
+
+export function aggregateRosterLearning(grades=[]){
+  const byDecision=new Map();
+  for(const g of grades||[]){
+    if(!g?.decisionId||!Number.isFinite(Number(g.score)))continue;
+    const x=byDecision.get(g.decisionId)||{};
+    x[g.horizon]=g;
+    byDecision.set(g.decisionId,x);
+  }
+
+  const decisions=[];
+  for(const [decisionId,x] of byDecision){
+    const primary=x[3]||x[1]||x[6];
+    if(!primary)continue;
+    let score=Number(primary.score);
+    if(x[3]&&x[6])score=Number(x[3].score)*.65+Number(x[6].score)*.35;
+    else if(!x[3]&&x[1])score*=.6;
+    const tags=[...new Set(primary.archetypes||["GENERAL"])];
+    decisions.push({decisionId,score,hit:score>.10,tags,horizons:Object.keys(x).map(Number)});
+  }
+
+  const archetypes={};
+  for(const d of decisions){
+    for(const tag of d.tags){
+      const a=archetypes[tag]||(archetypes[tag]={n:0,hits:0,sumScore:0});
+      a.n++;a.sumScore+=d.score;if(d.hit)a.hits++;
+    }
+  }
+  for(const a of Object.values(archetypes)){
+    a.hitRate=a.n?Math.round(a.hits/a.n*100)/100:null;
+    a.avgScore=a.n?Math.round(a.sumScore/a.n*100)/100:0;
+    delete a.sumScore;
+  }
+  return {samples:decisions.length,archetypes,decisions};
+}
+
+function playerIndex(db={}){
+  const out={};
+  for(const [pid,p] of Object.entries(db||{})){
+    const key=normName(p?.n||"");
+    if(key&&!out[key])out[key]=pid;
+  }
+  return out;
+}
+function actualPoints(name,pos,weeks,statsByWeek,idByName,scoring){
+  const pid=idByName[normName(name||"")];
+  if(!pid)return 0;
+  return (weeks||[]).reduce((sum,w)=>{
+    const stats=statsByWeek[w]?.[pid];
+    return sum+(stats?Number(fantasyPoints(stats,scoring||{},pos)||0):0);
+  },0);
+}
+function currentMarketValue(name,market){
+  const v=market?.players?.[normName(name||"")]?.value;
+  return Number.isFinite(Number(v))?Number(v):null;
+}
+
+async function gradeRosterAdvice({
+  stateStore,league,currentWeek,season,db,market
+}){
+  const history=await stateStore.get(`roster_action_history_${league.id}`,{type:"json"}).catch(()=>[])||[];
+  const existing=await stateStore.get(`roster_outcome_grades_${league.id}`,{type:"json"}).catch(()=>null)||{grades:{}};
+  const grades={...(existing.grades||{})};
+  const leagueConfig=await j(`https://api.sleeper.app/v1/league/${league.id}`)||{};
+  const scoring=leagueConfig.scoring_settings||{};
+  const idByName=playerIndex(db);
+
+  const pending=[];
+  const weeksNeeded=new Set();
+  for(const h of history){
+    for(const [index,a] of (h.actions||[]).entries()){
+      const snap=a?.decisionSnapshot;
+      if(!snap||!["PICKUP","TRADE"].includes(snap.kind))continue;
+      for(const horizon of [1,3,6]){
+        if(currentWeek<Number(snap.week||h.week||0)+horizon)continue;
+        const key=rosterGradeKey(h.at,index,horizon);
+        if(grades[key])continue;
+        const start=Number(snap.week||h.week||0);
+        const weeks=Array.from({length:horizon},(_,i)=>start+i).filter(w=>w>0&&w<currentWeek);
+        if(weeks.length<horizon)continue;
+        weeks.forEach(w=>weeksNeeded.add(w));
+        pending.push({key,historyAt:h.at,index,action:a,snap,horizon,weeks});
+      }
+    }
+  }
+
+  const statsByWeek={};
+  await Promise.all([...weeksNeeded].map(async w=>{
+    statsByWeek[w]=await j(`https://api.sleeper.app/v1/stats/nfl/regular/${season}/${w}`)||{};
+  }));
+
+  for(const item of pending){
+    const {snap,horizon,weeks}=item;
+    let addPoints=0,dropPoints=0,initialAddMarket=null,initialDropMarket=null,currentAddMarket=null,currentDropMarket=null;
+    let addReplacement=0,dropReplacement=0;
+
+    if(snap.kind==="PICKUP"){
+      const add=snap.add||{},drop=snap.drop||{};
+      addPoints=actualPoints(add.name,add.pos,weeks,statsByWeek,idByName,scoring);
+      dropPoints=actualPoints(drop.name,drop.pos,weeks,statsByWeek,idByName,scoring);
+      addReplacement=Number(add.replacement||0);dropReplacement=Number(drop.replacement||0);
+      initialAddMarket=add.market;initialDropMarket=drop.market;
+      currentAddMarket=currentMarketValue(add.name,market);
+      currentDropMarket=currentMarketValue(drop.name,market);
+    }else{
+      const sends=(snap.send||[]).filter(x=>x.type==="player");
+      const receives=(snap.receive||[]).filter(x=>x.type==="player");
+      addPoints=receives.reduce((sum,x)=>sum+actualPoints(x.name,x.pos,weeks,statsByWeek,idByName,scoring),0);
+      dropPoints=sends.reduce((sum,x)=>sum+actualPoints(x.name,x.pos,weeks,statsByWeek,idByName,scoring),0);
+      initialAddMarket=receives.reduce((sum,x)=>sum+Number(x.initialValue||0),0);
+      initialDropMarket=sends.reduce((sum,x)=>sum+Number(x.initialValue||0),0);
+      const curAdd=receives.map(x=>currentMarketValue(x.name,market));
+      const curDrop=sends.map(x=>currentMarketValue(x.name,market));
+      currentAddMarket=curAdd.length&&curAdd.every(v=>v!=null)?curAdd.reduce((a,b)=>a+b,0):null;
+      currentDropMarket=curDrop.length&&curDrop.every(v=>v!=null)?curDrop.reduce((a,b)=>a+b,0):null;
+    }
+
+    const outcome=rosterOutcomeScore({
+      mode:snap.mode||"REDRAFT",horizon,
+      addPoints,dropPoints,addReplacement,dropReplacement,
+      initialAddMarket,initialDropMarket,currentAddMarket,currentDropMarket
+    });
+    const decisionId=`${item.historyAt}|${item.index}`;
+    grades[item.key]={
+      at:Date.now(),decisionId,horizon,week:snap.week,
+      kind:snap.kind,mode:snap.mode,
+      archetypes:snap.archetypes||["GENERAL"],
+      informationConfidence:snap.informationConfidence||"UNKNOWN",
+      addPoints:Math.round(addPoints*10)/10,dropPoints:Math.round(dropPoints*10)/10,
+      ...outcome
+    };
+  }
+
+  const allGrades=Object.values(grades);
+  const learned=aggregateRosterLearning(allGrades);
+  const model={
+    at:Date.now(),leagueId:league.id,season,
+    samples:learned.samples,archetypes:learned.archetypes,
+    recent:allGrades.sort((a,b)=>Number(b.at||0)-Number(a.at||0)).slice(0,30)
+  };
+  await stateStore.setJSON(`roster_outcome_grades_${league.id}`,{at:Date.now(),grades});
+  await stateStore.setJSON(`roster_learning_${league.id}`,model);
+  return model;
 }
 
 function addDriverStat(acc,driver,hit){
