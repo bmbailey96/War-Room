@@ -814,7 +814,7 @@ const reviews=completedWeekReviews([
   [
     {roster_id:1,matchup_id:1,points:10,players:["s","b"],starters:["s"],players_points:{s:10,b:20}},
     {roster_id:2,matchup_id:1,points:15,players:[],starters:[],players_points:{}},
-    {roster_id:3,matchup_id:2,points:12},{roster_id:4,matchup_id:2,points:8}
+    {roster_id:3,matchup_id:2,points:18},{roster_id:4,matchup_id:2,points:17}
   ],
   [
     {roster_id:1,matchup_id:1,points:20,players:["s","b"],starters:["s"],players_points:{s:20,b:5}},
