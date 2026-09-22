@@ -1170,6 +1170,7 @@ export default async req=>{
     const vacatedByTeam=buildVacatedOpportunity(
       opportunityProfiles,unavailableForOpportunity
     );
+    const contingentByName=buildContingentOpportunity(opportunityProfiles,officialInjuries);
     const marketValue=name=>market.players?.[normName(name)]?.value??null;
     const rankedTeams=[...snapshot.teams].sort((a,b)=>(b.wins-a.wins)||(b.pointsFor-a.pointsFor));
     const tierOfOriginal=original=>{
@@ -1243,22 +1244,37 @@ export default async req=>{
       if(liveRole)liveRoleById[pid]=liveRole;
     }
     const liveRoleIds=Object.keys(liveRoleById);
+    const contingentIds=Object.entries(db||{})
+      .filter(([pid,p])=>pid&&!rostered.has(pid)&&!!contingentByName[normName(p?.n||"")])
+      .map(([pid])=>pid);
     const candidateIds=[...new Set([
       ...liveRoleIds,
       ...(core.trendingFast||[]).map(x=>x.player_id),
       ...(core.trending||[]).map(x=>x.player_id),
       ...topProj,
-      ...injuryOpportunityIds
+      ...injuryOpportunityIds,
+      ...contingentIds
     ])].filter(pid=>pid&&!rostered.has(pid));
 
     let free=candidateIds.map(pid=>{
       const basePlayer=playerView(pid,db,proj,formMap,gameLocks,officialInjuries);
-      const p=injuryOpportunityForecast(
+      const p0=injuryOpportunityForecast(
         basePlayer,
         opportunityProfiles[normName(basePlayer.name)]||null,
         vacatedByTeam[normTeam(basePlayer.team)]||null,
         week
       );
+      const key=normName(basePlayer.name);
+      const roleExpansion=roleExpansionSafety(
+        p0,
+        opportunityProfiles[key]||null,
+        vacatedByTeam[normTeam(basePlayer.team)]||null
+      );
+      const p={
+        ...p0,
+        roleExpansion,
+        contingentUpside:contingentByName[key]||null
+      };
       const trend=trendById[pid]||0;
       const fastTrend=fastTrendById[pid]||0;
       const priorTrend=Number(priorTrendById[pid]||0);
@@ -1317,12 +1333,21 @@ export default async req=>{
         }),
         kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
       };
-      return injuryOpportunityForecast(
+      const withOpportunity=injuryOpportunityForecast(
         baseForecast,
         opportunityProfiles[key]||null,
         vacatedByTeam[normTeam(p.team)]||null,
         week
       );
+      return {
+        ...withOpportunity,
+        roleExpansion:roleExpansionSafety(
+          withOpportunity,
+          opportunityProfiles[key]||null,
+          vacatedByTeam[normTeam(p.team)]||null
+        ),
+        contingentUpside:contingentByName[key]||null
+      };
     };
     const lineupByName=new Map((lineupData?.players||[]).map(p=>[normName(p.name),p]));
     const myRoster=me.players.map(p=>({
