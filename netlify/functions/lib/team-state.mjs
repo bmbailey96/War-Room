@@ -122,8 +122,8 @@ export function diagnoseTeamState(teams=[],me=null,{allPlay=null}={}){
     code="PROCESS_OK";label="RESULTS LAGGING";
     aggression=.92;tradePosture="hold_value";
   }else if(!strongUnderlying&&injuries>=3){
-    code="DEPTH_STRESSED";label="INJURY / DEPTH STRESS";
-    aggression=1.10;tradePosture="add_depth";
+    code="DEPTH_AND_UPSIDE";label="DEPTH STRESS + STARTER UPSIDE";
+    aggression=1.14;tradePosture="consolidate";
   }else if(!strongUnderlying){
     code="ROSTER_UPGRADE";label="NEEDS STARTER UPSIDE";
     aggression=1.15;tradePosture="consolidate";
@@ -143,7 +143,7 @@ export function diagnoseTeamState(teams=[],me=null,{allPlay=null}={}){
   if(code==="LINEUP_LEAK")directive="Prioritize start/sit accuracy over roster churn.";
   else if(code==="SCHEDULE_VARIANCE"||code==="PROCESS_OK")directive="Do not sell low because of the record.";
   else if(code==="ROSTER_UPGRADE")directive="Actively hunt starter upgrades and consolidation trades.";
-  else if(code==="DEPTH_STRESSED")directive="Repair usable depth before paying for luxury upgrades.";
+  else if(code==="DEPTH_AND_UPSIDE")directive="Injuries matter, but the underlying roster is still bottom-half; repair usable depth while prioritizing players who can become weekly starters.";
   else directive="Stay selective and only take clear edges.";
 
   return {
