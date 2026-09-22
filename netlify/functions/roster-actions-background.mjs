@@ -722,6 +722,37 @@ export function ownerBehaviorSummary(ownerId,seasonProfile={}){
   };
 }
 
+export function tradeExplanation(x={},context={}){
+  const mode=context.mode||"REDRAFT";
+  const target=x.target||x.receive?.[0]?.name||"the target";
+  const partner=x.partner||"the other manager";
+  const send=(x.send||[]).map(assetName);
+  const weekly=Number(x.weeklyDelta||0),partnerWeekly=Number(x.partnerWeeklyDelta||0);
+  const behavior=x.partnerBehavior||context.partnerBehavior||null;
+  const timing=x.tradeTiming||null;
+  const timingText=timing?.code==="BUY_LOW"
+    ? "His underlying role is stronger than the recent fantasy scoring."
+    : timing?.code==="BUY_ROLE"
+      ? "His usage is rising before the box score has fully caught up."
+      : timing?.code==="SELL_HIGH"
+        ? "His recent scoring is running ahead of the underlying role, so the target is being treated cautiously."
+        : null;
+  const targetText=`Why target ${target}: the trade improves the best lineup by ${weekly>=0?"+":""}${weekly.toFixed(1)} points per week.${timingText?" "+timingText:""}`;
+  const valueText=mode==="DYNASTY"&&x.sendValue!=null&&x.receiveValue!=null
+    ? `Why this price: the package sends about ${Number(x.sendValue).toFixed(0)} of dynasty value for about ${Number(x.receiveValue).toFixed(0)} back. Picks are used only when they make the value and manager fit more plausible.`
+    : x.horizonSend!=null&&x.horizonReceive!=null
+      ? `Why this price: the six-week value is ${Number(x.horizonSend).toFixed(0)} out and ${Number(x.horizonReceive).toFixed(0)} back.`
+      : `Why this price: ${send.join(" + ")||"the outgoing package"} cleared the two-team fairness screen.`;
+  const behaviorText=behavior?.summary
+    ? `Why ${partner} might listen: ${behavior.summary} Their projected lineup changes ${partnerWeekly>=0?"+":""}${partnerWeekly.toFixed(1)} points per week in this model.`
+    : `Why ${partner} might listen: their projected lineup changes ${partnerWeekly>=0?"+":""}${partnerWeekly.toFixed(1)} points per week in this model.`;
+  const cuts=(x.partnerCuts||[]).map(p=>p.name||p).filter(Boolean);
+  const rosterText=cuts.length
+    ? `Roster-space reality: they would likely need to cut ${cuts.join(" and ")} to take the extra players, and that cost is included in the plausibility score.`
+    : "Roster-space reality: the package does not require them to create an extra player slot.";
+  return {target:targetText,price:valueText,partner:behaviorText,roster:rosterText};
+}
+
 export function waiverSignalAgreement(x={}){
   const liveRole=!!x.liveRole?.strong;
   const role=liveRole || Number(x.addRoleRatio||x.roleRatio||1)>=1.08;
@@ -965,6 +996,9 @@ export function deterministicRosterFallback({
       marketDelta:t.marketDelta??null,managerFit:t.managerFit??null,
       tradeTiming:t.tradeTiming||null,
       sentTradeTiming:t.sentTradeTiming||[],
+      partnerCuts:t.partnerCuts||[],
+      partnerBehavior:t.partnerBehavior||null,
+      explanation:t.explanation||tradeExplanation(t,{mode,partnerBehavior:t.partnerBehavior||null}),
       timingScore:t.timingScore??null,
       partnerCareerTrades:t.partnerCareerTrades??null,
     });
