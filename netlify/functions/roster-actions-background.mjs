@@ -1626,7 +1626,8 @@ export default async req=>{
         });
         const agreementBonus=Math.max(0,agreement.count-1)*1.1;
         const score=mode==="DYNASTY"
-          ? weeklyDelta*4+(marketDelta??0)*.7+depthDelta*.8+(add.screenScore-drop.dropScore)*.10+injurySignal*.5+agreementBonus
+          ? weeklyDelta*4+(marketDelta??0)*.7+depthDelta*.8+(add.screenScore-drop.dropScore)*.10+
+            injurySignal*.5+contingencySignal*2+expansionSignal*2+agreementBonus
           : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2+agreementBonus;
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
@@ -2135,7 +2136,8 @@ Return ONLY valid JSON:
           rosterFitBlocked:!specialist.allowed||!depthFit.allowed||!dropSafety.allowed,
           specialistMode:specialist.mode||null,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
-          rosterFitReason:specialist.reason||depthFit.reason||null,
+          rosterFitReason:specialist.reason||depthFit.reason||dropSafety.reason||null,
+          dropSafety,
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
@@ -2242,11 +2244,17 @@ Return ONLY valid JSON:
     actions=actions.map(a=>{
       if(!["ADD","WAIVER","ADD_DROP"].includes(a.type))return a;
       const planned=claimRankByAdd.get(normName(a.add?.name||""));
-      return planned
-        ? {...a,claimRank:planned.claimRank,claimRole:planned.claimRole,
-            planRole:planned.planRole||"EXECUTE",alternativeTo:planned.alternativeTo||null,
-            exclusiveDrop:planned.exclusiveDrop||null}
-        : a;
+      if(!planned)return a;
+      const merged={
+        ...a,claimRank:planned.claimRank,claimRole:planned.claimRole,
+        planRole:planned.planRole||"EXECUTE",alternativeTo:planned.alternativeTo||null,
+        exclusiveDrop:planned.exclusiveDrop||null
+      };
+      if(merged.planRole==="ALTERNATIVE"){
+        merged.headline=`Alternative to ${merged.alternativeTo}: ${merged.headline||"roster move"}`;
+        merged.why=`This uses the same roster spot as ${merged.alternativeTo}; do not execute both. ${merged.why||""}`.trim();
+      }
+      return merged;
     }).sort((a,b)=>{
       const aw=["ADD","WAIVER","ADD_DROP"].includes(a.type),bw=["ADD","WAIVER","ADD_DROP"].includes(b.type);
       if(aw&&bw)return Number(a.claimRank||99)-Number(b.claimRank||99);
