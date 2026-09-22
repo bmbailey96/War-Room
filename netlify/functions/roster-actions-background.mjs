@@ -943,7 +943,11 @@ export function deterministicRosterFallback({
     const agreement=w.signalAgreement||waiverSignalAgreement(w);
     let confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
     if(w.waiverOnly||w.immediateFreeAgent){
-      confidence=agreement.strong?"HIGH":agreement.actionable?"MEDIUM":"LOW";
+      confidence=agreement.strong
+        ? "HIGH"
+        : agreement.actionable || (mode==="DYNASTY"&&Number(w.marketDelta||0)>=6)
+          ? "MEDIUM"
+          : "LOW";
     }
     let faabBase=mode==="DYNASTY"
       ? Math.min(22,Math.max(2,Math.round((w.marketDelta||0)*.7+(w.weeklyDelta||0)*4)))
@@ -960,7 +964,9 @@ export function deterministicRosterFallback({
       headline:w.waiverOnly
         ? `Claim ${w.add}, drop ${w.drop}`
         : w.immediateFreeAgent
-          ? `Add ${w.add} now, drop ${w.drop}`
+          ? (w.movePurpose==="DYNASTY_VALUE"
+              ? `Add ${w.add} now for dynasty value, drop ${w.drop}`
+              : `Add ${w.add} now, drop ${w.drop}`)
           : w.specialistMode==="STREAM_SWAP"
           ? `Stream ${w.add}, drop ${w.drop}`
           : w.specialistMode==="BYE_HOLD"
@@ -991,6 +997,7 @@ export function deterministicRosterFallback({
         "schedule",...(mode==="DYNASTY"?["market"] : [])
       ],
       weeklyDelta:w.weeklyDelta,depthDelta:w.depthDelta??null,stash:!!w.stash,
+      movePurpose:w.movePurpose||null,
       specialistMode:w.specialistMode||null,
       streamWeekEdge:w.streamWeekEdge??null,streamNext3Edge:w.streamNext3Edge??null,
       rosterFitReason:w.rosterFitReason||null,
@@ -1780,7 +1787,7 @@ Use web search for current injury/practice news, depth-chart movement, snap/rout
 Hard rules:
 - A pickup must be from ACTUALLY UNROSTERED CANDIDATES.
 - If a candidate has waiverOnly=true, that player's game has already started and this league locks him. It is a NEXT WAIVER RUN claim only.
-- If a candidate has immediateFreeAgent=true, this league permits the acquisition despite the game already starting. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
+- If a candidate has immediateFreeAgent=true, this league uses open free agency and the player is addable NOW. In The Ocho this remains true even after that player's game starts. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
 - Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
 - Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
 - For every pickup, compare the add directly with the proposed drop: role trend, targets/carries/share, short-horizon value, and roster construction. Do not recommend a fourth/fifth QB or TE just because the isolated player looks interesting unless the deterministic roster-fit gate says the value is exceptional.
@@ -1796,13 +1803,14 @@ Hard rules:
 - If no exact trade package clearly helps me and remains plausible for the other manager, recommend no trade. Creating trade activity is not a goal.
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
+- In dynasty, a move with little immediate lineup gain can still be strong if it creates a clear market-value gain. Label that as an asset-value move rather than pretending it is a weekly-points upgrade.
 - Do not recommend lateral churn.
 - Role-vs-box-score trade timing is a SOFT factor only. BUY_LOW means underlying role is ahead of recent fantasy scoring; BUY_ROLE means usage is rising before scoring/market fully catches up; SELL_HIGH means recent scoring is ahead of role with touchdown/mirage support. Never let timing make an unfair trade fair.
 - Avoid selling my BUY_LOW or BUY_ROLE players merely because the recent box score is weak. Prefer SELL_HIGH outgoing assets only when the trade already improves my roster.
 - Do not treat a losing record by itself as evidence the roster is bad. Respect TEAM STATE DIAGNOSIS.
 - If TEAM STATE says BAD-LUCK SCHEDULE or RESULTS LAGGING, suppress panic sells and marginal trades.
 - If TEAM STATE says LINEUP EXECUTION, do not try to solve a start/sit problem with unnecessary roster churn.
-- If TEAM STATE says NEEDS STARTER UPSIDE, prioritize real starter upgrades and consolidation over tiny depth moves.
+- If TEAM STATE says NEEDS STARTER UPSIDE or DEPTH STRESS + STARTER UPSIDE, prioritize real starter upgrades and consolidation over tiny depth moves. Injuries are context, not an excuse to treat a bottom-half underlying roster as healthy.
 - Do not recommend a player who is Out, IR, PUP, Suspended or Doubtful.
 
 Return ONLY valid JSON:
