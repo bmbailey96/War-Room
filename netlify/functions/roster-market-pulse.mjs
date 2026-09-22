@@ -54,8 +54,8 @@ export function buildPulseAlerts({
     alerts.push({
       pid:String(pid),name:info.name,pos,team,
       score:Number(liveRole.score||0),
-      immediateFreeAgent:started&&!!acquisition.canAddStartedPlayers,
-      waiverOnly:started&&!acquisition.canAddStartedPlayers,
+      immediateFreeAgent:acquisition.mode==="OPEN_FA",
+      waiverOnly:started&&acquisition.mode!=="OPEN_FA",
       liveRole
     });
   }

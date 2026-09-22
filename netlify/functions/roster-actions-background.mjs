@@ -598,7 +598,7 @@ function assetName(x){return x?.name||String(x||"");}
 const SPECIALIST_POSITIONS=new Set(["DEF","K"]);
 
 export function positionalDepthDecision({
-  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],
+  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],teamCount=12,
   weeklyDelta=0,depthDelta=0,marketDelta=0
 }={}){
   if(!add || !drop || add.pos===drop.pos){
@@ -611,17 +611,26 @@ export function positionalDepthDecision({
 
   if(["QB","TE"].includes(add.pos)){
     const current=count(add.pos);
-    const softMax=mode==="DYNASTY"
-      ? Math.max(3,starterNeed(add.pos)+2)
-      : starterNeed(add.pos)+1;
+    const superflex=activeSlots.includes("SUPER_FLEX");
+    const oneQbLuxury=add.pos==="QB"&&!superflex&&starterNeed("QB")===1;
+    const softMax=oneQbLuxury
+      ? starterNeed("QB")+1
+      : mode==="DYNASTY"
+        ? Math.max(3,starterNeed(add.pos)+2)
+        : starterNeed(add.pos)+1;
+    const marketThreshold=oneQbLuxury
+      ? (Number(teamCount||12)<=10?18:15)
+      : 12;
     const exceptional=
-      Number(weeklyDelta||0)>=2.0 ||
-      Number(depthDelta||0)>=3.0 ||
-      (mode==="DYNASTY" && Number(marketDelta||0)>=12);
+      Number(weeklyDelta||0)>=(oneQbLuxury?3.0:2.0) ||
+      Number(depthDelta||0)>=(oneQbLuxury?4.5:3.0) ||
+      (mode==="DYNASTY" && Number(marketDelta||0)>=marketThreshold);
     if(current>=softMax && !exceptional){
       return {
         allowed:false,
-        reason:`already roster ${current} ${add.pos}s; a ${current+1}th ${add.pos} needs a clear starter-level or dynasty-value edge`
+        reason:oneQbLuxury
+          ? `already roster ${current} QBs in a one-QB ${teamCount}-team league; a third QB must be an exceptional dynasty asset or trade chip`
+          : `already roster ${current} ${add.pos}s; a ${current+1}th ${add.pos} needs a clear starter-level or dynasty-value edge`
       };
     }
   }
@@ -647,6 +656,24 @@ export function positionCounts(roster=[]){
     out[p.pos]=(out[p.pos]||0)+1;
   }
   return out;
+}
+
+export function dropProtectionScore(player={},replacement=0,mode="REDRAFT"){
+  const next3=Number(player.next3||0),market=Number(player.market||0);
+  const role=Number(player.roleRatio||1),age=Number(player.age||0);
+  const injuryEdge=player.injuryOpportunity?.applied?Math.max(0,Number(player.injuryOpportunity.edgePct||0)):0;
+  const trajectory=player.trajectory||"STABLE",timing=player.tradeTiming?.code||null;
+  const shareGain=Math.max(0,(Number(player.recentTargetShare||0)-Number(player.baselineTargetShare||0))*100);
+  const marginal=Math.max(0,next3-Number(replacement||0));
+  let score=mode==="DYNASTY"?market+next3*1.15+marginal*.8:next3+marginal*.7;
+  if(role>=1.08)score+=(role-1)*24;
+  if(trajectory==="RISING_ROLE")score+=5;
+  if(trajectory==="SCORING_SLUMP_ROLE_OK")score+=3;
+  score+=Math.min(10,injuryEdge*1.4);
+  score+=Math.min(5,shareGain*.45);
+  if(timing==="BUY_LOW"||timing==="BUY_ROLE")score+=4;
+  if(mode==="DYNASTY"&&age>0&&age<=25)score+=(26-age)*1.25;
+  return round(score);
 }
 
 export function pickupExplanation(x={},context={}){
@@ -687,7 +714,7 @@ export function pickupExplanation(x={},context={}){
 
   const addForecast=Number(x.addNext3??add.next3);
   const dropForecast=Number(x.dropNext3??drop.next3);
-  const weekly=Number(x.weeklyDelta||0),depth=Number(x.depthDelta||0);
+  const weekly=Number(x.weeklyDelta||0),depth=Number(x.depthDelta||0),market=Number(x.marketDelta||0);
   const addSentence=evidence.length
     ? `${add.name||x.add} is interesting because ${evidence.slice(0,3).join("; ")}.`
     : `${add.name||x.add} cleared the value screen, but there is not a strong role-trend claim behind it.`;
@@ -697,9 +724,11 @@ export function pickupExplanation(x={},context={}){
   const fitSentence=addPos==="TE"||addPos==="QB"
     ? `Roster fit: you have ${addCount} ${addPos}s now; this move would leave you with ${afterAdd}. ${afterAdd>=4?"That is a luxury position count, so the move should only survive if the value edge is exceptional.":"That count is still within the roster-construction guardrail."}`
     : `Roster fit: the move changes ${dropPos} depth into ${addPos} depth without crossing the position-protection rules.`;
-  const netSentence=x.stash
-    ? `This is a bench stash, not a claim that he should start now. Bench-value edge: ${depth>=0?"+":""}${depth.toFixed(1)}.`
-    : `Expected best-lineup change: ${weekly>=0?"+":""}${weekly.toFixed(1)} points per week over the short horizon.`;
+  const netSentence=mode==="DYNASTY"&&market>=6&&weekly<.5
+    ? `This is a dynasty asset-value pickup, not a short-term lineup upgrade. Market-value edge: +${market.toFixed(0)}; expected best-lineup change: ${weekly>=0?"+":""}${weekly.toFixed(1)} points per week.`
+    : x.stash
+      ? `This is a bench stash, not a claim that he should start now. Bench-value edge: ${depth>=0?"+":""}${depth.toFixed(1)}.`
+      : `Expected best-lineup change: ${weekly>=0?"+":""}${weekly.toFixed(1)} points per week over the short horizon.`;
 
   return {add:addSentence,drop:dropSentence,fit:fitSentence,net:netSentence,mode};
 }
@@ -914,7 +943,11 @@ export function deterministicRosterFallback({
     const agreement=w.signalAgreement||waiverSignalAgreement(w);
     let confidence=impact>=2?"HIGH":impact>=.8?"MEDIUM":"LOW";
     if(w.waiverOnly||w.immediateFreeAgent){
-      confidence=agreement.strong?"HIGH":agreement.actionable?"MEDIUM":"LOW";
+      confidence=agreement.strong
+        ? "HIGH"
+        : agreement.actionable || (mode==="DYNASTY"&&Number(w.marketDelta||0)>=6)
+          ? "MEDIUM"
+          : "LOW";
     }
     let faabBase=mode==="DYNASTY"
       ? Math.min(22,Math.max(2,Math.round((w.marketDelta||0)*.7+(w.weeklyDelta||0)*4)))
@@ -931,7 +964,9 @@ export function deterministicRosterFallback({
       headline:w.waiverOnly
         ? `Claim ${w.add}, drop ${w.drop}`
         : w.immediateFreeAgent
-          ? `Add ${w.add} now, drop ${w.drop}`
+          ? (w.movePurpose==="DYNASTY_VALUE"
+              ? `Add ${w.add} now for dynasty value, drop ${w.drop}`
+              : `Add ${w.add} now, drop ${w.drop}`)
           : w.specialistMode==="STREAM_SWAP"
           ? `Stream ${w.add}, drop ${w.drop}`
           : w.specialistMode==="BYE_HOLD"
@@ -962,6 +997,7 @@ export function deterministicRosterFallback({
         "schedule",...(mode==="DYNASTY"?["market"] : [])
       ],
       weeklyDelta:w.weeklyDelta,depthDelta:w.depthDelta??null,stash:!!w.stash,
+      movePurpose:w.movePurpose||null,
       specialistMode:w.specialistMode||null,
       streamWeekEdge:w.streamWeekEdge??null,streamNext3Edge:w.streamNext3Edge??null,
       rosterFitReason:w.rosterFitReason||null,
@@ -1044,8 +1080,8 @@ export default async req=>{
     const faabTotal=Number(league.settings?.waiver_budget||0);
     const faabUsed=Number(me.waiverBudgetUsed||0);
     const faabRemaining=Math.max(0,faabTotal-faabUsed);
-    const usesFaab=faabTotal>0;
-    const faabRemainingPct=faabTotal>0?faabRemaining/faabTotal*100:0;
+    const usesFaab=faabTotal>0&&acquisition.mode!=="OPEN_FA";
+    const faabRemainingPct=usesFaab?faabRemaining/faabTotal*100:0;
     const reserveSettings=snapshot.settings||{};
     const reserveSlots=Number(reserveSettings.reserve_slots||0);
     const reserveUsed=Array.isArray(me.reserve)?me.reserve.length:0;
@@ -1195,7 +1231,7 @@ export default async req=>{
         ...p,market:mv,trending:trend,fastTrending:fastTrend,
         trendDelta:round(trendDelta),trendVelocity:round(trendVelocity),
         liveRole,schemeTrend:teamSchemeTrends[normTeam(p.team)]||null,
-        immediateFreeAgent:!!p.gameLocked&&acquisition.canAddStartedPlayers,
+        immediateFreeAgent:acquisition.mode==="OPEN_FA",
         waiverNext3:forecast,waiverOnly,screenScore:round(score)
       };
     }).filter(p=>p.name&&p.team&&!hardInjured(p.injury))
@@ -1250,7 +1286,7 @@ export default async req=>{
     const specialistSwapPool=myRoster.filter(p=>SPECIALIST_POSITIONS.has(p.pos)&&!p.onIR&&!p.gameLocked);
     const dropPool=[...new Map([...baseDropPool,...specialistSwapPool].map(p=>[p.pid,p])).values()];
     const drops=dropPool
-      .map(p=>({...p,dropScore:mode==="DYNASTY"?(p.market??0)*.75+(p.next3||0)*1.5:(p.next3||0)}))
+      .map(p=>({...p,dropScore:dropProtectionScore(p,0,mode)}))
       .sort((a,b)=>a.dropScore-b.dropScore).slice(0,12);
 
     const enrichPick=p=>{
@@ -1344,7 +1380,7 @@ export default async req=>{
         });
         if(!specialist.allowed)continue;
         const depthFit=positionalDepthDecision({
-          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta,depthDelta,marketDelta
+          mode,add,drop,roster:myRoster,activeSlots,teamCount:Number(league.total_rosters||snapshot.teams.length||12),weeklyDelta,depthDelta,marketDelta
         });
         if(!depthFit.allowed)continue;
         const stream=specialist.mode==="STREAM_SWAP"
@@ -1383,7 +1419,7 @@ export default async req=>{
         });
         const agreementBonus=Math.max(0,agreement.count-1)*1.1;
         const score=mode==="DYNASTY"
-          ? weeklyDelta*5+(marketDelta??0)*.35+depthDelta*.7+(add.screenScore-drop.dropScore)*.08+injurySignal*.35+agreementBonus
+          ? weeklyDelta*4+(marketDelta??0)*.7+depthDelta*.8+(add.screenScore-drop.dropScore)*.10+injurySignal*.5+agreementBonus
           : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2+agreementBonus;
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
@@ -1391,6 +1427,7 @@ export default async req=>{
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
           rosterFitReason:specialist.reason||depthFit.reason||null,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
           score:round(score),addNext3:actionForecast(add,week),dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
           fastTrending:add.fastTrending??0,
@@ -1750,10 +1787,10 @@ Use web search for current injury/practice news, depth-chart movement, snap/rout
 Hard rules:
 - A pickup must be from ACTUALLY UNROSTERED CANDIDATES.
 - If a candidate has waiverOnly=true, that player's game has already started and this league locks him. It is a NEXT WAIVER RUN claim only.
-- If a candidate has immediateFreeAgent=true, this league permits the acquisition despite the game already starting. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
+- If a candidate has immediateFreeAgent=true, this league uses open free agency and the player is addable NOW. In The Ocho this remains true even after that player's game starts. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
 - Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
 - Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
-- For every pickup, compare the add directly with the proposed drop: role trend, targets/carries/share, short-horizon value, and roster construction. Do not recommend a fourth/fifth QB or TE just because the isolated player looks interesting unless the deterministic roster-fit gate says the value is exceptional.
+- For every pickup, compare the add directly with the proposed drop: role trend, targets/carries/share, short-horizon value, dynasty market value, and roster construction. Before cutting someone, check whether current injuries, depth-chart changes, or coaching comments have just expanded that player's role; a newly opened role should make him harder to drop, not easier. Do not recommend a fourth/fifth QB or TE just because the isolated player looks interesting unless the deterministic roster-fit gate says the value is exceptional.
 - If an add needs a roster spot, give an exact drop from MY ROSTER.
 - A trade target must be on the named partner's roster.
 - I can only send assets I actually own.
@@ -1766,13 +1803,14 @@ Hard rules:
 - If no exact trade package clearly helps me and remains plausible for the other manager, recommend no trade. Creating trade activity is not a goal.
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
+- In dynasty, a move with little immediate lineup gain can still be strong if it creates a clear market-value gain. Label that as an asset-value move rather than pretending it is a weekly-points upgrade.
 - Do not recommend lateral churn.
 - Role-vs-box-score trade timing is a SOFT factor only. BUY_LOW means underlying role is ahead of recent fantasy scoring; BUY_ROLE means usage is rising before scoring/market fully catches up; SELL_HIGH means recent scoring is ahead of role with touchdown/mirage support. Never let timing make an unfair trade fair.
 - Avoid selling my BUY_LOW or BUY_ROLE players merely because the recent box score is weak. Prefer SELL_HIGH outgoing assets only when the trade already improves my roster.
 - Do not treat a losing record by itself as evidence the roster is bad. Respect TEAM STATE DIAGNOSIS.
 - If TEAM STATE says BAD-LUCK SCHEDULE or RESULTS LAGGING, suppress panic sells and marginal trades.
 - If TEAM STATE says LINEUP EXECUTION, do not try to solve a start/sit problem with unnecessary roster churn.
-- If TEAM STATE says NEEDS STARTER UPSIDE, prioritize real starter upgrades and consolidation over tiny depth moves.
+- If TEAM STATE says NEEDS STARTER UPSIDE or DEPTH STRESS + STARTER UPSIDE, prioritize real starter upgrades and consolidation over tiny depth moves. Injuries are context, not an excuse to treat a bottom-half underlying roster as healthy.
 - Do not recommend a player who is Out, IR, PUP, Suspended or Doubtful.
 
 Return ONLY valid JSON:
@@ -1829,7 +1867,7 @@ Return ONLY valid JSON:
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
         const depthFit=positionalDepthDecision({
-          mode,add:addForSim,drop,roster:myRoster,activeSlots,weeklyDelta,depthDelta,marketDelta
+          mode,add:addForSim,drop,roster:myRoster,activeSlots,teamCount:Number(league.total_rosters||snapshot.teams.length||12),weeklyDelta,depthDelta,marketDelta
         });
         const stream=specialist.mode==="STREAM_SWAP"
           ? specialistScheduleEdge(addForSim,drop,week)
@@ -1856,7 +1894,7 @@ Return ONLY valid JSON:
         const explanation=pickupExplanation({
           ...a,addPlayer:addForSim||add,dropPlayer:drop,
           addNext3:actionForecast(addForSim||add,week),dropNext3:drop?.next3,
-          weeklyDelta,depthDelta,stash,pos:add?.pos,dropPos:drop?.pos,
+          weeklyDelta,depthDelta,stash,marketDelta,pos:add?.pos,dropPos:drop?.pos,
           addRoleRatio:add?.roleRatio
         },{mode,positionCounts:myPositionCounts});
         return {
@@ -1868,6 +1906,7 @@ Return ONLY valid JSON:
               : a.headline,
           window:add?.waiverOnly?"NEXT WAIVER RUN":add?.immediateFreeAgent?"NOW":a.window,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
           waiverOnly:!!add?.waiverOnly,immediateFreeAgent:!!add?.immediateFreeAgent,
           signalCount:agreement.count,signalAgreement:agreement,
           fastTrending:add?.fastTrending??0,
