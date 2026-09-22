@@ -16,9 +16,10 @@ export function leagueRuleProfile(league={}) {
   const id=String(league.league_id||league.id||"");
   const name=String(league.name||"");
 
-  // Prefer the stable Sleeper league id. The name fallback keeps older/test
-  // fixtures working if the id is absent, but renaming the live league no
-  // longer changes transaction behavior.
+  // Sleeper creates a new league id across dynasty season rollovers. The
+  // known historical id remains valid, but the user-confirmed Ocho name is
+  // also authoritative so a new-season id cannot silently turn open FA into
+  // waivers.
   if(id===OCHO_LEAGUE_ID || /\bocho\b/i.test(name)){
     return {
       acquisitionMode:"OPEN_FA",
