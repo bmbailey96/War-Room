@@ -1327,6 +1327,7 @@ export default async req=>{
       j(`https://api.sleeper.app/v1/stats/nfl/regular/${season}/${week}`).catch(()=>({})),
       allPlayHistory(s,chosen.id,week)
     ]);
+    const rosterLearning=await s.get(`roster_learning_${chosen.id}`,{type:"json"}).catch(()=>null)||{};
     const allPlay=buildAllPlayMetrics(historicalMatchups,me.rosterId,me.wins);
     const teamState=diagnoseTeamState(snapshot.teams,me,{allPlay});
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
@@ -1548,7 +1549,7 @@ export default async req=>{
     const drops=dropPool
       .map(p=>({
         ...p,
-        dropProtection:dropSafetyProfile(p,mode),
+        dropProtection:dropSafetyProfile(p,mode,coreOnly?"LIMITED":"STANDARD"),
         dropScore:dropProtectionScore(p,Number(replacementByPos[p.pos]||0),mode)
       }))
       .sort((a,b)=>a.dropScore-b.dropScore).slice(0,12);
@@ -1629,7 +1630,10 @@ export default async req=>{
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add.market!=null&&drop.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
-        const dropSafety=dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta});
+        const dropSafety=dropSafetyDecision(drop,{
+          mode,marketDelta,weeklyDelta,
+          informationConfidence:coreOnly?"LIMITED":"STANDARD"
+        });
         if(!dropSafety.allowed)continue;
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
@@ -1679,10 +1683,21 @@ export default async req=>{
           mirageRisk:add.mirageRisk,waiverOnly:add.waiverOnly
         });
         const agreementBonus=Math.max(0,agreement.count-1)*1.1;
-        const score=mode==="DYNASTY"
+        const movePurpose=mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5
+          ?"DYNASTY_VALUE":stash?"STASH":"LINEUP";
+        const learningTags=rosterDecisionArchetypes({
+          movePurpose,stash,contingentUpside:add.contingentUpside,
+          roleExpansion:add.roleExpansion,trajectory:add.trajectory,
+          addRoleRatio:add.roleRatio,liveRole:add.liveRole,
+          specialistMode:specialist.mode,weeklyDelta,
+          fastTrending:add.fastTrending,trendVelocity:add.trendVelocity
+        });
+        const learned=rosterLearningAdjustment(rosterLearning,learningTags);
+        const score=(mode==="DYNASTY"
           ? weeklyDelta*4+(marketDelta??0)*.7+depthDelta*.8+(add.screenScore-drop.dropScore)*.10+
             injurySignal*.5+contingencySignal*2+expansionSignal*2+agreementBonus
-          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2+agreementBonus;
+          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2+agreementBonus)
+          +learned.bonus;
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
           specialistMode:specialist.mode,
@@ -1691,7 +1706,7 @@ export default async req=>{
           dropSafety,
           dropSafety,dropProtectionScore:drop.dropScore,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
-          movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
+          movePurpose,learningTags,learningBonus:learned.bonus,learningEvidence:learned.evidence,
           score:round(score),addNext3:actionForecast(add,week),dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
           fastTrending:add.fastTrending??0,
