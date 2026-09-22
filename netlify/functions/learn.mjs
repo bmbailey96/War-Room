@@ -243,6 +243,14 @@ function currentMarketValue(name,market){
   const v=market?.players?.[normName(name||"")]?.value;
   return Number.isFinite(Number(v))?Number(v):null;
 }
+function currentAssetValue(asset,market){
+  if(!asset)return null;
+  if(asset.type!=="pick")return currentMarketValue(asset.name,market);
+  const m=String(asset.name||"").match(/(20\d\d)\s+(\d)(?:st|nd|rd|th)/i);
+  if(!m)return null;
+  const v=market?.picks?.[`${Number(m[1])}|${Number(m[2])}`];
+  return Number.isFinite(Number(v))?Number(v):null;
+}
 
 async function gradeRosterAdvice({
   stateStore,league,currentWeek,season,db,market
@@ -292,14 +300,19 @@ async function gradeRosterAdvice({
       currentAddMarket=currentMarketValue(add.name,market);
       currentDropMarket=currentMarketValue(drop.name,market);
     }else{
-      const sends=(snap.send||[]).filter(x=>x.type==="player");
-      const receives=(snap.receive||[]).filter(x=>x.type==="player");
+      const sendAssets=snap.send||[],receiveAssets=snap.receive||[];
+      const sends=sendAssets.filter(x=>x.type==="player");
+      const receives=receiveAssets.filter(x=>x.type==="player");
       addPoints=receives.reduce((sum,x)=>sum+actualPoints(x.name,x.pos,weeks,statsByWeek,idByName,scoring),0);
       dropPoints=sends.reduce((sum,x)=>sum+actualPoints(x.name,x.pos,weeks,statsByWeek,idByName,scoring),0);
-      initialAddMarket=receives.reduce((sum,x)=>sum+Number(x.initialValue||0),0);
-      initialDropMarket=sends.reduce((sum,x)=>sum+Number(x.initialValue||0),0);
-      const curAdd=receives.map(x=>currentMarketValue(x.name,market));
-      const curDrop=sends.map(x=>currentMarketValue(x.name,market));
+      const initialAdds=receiveAssets.map(x=>x.initialValue);
+      const initialDrops=sendAssets.map(x=>x.initialValue);
+      initialAddMarket=initialAdds.length&&initialAdds.every(v=>Number.isFinite(Number(v)))
+        ? initialAdds.reduce((sum,v)=>sum+Number(v),0):null;
+      initialDropMarket=initialDrops.length&&initialDrops.every(v=>Number.isFinite(Number(v)))
+        ? initialDrops.reduce((sum,v)=>sum+Number(v),0):null;
+      const curAdd=receiveAssets.map(x=>currentAssetValue(x,market));
+      const curDrop=sendAssets.map(x=>currentAssetValue(x,market));
       currentAddMarket=curAdd.length&&curAdd.every(v=>v!=null)?curAdd.reduce((a,b)=>a+b,0):null;
       currentDropMarket=curDrop.length&&curDrop.every(v=>v!=null)?curDrop.reduce((a,b)=>a+b,0):null;
     }
