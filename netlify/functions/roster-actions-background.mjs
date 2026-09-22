@@ -1127,8 +1127,11 @@ export function deterministicRosterFallback({
     const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
     actions.push({
       type:"ADD_DROP",priority:i+1,confidence,
-      claimRank:w.claimRank??i+1,claimRole:w.claimRole||(i===0?"PRIMARY":"BACKUP"),
-      headline:w.waiverOnly
+      claimRank:w.claimRank??i+1,claimRole:w.claimRole||(i===0?"PRIMARY":"SECONDARY"),
+      planRole:w.planRole||"EXECUTE",alternativeTo:w.alternativeTo||null,exclusiveDrop:w.exclusiveDrop||w.drop||null,
+      headline:w.claimRole==="ALTERNATIVE"
+        ? `Alternative to ${w.alternativeTo}: add ${w.add}, drop ${w.drop}`
+        : w.waiverOnly
         ? `Claim ${w.add}, drop ${w.drop}`
         : w.immediateFreeAgent
           ? (w.movePurpose==="DYNASTY_VALUE"
@@ -1139,7 +1142,9 @@ export function deterministicRosterFallback({
           : w.specialistMode==="BYE_HOLD"
             ? `Short-term hold ${w.add}, drop ${w.drop}`
             : `${w.stash?"Stash":"Add"} ${w.add}, drop ${w.drop}`,
-      why:w.waiverOnly
+      why:w.claimRole==="ALTERNATIVE"
+        ? `This uses the same roster spot as ${w.alternativeTo}; do not execute both. Choose this only if you prefer this player's risk/upside profile.`
+        : w.waiverOnly
         ? `Next-waiver scout: this player's game has started, so this is not an immediate add. ${agreement.count} independent signals agree, including ${[
             agreement.role?"role":null,agreement.injury?"injury opportunity":null,
             agreement.market?"add heat":null,agreement.value?"future value":null
@@ -1174,11 +1179,14 @@ export function deterministicRosterFallback({
       immediateFreeAgent:!!w.immediateFreeAgent,
       signalCount:agreement.count,signalAgreement:agreement,
       injuryOpportunity:w.injuryOpportunity||null,
+      contingentUpside:w.contingentUpside||null,
+      roleExpansion:w.roleExpansion||null,
       liveRole:w.liveRole||null,
       tdDependency:w.tdDependency??null,mirageRisk:w.mirageRisk??0,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
       trajectory:w.trajectory||null,schemeTrend:w.schemeTrend||null,
       explanation:w.explanation||null,
+      dropSafety:w.dropSafety||null,
     });
   }
   const tradePool=(teamState?.tradePosture==="hold_value"
@@ -1655,7 +1663,7 @@ export default async req=>{
     waiverPairs.sort((a,b)=>b.score-a.score);
     const bestWaiverPairs=waiverPairs
       .filter(x=>waiverMoveActionable(x,mode))
-      .slice(0,12)
+      .slice(0,24)
       .map(x=>{
         const addPlayer=free.find(p=>normName(p.name)===normName(x.add));
         const dropPlayer=myRoster.find(p=>normName(p.name)===normName(x.drop));
