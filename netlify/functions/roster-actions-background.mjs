@@ -47,6 +47,64 @@ async function allPlayHistory(s,leagueId,week){
   return weeks;
 }
 
+export function completedWeekReviews(weeks=[],rosterId=null,activeSlots=[],db={},limit=3){
+  if(rosterId==null)return [];
+  const reviews=[];
+  for(let i=0;i<(weeks||[]).length;i++){
+    const rows=Array.isArray(weeks[i])?weeks[i]:(weeks[i]?.rows||[]);
+    const mine=rows.find(r=>Number(r?.roster_id)===Number(rosterId));
+    if(!mine||mine.matchup_id==null)continue;
+    const opp=rows.find(r=>r.matchup_id===mine.matchup_id&&Number(r.roster_id)!==Number(rosterId));
+    const myScore=Number(mine.points),oppScore=Number(opp?.points);
+    if(!Number.isFinite(myScore)||!Number.isFinite(oppScore))continue;
+    const points=mine.players_points||{};
+    const ids=(mine.players||Object.keys(points)).filter(Boolean);
+    const actualPlayers=ids.map(pid=>{
+      const info=pInfo(db,pid);
+      return {pid,name:info.name,slot:slotPos(info),eligibleSlots:info.fps||[],projection:Number(points[pid]||0),out:false,locked:false};
+    });
+    const best=activeSlots.length?optimize(actualPlayers,activeSlots,[]):{total:myScore,picked:[]};
+    const bestTotal=round(Number(best.total||myScore));
+    const leak=Math.max(0,round(bestTotal-myScore));
+    const starterSet=new Set((mine.starters||[]).filter(Boolean));
+    const missed=(best.picked||[]).map(x=>x.player)
+      .filter(p=>p&&!starterSet.has(p.pid)&&Number(p.projection||0)>0)
+      .sort((a,b)=>Number(b.projection||0)-Number(a.projection||0))
+      .slice(0,3).map(p=>({name:p.name,points:round(p.projection)}));
+    const scores=rows.map(r=>Number(r?.points)).filter(Number.isFinite).sort((a,b)=>b-a);
+    const rank=1+scores.filter(x=>x>myScore+1e-9).length;
+    const oppRank=1+scores.filter(x=>x>oppScore+1e-9).length;
+    const otherScores=rows.filter(r=>Number(r.roster_id)!==Number(rosterId)).map(r=>Number(r.points)).filter(Number.isFinite);
+    const wins=otherScores.filter(x=>myScore>x).length,ties=otherScores.filter(x=>Math.abs(myScore-x)<1e-9).length;
+    const allPlayPct=otherScores.length?round((wins+ties*.5)/otherScores.length*100):null;
+    const lost=myScore<oppScore,gap=round(Math.abs(oppScore-myScore));
+    const enoughOnBench=lost&&leak>=gap+.1;
+    const topThird=oppRank<=Math.max(1,Math.ceil(scores.length/3));
+    const mineTopHalf=rank<=Math.ceil(scores.length/2);
+    const bestWouldWin=bestTotal>oppScore+.05;
+    let code="WIN",summary=`Won ${myScore.toFixed(1)} to ${oppScore.toFixed(1)}.`;
+    if(lost){
+      if(enoughOnBench&&topThird){
+        code="MIXED";
+        summary=`Lost by ${gap.toFixed(1)}. The opponent had the #${oppRank} score of the week, but ${leak.toFixed(1)} points were also available in a better legal lineup.`;
+      }else if(enoughOnBench){
+        code="LINEUP";
+        summary=`Lost by ${gap.toFixed(1)}, and a best-possible legal lineup scored ${leak.toFixed(1)} more. Lineup decisions were large enough to change the result.`;
+      }else if(topThird&&mineTopHalf){
+        code="SCHEDULE";
+        summary=`Lost by ${gap.toFixed(1)} despite scoring #${rank} of ${scores.length}. The opponent scored #${oppRank}; this was mostly schedule variance, not a roster emergency.`;
+      }else{
+        code="OUTSCORED";
+        summary=bestWouldWin
+          ? `Lost by ${gap.toFixed(1)}. A perfect lineup could have won, but only ${leak.toFixed(1)} points were left between the actual lineup and the best legal lineup.`
+          : `Lost by ${gap.toFixed(1)}. Even the best legal lineup would have scored ${bestTotal.toFixed(1)}, still below the opponent's ${oppScore.toFixed(1)}.`;
+      }
+    }
+    reviews.push({week:i+1,result:lost?"LOSS":"WIN",code,summary,score:round(myScore),opponentScore:round(oppScore),margin:round(myScore-oppScore),leagueScoreRank:rank,opponentScoreRank:oppRank,leagueTeams:scores.length,allPlayWinPct:allPlayPct,bestPossible:bestTotal,benchLeak:leak,bestWouldWin,missedBench:missed});
+  }
+  return reviews.slice(-Math.max(1,limit)).reverse();
+}
+
 export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
   if(elapsedHours==null || !Number.isFinite(Number(elapsedHours)) || Number(elapsedHours)<=0){
     return {delta:0,perHour:0};
@@ -469,27 +527,128 @@ function assetName(x){return x?.name||String(x||"");}
 const SPECIALIST_POSITIONS=new Set(["DEF","K"]);
 
 export function positionalDepthDecision({
-  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],weeklyDelta=0
+  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],
+  weeklyDelta=0,depthDelta=0,marketDelta=0
 }={}){
-  if(mode!=="REDRAFT" || !add || !drop || add.pos===drop.pos){
-    return {allowed:true,reason:null};
-  }
-  if(!["RB","WR"].includes(drop.pos)){
+  if(!add || !drop || add.pos===drop.pos){
     return {allowed:true,reason:null};
   }
 
-  const dedicatedStarters=activeSlots.filter(s=>s===drop.pos).length;
-  const minimum=Math.max(1,dedicatedStarters+1);
-  const current=roster.filter(p=>p.pos===drop.pos&&!p.onIR).length;
-  const after=current-1;
+  const active=roster.filter(p=>!p.onIR);
+  const count=pos=>active.filter(p=>p.pos===pos).length;
+  const starterNeed=pos=>Math.max(1,activeSlots.filter(s=>s===pos).length);
 
-  if(after<minimum && Number(weeklyDelta||0)<2.5){
-    return {
-      allowed:false,
-      reason:`would leave only ${after} ${drop.pos}s; protect at least ${minimum} unless the lineup gain is substantial`
-    };
+  if(["QB","TE"].includes(add.pos)){
+    const current=count(add.pos);
+    const softMax=mode==="DYNASTY"
+      ? Math.max(3,starterNeed(add.pos)+2)
+      : starterNeed(add.pos)+1;
+    const exceptional=
+      Number(weeklyDelta||0)>=2.0 ||
+      Number(depthDelta||0)>=3.0 ||
+      (mode==="DYNASTY" && Number(marketDelta||0)>=12);
+    if(current>=softMax && !exceptional){
+      return {
+        allowed:false,
+        reason:`already roster ${current} ${add.pos}s; a ${current+1}th ${add.pos} needs a clear starter-level or dynasty-value edge`
+      };
+    }
+  }
+
+  if(mode==="REDRAFT" && ["RB","WR"].includes(drop.pos)){
+    const minimum=Math.max(1,starterNeed(drop.pos)+1);
+    const current=count(drop.pos);
+    const after=current-1;
+    if(after<minimum && Number(weeklyDelta||0)<2.5){
+      return {
+        allowed:false,
+        reason:`would leave only ${after} ${drop.pos}s; protect at least ${minimum} unless the lineup gain is substantial`
+      };
+    }
   }
   return {allowed:true,reason:null};
+}
+
+export function positionCounts(roster=[]){
+  const out={};
+  for(const p of roster||[]){
+    if(!p?.pos||p.onIR)continue;
+    out[p.pos]=(out[p.pos]||0)+1;
+  }
+  return out;
+}
+
+export function pickupExplanation(x={},context={}){
+  const add=x.addPlayer||{},drop=x.dropPlayer||{};
+  const counts=context.positionCounts||{};
+  const mode=context.mode||"REDRAFT";
+  const addPos=add.pos||x.pos||"player",dropPos=drop.pos||x.dropPos||"player";
+  const addCount=Number(counts[addPos]||0);
+  const afterAdd=addPos===dropPos?addCount:addCount+1;
+  const role=Number(add.roleRatio??x.addRoleRatio??1);
+  const recentTargets=Number(add.recentTargets??x.addRecentTargets);
+  const baselineTargets=Number(add.baselineTargets??x.addBaselineTargets);
+  const recentCarries=Number(add.recentCarries??x.addRecentCarries);
+  const baselineCarries=Number(add.baselineCarries??x.addBaselineCarries);
+  const recentShare=Number(add.recentTargetShare??x.addRecentTargetShare);
+  const baselineShare=Number(add.baselineTargetShare??x.addBaselineTargetShare);
+  const scheme=add.schemeTrend||x.schemeTrend||null;
+  const trajectory=add.trajectory||x.trajectory||null;
+
+  const evidence=[];
+  if(Number.isFinite(recentTargets)&&Number.isFinite(baselineTargets)&&recentTargets+baselineTargets>0){
+    const d=recentTargets-baselineTargets;
+    if(Math.abs(d)>=.8)evidence.push(`targets ${d>0?"up":"down"} from ${baselineTargets.toFixed(1)} to ${recentTargets.toFixed(1)} per game`);
+  }
+  if(Number.isFinite(recentCarries)&&Number.isFinite(baselineCarries)&&recentCarries+baselineCarries>0){
+    const d=recentCarries-baselineCarries;
+    if(Math.abs(d)>=1)evidence.push(`carries ${d>0?"up":"down"} from ${baselineCarries.toFixed(1)} to ${recentCarries.toFixed(1)} per game`);
+  }
+  if(Number.isFinite(recentShare)&&Number.isFinite(baselineShare)&&recentShare>0&&baselineShare>0){
+    const pts=(recentShare-baselineShare)*100;
+    if(Math.abs(pts)>=2)evidence.push(`target share ${pts>0?"up":"down"} ${Math.abs(pts).toFixed(0)} points`);
+  }
+  if(Math.abs(role-1)>=.06)evidence.push(`overall workload ${role>1?"up":"down"} ${Math.abs((role-1)*100).toFixed(0)}%`);
+  if(trajectory==="RISING_ROLE")evidence.push("role is rising before the fantasy scoring has fully followed");
+  else if(trajectory==="SLUMPING_ROLE")evidence.push("both role and scoring are trending down");
+  else if(trajectory==="SCORING_SLUMP_ROLE_OK")evidence.push("fantasy scoring is down, but the underlying role has held");
+  if(scheme?.label)evidence.push(scheme.label.toLowerCase());
+
+  const addForecast=Number(x.addNext3??add.next3);
+  const dropForecast=Number(x.dropNext3??drop.next3);
+  const weekly=Number(x.weeklyDelta||0),depth=Number(x.depthDelta||0);
+  const addSentence=evidence.length
+    ? `${add.name||x.add} is interesting because ${evidence.slice(0,3).join("; ")}.`
+    : `${add.name||x.add} cleared the value screen, but there is not a strong role-trend claim behind it.`;
+  const dropSentence=Number.isFinite(dropForecast)&&Number.isFinite(addForecast)
+    ? `${drop.name||x.drop} is the proposed cut because the short-horizon forecast is ${dropForecast.toFixed(1)} versus ${addForecast.toFixed(1)} for ${add.name||x.add}, after accounting for replacement value.`
+    : `${drop.name||x.drop} is the lowest-cost legal cut among the bench options that were screened.`;
+  const fitSentence=addPos==="TE"||addPos==="QB"
+    ? `Roster fit: you have ${addCount} ${addPos}s now; this move would leave you with ${afterAdd}. ${afterAdd>=4?"That is a luxury position count, so the move should only survive if the value edge is exceptional.":"That count is still within the roster-construction guardrail."}`
+    : `Roster fit: the move changes ${dropPos} depth into ${addPos} depth without crossing the position-protection rules.`;
+  const netSentence=x.stash
+    ? `This is a bench stash, not a claim that he should start now. Bench-value edge: ${depth>=0?"+":""}${depth.toFixed(1)}.`
+    : `Expected best-lineup change: ${weekly>=0?"+":""}${weekly.toFixed(1)} points per week over the short horizon.`;
+
+  return {add:addSentence,drop:dropSentence,fit:fitSentence,net:netSentence,mode};
+}
+
+export function ownerBehaviorSummary(ownerId,seasonProfile={}){
+  const h=ownerHistory(ownerId)||{};
+  const acquired={...(h.trade_positions_acquired||{})};
+  const top=Object.entries(acquired).sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,2).map(([p])=>p);
+  const careerTrades=Number(h.trades_count||0);
+  const seasonTrades=Number(seasonProfile.trades||0);
+  const picksReceived=Number(seasonProfile.picksReceived||0);
+  return {
+    name:h.display_name||null,
+    careerTrades,seasonTrades,
+    preferredPositions:top,
+    picksReceivedThisSeason:picksReceived,
+    lineupEfficiency:h.lineup_efficiency_pct??null,
+    activeTrader:careerTrades>=15||seasonTrades>=2,
+    summary:`${careerTrades>=15?"Frequent":"Selective"} trader${top.length?`; historically acquires ${top.join(" and ")} most often`:""}${picksReceived?`; has received ${picksReceived} pick${picksReceived===1?"":"s"} this season`:""}.`
+  };
 }
 
 export function waiverSignalAgreement(x={}){
