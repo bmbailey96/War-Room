@@ -1208,6 +1208,7 @@ export default async req=>{
       market:mode==="DYNASTY"?marketValue(p.name):null,
       gameLocked:!!lineupByName.get(normName(p.name))?.locked||!!p.gameLocked,
     }));
+    const myPositionCounts=positionCounts(myRoster);
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
     const baseDropPool=myRoster.filter(p=>!starterSet.has(p.name)&&!p.onIR&&!p.gameLocked);
     const specialistSwapPool=myRoster.filter(p=>SPECIALIST_POSITIONS.has(p.pos)&&!p.onIR&&!p.gameLocked);
@@ -1238,17 +1239,23 @@ export default async req=>{
       }
     }
 
+    const matchupByRoster=new Map((core.matchups||[]).map(r=>[Number(r.roster_id),r]));
     const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>{
       const hist=ownerHistory(t.ownerId);
+      const seasonProfile=seasonTradeProfile[t.rosterId]||{};
+      const matchupRow=matchupByRoster.get(Number(t.rosterId));
       return {
-        name:t.name,ownerId:t.ownerId,record:`${t.wins}-${t.losses}`,stance:t.stance,
+        name:t.name,ownerId:t.ownerId,ownerName:hist.display_name||"",
+        record:`${t.wins}-${t.losses}`,stance:t.stance,
         holes:t.holes,surplus:t.surplus,
+        starters:(matchupRow?.starters||[]).filter(Boolean).map(pid=>pInfo(db,pid).name),
+        behavior:ownerBehaviorSummary(t.ownerId,seasonProfile),
         tradeProfile:{
           careerTrades:Number(hist.trades_count||0),
-          seasonTrades:Number(seasonTradeProfile[t.rosterId]?.trades||0),
+          seasonTrades:Number(seasonProfile.trades||0),
           acquired:hist.trade_positions_acquired||{},
-          seasonAcquired:seasonTradeProfile[t.rosterId]?.acquired||{},
-          seasonPicksReceived:Number(seasonTradeProfile[t.rosterId]?.picksReceived||0),
+          seasonAcquired:seasonProfile.acquired||{},
+          seasonPicksReceived:Number(seasonProfile.picksReceived||0),
           lineupEfficiency:hist.lineup_efficiency_pct??null,
           benchLeak:hist.avg_bench_leak_per_week??null,
         },
@@ -1260,6 +1267,7 @@ export default async req=>{
       };
     });
     const myPicks=mode==="DYNASTY"?me.picks.map(enrichPick):[];
+    const myTradeBehavior=ownerBehaviorSummary(me.ownerId,seasonTradeProfile[me.rosterId]||{});
     const myNames=new Set(myRoster.map(p=>normName(p.name)));
     const freeNames=new Set(free.map(p=>normName(p.name)));
     const teamPlayers=Object.fromEntries(otherTeams.map(t=>[t.name,new Set(t.players.map(p=>normName(p.name)))]));
@@ -1267,6 +1275,7 @@ export default async req=>{
     const myPickNames=new Set(myPicks.map(p=>p.name));
 
     const activeSlots=(league.roster_positions||[]).filter(s=>!["BN","IR","TAXI"].includes(s));
+    const weekReviews=completedWeekReviews(historicalMatchups,me.rosterId,activeSlots,db,3);
     const baselineRosterTotal=simTotal(myRoster,activeSlots);
 
     // Replacement value matters for bench construction. The third-best
@@ -1299,7 +1308,7 @@ export default async req=>{
         });
         if(!specialist.allowed)continue;
         const depthFit=positionalDepthDecision({
-          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta
+          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta,depthDelta,marketDelta
         });
         if(!depthFit.allowed)continue;
         const stream=specialist.mode==="STREAM_SWAP"
@@ -1359,6 +1368,11 @@ export default async req=>{
           tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
           addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio,
+          addRecentPts:add.recentPts,addBaselinePts:add.baselinePts,
+          addRecentTargets:add.recentTargets,addBaselineTargets:add.baselineTargets,
+          addRecentCarries:add.recentCarries,addBaselineCarries:add.baselineCarries,
+          addRecentTargetShare:add.recentTargetShare,addBaselineTargetShare:add.baselineTargetShare,
+          trajectory:add.trajectory||null,schemeTrend:add.schemeTrend||null,
           replacement:Number(replacementByPos[add.pos]||0)
         });
       }
