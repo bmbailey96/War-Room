@@ -714,7 +714,7 @@ console.log("Redraft specialist roster-construction and no-churn checks passed")
 
 
 const {
-  positionalDepthDecision,pickupExplanation,positionCounts,
+  positionalDepthDecision,pickupExplanation,positionCounts,dropProtectionScore,
   completedWeekReviews,buildTeamSchemeTrends,ownerBehaviorSummary,tradeExplanation
 } = await import("../netlify/functions/roster-actions-background.mjs");
 
@@ -795,6 +795,56 @@ depthFit=positionalDepthDecision({
   weeklyDelta:.3,depthDelta:1.8,marketDelta:15
 });
 assert.equal(depthFit.allowed,true);
+
+depthFit=positionalDepthDecision({
+  mode:"DYNASTY",
+  add:{name:"Third QB",pos:"QB"},
+  drop:{name:"Bench WR",pos:"WR"},
+  roster:[
+    {name:"QB1",pos:"QB"},{name:"QB2",pos:"QB"},
+    {name:"Bench WR",pos:"WR"}
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","FLEX","FLEX","K","DEF","DL"],
+  teamCount:8,weeklyDelta:.1,depthDelta:2.0,marketDelta:10
+});
+assert.equal(depthFit.allowed,false);
+assert.match(depthFit.reason,/one-QB 8-team league/i);
+
+depthFit=positionalDepthDecision({
+  mode:"DYNASTY",
+  add:{name:"Elite QB Trade Chip",pos:"QB"},
+  drop:{name:"Bench WR",pos:"WR"},
+  roster:[
+    {name:"QB1",pos:"QB"},{name:"QB2",pos:"QB"},
+    {name:"Bench WR",pos:"WR"}
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","FLEX","FLEX","K","DEF","DL"],
+  teamCount:8,weeklyDelta:.1,depthDelta:2.0,marketDelta:20
+});
+assert.equal(depthFit.allowed,true);
+
+const gadsdenProtection=dropProtectionScore({
+  name:"Oronde Gadsden",pos:"TE",age:22,market:7,next3:7.7,
+  roleRatio:1.10,trajectory:"RISING_ROLE",
+  recentTargetShare:.18,baselineTargetShare:.11,
+  injuryOpportunity:{applied:true,edgePct:6},
+  tradeTiming:{code:"BUY_ROLE"}
+},0,"DYNASTY");
+const raymondProtection=dropProtectionScore({
+  name:"Kalif Raymond",pos:"WR",age:31,market:2,next3:9.5,
+  roleRatio:1,trajectory:"STABLE",
+  recentTargetShare:.15,baselineTargetShare:.15
+},0,"DYNASTY");
+assert.ok(gadsdenProtection>raymondProtection);
+
+const dynastyValueExplanation=pickupExplanation({
+  add:"Jordan Addison",drop:"Bench WR",weeklyDelta:0,depthDelta:1,marketDelta:11,
+  addNext3:8,dropNext3:8,
+  addPlayer:{name:"Jordan Addison",pos:"WR",roleRatio:1.1,recentTargetShare:.20,baselineTargetShare:.14},
+  dropPlayer:{name:"Bench WR",pos:"WR",next3:8}
+},{mode:"DYNASTY",positionCounts:{WR:7}});
+assert.match(dynastyValueExplanation.net,/dynasty asset-value pickup/i);
+assert.match(dynastyValueExplanation.net,/\+11/i);
 
 const explanation=pickupExplanation({
   add:"Vele",drop:"Raymond",stash:true,depthDelta:2.1,weeklyDelta:.1,
@@ -965,9 +1015,9 @@ const {
   ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey,
   rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
-assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v10");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v10_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v10_123");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v11");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v11_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v11_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
 assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);
@@ -1395,6 +1445,16 @@ assert.equal(rosterWeak.code,"ROSTER_UPGRADE");
 assert.ok(rosterWeak.aggression>1);
 assert.equal(rosterWeak.tradePosture,"consolidate");
 
+const injuryAndUpside=diagnoseTeamState([
+  {rosterId:1,wins:0,losses:2,pointsFor:160,pointsAgainst:220,benchLeakage:10,injured:["A","B","C"]},
+  {rosterId:2,wins:2,losses:0,pointsFor:240,pointsAgainst:180,benchLeakage:16,injured:[]},
+  {rosterId:3,wins:1,losses:1,pointsFor:220,pointsAgainst:200,benchLeakage:14,injured:[]},
+  {rosterId:4,wins:1,losses:1,pointsFor:205,pointsAgainst:190,benchLeakage:12,injured:[]},
+],{rosterId:1,wins:0,losses:2,pointsFor:160,pointsAgainst:220,benchLeakage:10,injured:["A","B","C"]});
+assert.equal(injuryAndUpside.code,"DEPTH_AND_UPSIDE");
+assert.equal(injuryAndUpside.tradePosture,"consolidate");
+assert.match(injuryAndUpside.label,/STARTER UPSIDE/i);
+
 const aggressiveFaab=deterministicRosterFallback({
   mode:"REDRAFT",usesFaab:true,faabRemainingPct:100,
   teamState:rosterWeak,
@@ -1434,8 +1494,9 @@ const renamedOcho=acquisitionPolicy({
   league_id:"1205222463223365632",name:"Renamed Dynasty League"
 });
 assert.equal(renamedOcho.mode,"OPEN_FA");
-const nameCollision=acquisitionPolicy({league_id:"different-league",name:"The Ocho"});
-assert.equal(nameCollision.mode,"WAIVERS");
+const currentSeasonOcho=acquisitionPolicy({league_id:"different-current-season-id",name:"The Ocho"});
+assert.equal(currentSeasonOcho.mode,"OPEN_FA");
+assert.equal(currentSeasonOcho.canAddStartedPlayers,true);
 const funPolicy=acquisitionPolicy({name:"Teenypetes"});
 assert.equal(funPolicy.mode,"WAIVERS");
 assert.equal(funPolicy.canAddStartedPlayers,false);
