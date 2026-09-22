@@ -352,6 +352,8 @@ export default async () => {
   const season=Number(state.season)||new Date().getFullYear();
   const currentWeek=Number(state.week)||1;
   const leagues=await getMyLeagues();
+  const db=await getPlayersTrim().catch(()=>({}));
+  const dynastyMarket=await getDynastyMarket(stateStore).catch(()=>({players:{},picks:{},scrapeDate:null}));
   const result=[];
 
   for(const league of leagues){
@@ -463,10 +465,24 @@ export default async () => {
     };
     await stateStore.setJSON(`reasoning_${league.id}`,reasoning);
 
+    let rosterLearning=null,rosterLearningError=null;
+    try{
+      rosterLearning=await gradeRosterAdvice({
+        stateStore,league,currentWeek,season:league.season||season,db,market:dynastyMarket
+      });
+    }catch(e){
+      rosterLearningError=e.message;
+    }
+
     result.push({
       league:league.name,id:league.id,samples:samples.length,
       weights:model.weights,microWeights:model.microWeights,positionScale:model.positionScale,mae:model.mae,defaultMae:model.defaultMae,
       reasoningCalls:reasoningGrades.length,
+      rosterLearning:rosterLearning?{
+        samples:rosterLearning.samples,
+        archetypes:rosterLearning.archetypes
+      }:null,
+      rosterLearningError
     });
   }
 
@@ -478,4 +494,7 @@ export default async () => {
 export const config={schedule:"0 15 * * 2"};
 
 
-export { standardProjection, microEdge, microReliability, microWeightFromStat, fitMicroWeights };
+export {
+  standardProjection,microEdge,microReliability,microWeightFromStat,fitMicroWeights,
+  rosterGradeKey
+};
