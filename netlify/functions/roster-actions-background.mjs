@@ -1632,7 +1632,8 @@ export default async req=>{
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
           specialistMode:specialist.mode,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
-          rosterFitReason:specialist.reason||depthFit.reason||null,
+          rosterFitReason:specialist.reason||depthFit.reason||dropSafety.reason||null,
+          dropSafety,
           dropSafety,dropProtectionScore:drop.dropScore,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
@@ -2073,6 +2074,9 @@ Return ONLY valid JSON:
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
+        const dropSafety=drop
+          ? dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta})
+          : {allowed:true,profile:null};
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
@@ -2090,13 +2094,20 @@ Return ONLY valid JSON:
         const injurySignal=add?.injuryOpportunity?.applied
           ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
           : 0;
-        const breakoutScore=round(roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+fastSignal+injurySignal*.7);
+        const contingencySignal=Math.max(0,Number(add?.contingentUpside?.score||0));
+        const expansionSignal=add?.roleExpansion?.strong?1:add?.roleExpansion?.reason?.length?.5:0;
+        const breakoutScore=round(
+          roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+fastSignal+
+          injurySignal*.7+contingencySignal*2.5+expansionSignal*2
+        );
         const stash=!SPECIALIST_POSITIONS.has(add?.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
-          (roleSurge>=.08 || injurySignal>=1.5 || !!add?.liveRole?.strong || trendSignal>=2 || velocitySignal>=1.45);
+          (roleSurge>=.08 || injurySignal>=1.5 || contingencySignal>=.35 ||
+           expansionSignal>=.5 || !!add?.liveRole?.strong || trendSignal>=2 || velocitySignal>=1.45);
         const agreement=waiverSignalAgreement({
           weeklyDelta,depthDelta,marketDelta,
           addRoleRatio:add?.roleRatio,injuryOpportunity:add?.injuryOpportunity,
+          contingentUpside:add?.contingentUpside,roleExpansion:add?.roleExpansion,
           liveRole:add?.liveRole,
           fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity,
           mirageRisk:add?.mirageRisk,waiverOnly:add?.waiverOnly
@@ -2105,7 +2116,7 @@ Return ONLY valid JSON:
           ...a,addPlayer:addForSim||add,dropPlayer:drop,
           addNext3:actionForecast(addForSim||add,week),dropNext3:drop?.next3,
           weeklyDelta,depthDelta,stash,marketDelta,pos:add?.pos,dropPos:drop?.pos,
-          addRoleRatio:add?.roleRatio
+          addRoleRatio:add?.roleRatio,dropSafety
         },{mode,positionCounts:myPositionCounts});
         return {
           ...a,
@@ -2121,7 +2132,7 @@ Return ONLY valid JSON:
           signalCount:agreement.count,signalAgreement:agreement,
           fastTrending:add?.fastTrending??0,
           trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
-          rosterFitBlocked:!specialist.allowed||!depthFit.allowed,
+          rosterFitBlocked:!specialist.allowed||!depthFit.allowed||!dropSafety.allowed,
           specialistMode:specialist.mode||null,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
           rosterFitReason:specialist.reason||depthFit.reason||null,
@@ -2134,6 +2145,8 @@ Return ONLY valid JSON:
           trajectory:add?.trajectory||null,schemeTrend:add?.schemeTrend||null,
           providerNext3:add?.providerNext3??null,
           injuryOpportunity:add?.injuryOpportunity||null,
+          contingentUpside:add?.contingentUpside||null,
+          roleExpansion:add?.roleExpansion||null,
           liveRole:add?.liveRole||null,
           mirageRisk:add?.mirageRisk??0,
           explanation,
@@ -2230,7 +2243,9 @@ Return ONLY valid JSON:
       if(!["ADD","WAIVER","ADD_DROP"].includes(a.type))return a;
       const planned=claimRankByAdd.get(normName(a.add?.name||""));
       return planned
-        ? {...a,claimRank:planned.claimRank,claimRole:planned.claimRole}
+        ? {...a,claimRank:planned.claimRank,claimRole:planned.claimRole,
+            planRole:planned.planRole||"EXECUTE",alternativeTo:planned.alternativeTo||null,
+            exclusiveDrop:planned.exclusiveDrop||null}
         : a;
     }).sort((a,b)=>{
       const aw=["ADD","WAIVER","ADD_DROP"].includes(a.type),bw=["ADD","WAIVER","ADD_DROP"].includes(b.type);
