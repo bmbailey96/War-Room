@@ -907,7 +907,10 @@ export function tradeExplanation(x={},context={}){
 export function waiverSignalAgreement(x={}){
   const liveRole=!!x.liveRole?.strong;
   const role=liveRole || Number(x.addRoleRatio||x.roleRatio||1)>=1.08;
-  const injury=!!x.injuryOpportunity?.applied && Number(x.injuryOpportunity?.edgePct||0)>=1.5;
+  const injury=
+    (!!x.injuryOpportunity?.applied && Number(x.injuryOpportunity?.edgePct||0)>=1.5) ||
+    Number(x.contingentUpside?.score||0)>=.45 ||
+    !!x.roleExpansion?.strong;
   const market=Number(x.fastTrending||0)>=15 || Number(x.trendVelocity||0)>=8;
   const value=Number(x.weeklyDelta||0)>=.75 || Number(x.depthDelta||0)>=1.5 ||
     Number(x.marketDelta||0)>=6;
@@ -1428,12 +1431,22 @@ export default async req=>{
       gameLocked:!!lineupByName.get(normName(p.name))?.locked||!!p.gameLocked,
     }));
     const myPositionCounts=positionCounts(myRoster);
+    const replacementByPos={};
+    for(const pos of ["QB","RB","WR","TE","K","DEF","DL","LB","DB"]){
+      const vals=free.filter(p=>p.pos===pos).map(p=>actionForecast(p,week)).sort((a,b)=>b-a);
+      replacementByPos[pos]=vals.length?vals[Math.min(2,vals.length-1)]:0;
+    }
+    const marginal=p=>p?Math.max(0,actionForecast(p,week)-Number(replacementByPos[p.pos]||0)):0;
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
     const baseDropPool=myRoster.filter(p=>!starterSet.has(p.name)&&!p.onIR&&!p.gameLocked);
     const specialistSwapPool=myRoster.filter(p=>SPECIALIST_POSITIONS.has(p.pos)&&!p.onIR&&!p.gameLocked);
     const dropPool=[...new Map([...baseDropPool,...specialistSwapPool].map(p=>[p.pid,p])).values()];
     const drops=dropPool
-      .map(p=>({...p,dropScore:dropProtectionScore(p,0,mode)}))
+      .map(p=>({
+        ...p,
+        dropProtection:dropSafetyProfile(p,mode),
+        dropScore:dropProtectionScore(p,Number(replacementByPos[p.pos]||0),mode)
+      }))
       .sort((a,b)=>a.dropScore-b.dropScore).slice(0,12);
 
     const enrichPick=p=>{
@@ -1497,16 +1510,6 @@ export default async req=>{
     const weekReviews=completedWeekReviews(historicalMatchups,me.rosterId,activeSlots,db,3);
     const baselineRosterTotal=simTotal(myRoster,activeSlots);
 
-    // Replacement value matters for bench construction. The third-best
-    // available option at a position is a conservative approximation of what
-    // can be replaced from waivers in this specific league.
-    const replacementByPos={};
-    for(const pos of ["QB","RB","WR","TE","K","DEF","DL","LB","DB"]){
-      const vals=free.filter(p=>p.pos===pos).map(p=>actionForecast(p,week)).sort((a,b)=>b-a);
-      replacementByPos[pos]=vals.length?vals[Math.min(2,vals.length-1)]:0;
-    }
-    const marginal=p=>p?Math.max(0,actionForecast(p,week)-Number(replacementByPos[p.pos]||0)):0;
-
     const waiverPairs=[];
     for(const add of free.slice(0,22)){
       for(const drop of drops.slice(0,8)){
@@ -1522,6 +1525,8 @@ export default async req=>{
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add.market!=null&&drop.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
+        const dropSafety=dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta});
+        if(!dropSafety.allowed)continue;
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
@@ -1541,12 +1546,16 @@ export default async req=>{
         const injurySignal=add.injuryOpportunity?.applied
           ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
           : 0;
+        const contingencySignal=Math.max(0,Number(add.contingentUpside?.score||0));
+        const expansionSignal=add.roleExpansion?.strong?1:add.roleExpansion?.reason?.length?.5:0;
         const mirageRisk=Math.max(0,Number(add.mirageRisk||0));
         const breakoutScore=round(
-          roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+injurySignal*.7-mirageRisk*3
+          roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+
+          injurySignal*.7+contingencySignal*2.5+expansionSignal*2-mirageRisk*3
         );
         const independentOpportunity=
-          roleSurge>=.08 || injurySignal>=1.5 || !!add.liveRole?.strong;
+          roleSurge>=.08 || injurySignal>=1.5 || contingencySignal>=.35 ||
+          expansionSignal>=.5 || !!add.liveRole?.strong;
         const stash=!SPECIALIST_POSITIONS.has(add.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
           (
@@ -1560,7 +1569,8 @@ export default async req=>{
         const agreement=waiverSignalAgreement({
           weeklyDelta,depthDelta,marketDelta,
           addRoleRatio:add.roleRatio,injuryOpportunity:add.injuryOpportunity,
-          liveRole:add.liveRole,
+          liveRole:add.liveRole,contingentUpside:add.contingentUpside,
+          roleExpansion:add.roleExpansion,
           fastTrending:add.fastTrending,trendVelocity:add.trendVelocity,
           mirageRisk:add.mirageRisk,waiverOnly:add.waiverOnly
         });
@@ -1573,6 +1583,7 @@ export default async req=>{
           specialistMode:specialist.mode,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
           rosterFitReason:specialist.reason||depthFit.reason||null,
+          dropSafety,dropProtectionScore:drop.dropScore,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
           score:round(score),addNext3:actionForecast(add,week),dropNext3:drop.next3,
@@ -1583,6 +1594,8 @@ export default async req=>{
           kickoffAt:add.kickoffAt||null,
           signalCount:agreement.count,signalAgreement:agreement,
           injuryOpportunity:add.injuryOpportunity||null,
+          contingentUpside:add.contingentUpside||null,
+          roleExpansion:add.roleExpansion||null,
           liveRole:add.liveRole||null,
           injuryOpportunityBonus:add.injuryOpportunityBonus||0,
           tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
