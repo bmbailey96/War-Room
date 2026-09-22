@@ -15,7 +15,7 @@ import { detectLeagueMode,validateActions,acquisitionPolicy,waiverScheduleFromSe
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 import { diagnoseTeamState,buildAllPlayMetrics } from "./lib/team-state.mjs";
 import {
-  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge
+  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge,roleExpansionSafety
 } from "./lib/opportunity-v2.mjs";
 import {
   normalizeSleeperWeekStats,liveGameProgress,liveRoleEmergence,liveUsageCounts
@@ -493,6 +493,56 @@ export function currentOfficialInjuries(csvText,week){
   return out;
 }
 
+export function buildContingentOpportunity(profiles={},injuryMap={}){
+  const risks=[];
+  for(const p of Object.values(profiles||{})){
+    const injury=injuryMap[p.key];
+    if(!injury||hardInjured(injury.status))continue;
+    const status=String(injury.status||"").toLowerCase();
+    const practice=String(injury.practice||"").toLowerCase();
+    let severity=0;
+    if(/questionable/.test(status)&&/did not participate|dnp/.test(practice))severity=.75;
+    else if(/questionable/.test(status)&&/limited/.test(practice))severity=.45;
+    else if(/questionable/.test(status))severity=.35;
+    else if(/did not participate|dnp/.test(practice))severity=.5;
+    else if(/limited/.test(practice))severity=.22;
+    if(severity<=0)continue;
+    const workload=p.pos==="RB"
+      ? Number(p.carryShare||0)
+      : Number(p.targetShare||0);
+    const threshold=p.pos==="RB"?.22:.11;
+    if(workload<threshold)continue;
+    risks.push({profile:p,injury,severity,workload});
+  }
+
+  const out={};
+  for(const candidate of Object.values(profiles||{})){
+    if(!candidate?.team||!["RB","WR","TE"].includes(candidate.pos))continue;
+    const matches=risks.filter(x=>
+      x.profile.key!==candidate.key &&
+      x.profile.team===candidate.team &&
+      x.profile.pos===candidate.pos
+    ).sort((a,b)=>(b.severity*b.workload)-(a.severity*a.workload));
+    const top=matches[0];
+    if(!top)continue;
+    const ownWork=candidate.pos==="RB"
+      ? Number(candidate.carryShare||0)
+      : Number(candidate.targetShare||0);
+    if(ownWork<=0&&Number(candidate.currentTargets||0)<=0)continue;
+    const score=round(Math.min(1,top.severity*(.55+Math.min(.65,top.workload))));
+    if(score<.25)continue;
+    out[candidate.key]={
+      conditional:true,score,
+      teammate:top.profile.name,
+      status:top.injury.status||top.injury.practice||"injury concern",
+      practice:top.injury.practice||null,
+      reason:`If ${top.profile.name} is limited or out, ${candidate.name}'s same-position opportunity could expand. This is contingent upside, not part of the base projection.`,
+      source:"current_injury_contingency"
+    };
+  }
+  return out;
+}
+
 async function projectionMap(season,week,league,db){
   const weeks=Array.from({length:6},(_,i)=>week+i).filter(w=>w<=18);
   const rows=await Promise.all(weeks.map(w=>
@@ -672,8 +722,74 @@ export function dropProtectionScore(player={},replacement=0,mode="REDRAFT"){
   score+=Math.min(10,injuryEdge*1.4);
   score+=Math.min(5,shareGain*.45);
   if(timing==="BUY_LOW"||timing==="BUY_ROLE")score+=4;
+  if(player.roleExpansion?.strong)score+=12;
+  else if(player.roleExpansion)score+=6;
+  if(player.contingentUpside?.score)score+=Math.min(6,Number(player.contingentUpside.score)*7);
   if(mode==="DYNASTY"&&age>0&&age<=25)score+=(26-age)*1.25;
   return round(score);
+}
+
+export function dropSafetyProfile(player={},mode="REDRAFT"){
+  const reasons=[];
+  const age=Number(player.age||0);
+  const young=age>0&&age<=26;
+  const injuryEdge=player.injuryOpportunity?.applied?Number(player.injuryOpportunity.edgePct||0):0;
+  const shareGain=(Number(player.recentTargetShare||0)-Number(player.baselineTargetShare||0))*100;
+  const role=Number(player.roleRatio||1);
+  const timing=player.tradeTiming?.code||null;
+
+  if(player.roleExpansion?.strong){
+    reasons.push(`same-position vacancies just opened: ${(player.roleExpansion.names||[]).join(" / ")}`);
+  }else if(injuryEdge>=4){
+    reasons.push(`current teammate absences create +${injuryEdge.toFixed(1)}% opportunity`);
+  }
+  if(young&&player.trajectory==="RISING_ROLE"&&role>=1.06){
+    reasons.push("young player with a rising role");
+  }
+  if(young&&shareGain>=4){
+    reasons.push(`target share is up ${shareGain.toFixed(0)} points`);
+  }
+  if(player.contingentUpside?.score>=.45){
+    reasons.push(player.contingentUpside.reason);
+  }
+  if(young&&(timing==="BUY_LOW"||timing==="BUY_ROLE")){
+    reasons.push("current role/market timing says hold or buy, not cut");
+  }
+
+  const protectedNow=mode==="DYNASTY"&&reasons.length>0;
+  let requiredMarketDelta=0,requiredWeeklyDelta=0;
+  if(player.roleExpansion?.strong){
+    requiredMarketDelta=15;requiredWeeklyDelta=3.5;
+  }else if(injuryEdge>=4){
+    requiredMarketDelta=14;requiredWeeklyDelta=3.0;
+  }else if(player.contingentUpside?.score>=.45){
+    requiredMarketDelta=11;requiredWeeklyDelta=2.5;
+  }else if(reasons.length){
+    requiredMarketDelta=12;requiredWeeklyDelta=2.75;
+  }
+  return {
+    protected:protectedNow,
+    reasons,
+    requiredMarketDelta,
+    requiredWeeklyDelta,
+    label:protectedNow?"DO NOT CUT YET":"CUTTABLE"
+  };
+}
+
+export function dropSafetyDecision(player={},{
+  mode="REDRAFT",marketDelta=0,weeklyDelta=0
+}={}){
+  const profile=dropSafetyProfile(player,mode);
+  if(!profile.protected)return {allowed:true,profile};
+  const clearsMarket=Number(marketDelta||0)>=profile.requiredMarketDelta;
+  const clearsLineup=Number(weeklyDelta||0)>=profile.requiredWeeklyDelta;
+  return {
+    allowed:clearsMarket||clearsLineup,
+    profile,
+    reason:(clearsMarket||clearsLineup)
+      ? null
+      : `protected drop: ${profile.reasons.join("; ")}; require at least +${profile.requiredMarketDelta} dynasty market value or +${profile.requiredWeeklyDelta.toFixed(1)} points/week before cutting him`
+  };
 }
 
 export function pickupExplanation(x={},context={}){
@@ -706,10 +822,13 @@ export function pickupExplanation(x={},context={}){
     const pts=(recentShare-baselineShare)*100;
     if(Math.abs(pts)>=2)evidence.push(`target share ${pts>0?"up":"down"} ${Math.abs(pts).toFixed(0)} points`);
   }
-  if(Math.abs(role-1)>=.06)evidence.push(`overall workload ${role>1?"up":"down"} ${Math.abs((role-1)*100).toFixed(0)}%`);
+  if(role>=1.06)evidence.push(`overall workload up ${Math.abs((role-1)*100).toFixed(0)}%`);
+  else if(role<=.94&&trajectory==="SLUMPING_ROLE")evidence.push(`overall workload down ${Math.abs((role-1)*100).toFixed(0)}%`);
   if(trajectory==="RISING_ROLE")evidence.push("role is rising before the fantasy scoring has fully followed");
   else if(trajectory==="SLUMPING_ROLE")evidence.push("both role and scoring are trending down");
   else if(trajectory==="SCORING_SLUMP_ROLE_OK")evidence.push("fantasy scoring is down, but the underlying role has held");
+  if(add.roleExpansion?.reason)evidence.push(add.roleExpansion.reason);
+  if(add.contingentUpside?.reason)evidence.push(add.contingentUpside.reason);
   if(scheme?.label)evidence.push(scheme.label.toLowerCase());
 
   const addForecast=Number(x.addNext3??add.next3);
@@ -718,9 +837,12 @@ export function pickupExplanation(x={},context={}){
   const addSentence=evidence.length
     ? `${add.name||x.add} is interesting because ${evidence.slice(0,3).join("; ")}.`
     : `${add.name||x.add} cleared the value screen, but there is not a strong role-trend claim behind it.`;
-  const dropSentence=Number.isFinite(dropForecast)&&Number.isFinite(addForecast)
-    ? `${drop.name||x.drop} is the proposed cut because the short-horizon forecast is ${dropForecast.toFixed(1)} versus ${addForecast.toFixed(1)} for ${add.name||x.add}, after accounting for replacement value.`
-    : `${drop.name||x.drop} is the lowest-cost legal cut among the bench options that were screened.`;
+  const dropSafety=x.dropSafety||null;
+  const dropSentence=dropSafety?.profile?.protected
+    ? `${drop.name||x.drop} normally has a do-not-cut flag because ${dropSafety.profile.reasons.join("; ")}. This move only survives because the incoming upgrade clears that protection threshold.`
+    : Number.isFinite(dropForecast)&&Number.isFinite(addForecast)
+      ? `${drop.name||x.drop} is the proposed cut because he is the lowest-cost safe cut after comparing short-horizon value, dynasty value, role trend, and current opportunity. Base forecast: ${dropForecast.toFixed(1)} versus ${addForecast.toFixed(1)} for ${add.name||x.add}.`
+      : `${drop.name||x.drop} is the lowest-cost safe cut among the bench options that were screened.`;
   const fitSentence=addPos==="TE"||addPos==="QB"
     ? `Roster fit: you have ${addCount} ${addPos}s now; this move would leave you with ${afterAdd}. ${afterAdd>=4?"That is a luxury position count, so the move should only survive if the value edge is exceptional.":"That count is still within the roster-construction guardrail."}`
     : `Roster fit: the move changes ${dropPos} depth into ${addPos} depth without crossing the position-protection rules.`;
@@ -785,7 +907,10 @@ export function tradeExplanation(x={},context={}){
 export function waiverSignalAgreement(x={}){
   const liveRole=!!x.liveRole?.strong;
   const role=liveRole || Number(x.addRoleRatio||x.roleRatio||1)>=1.08;
-  const injury=!!x.injuryOpportunity?.applied && Number(x.injuryOpportunity?.edgePct||0)>=1.5;
+  const injury=
+    (!!x.injuryOpportunity?.applied && Number(x.injuryOpportunity?.edgePct||0)>=1.5) ||
+    Number(x.contingentUpside?.score||0)>=.45 ||
+    !!x.roleExpansion?.strong;
   const market=Number(x.fastTrending||0)>=15 || Number(x.trendVelocity||0)>=8;
   const value=Number(x.weeklyDelta||0)>=.75 || Number(x.depthDelta||0)>=1.5 ||
     Number(x.marketDelta||0)>=6;
@@ -870,16 +995,58 @@ export function specialistRosterDecision({
 }
 
 export function buildWaiverPlan(pairs=[],limit=3){
-  const plan=[],seenAdds=new Set();
+  const byAdd=new Map();
   for(const pair of pairs||[]){
-    const key=normName(pair?.add||"");
-    if(!key||seenAdds.has(key))continue;
-    seenAdds.add(key);
-    plan.push({
-      ...pair,
-      claimRank:plan.length+1,
-      claimRole:plan.length===0?"PRIMARY":"BACKUP",
-    });
+    const addKey=normName(pair?.add||"");
+    if(!addKey)continue;
+    const rows=byAdd.get(addKey)||[];
+    rows.push(pair);
+    byAdd.set(addKey,rows);
+  }
+  const groups=[...byAdd.values()]
+    .map(rows=>rows.sort((a,b)=>Number(b.score||0)-Number(a.score||0)))
+    .sort((a,b)=>Number(b[0]?.score||0)-Number(a[0]?.score||0));
+
+  const plan=[],usedDrops=new Map();
+  for(const rows of groups){
+    const best=rows[0];
+    if(!best)continue;
+    const bestDrop=normName(best.drop||"");
+    let chosen=rows.find(r=>{
+      const d=normName(r.drop||"");
+      return !d||!usedDrops.has(d);
+    })||null;
+
+    if(chosen&&chosen!==best){
+      const penalty=Number(best.score||0)-Number(chosen.score||0);
+      const allowedPenalty=Math.max(1.5,Math.abs(Number(best.score||0))*.18);
+      if(penalty>allowedPenalty)chosen=null;
+    }
+
+    if(!chosen&&bestDrop&&usedDrops.has(bestDrop)){
+      const primary=usedDrops.get(bestDrop);
+      plan.push({
+        ...best,
+        claimRank:plan.length+1,
+        claimRole:"ALTERNATIVE",
+        planRole:"ALTERNATIVE",
+        alternativeTo:primary.add,
+        exclusiveDrop:best.drop,
+      });
+    }else{
+      chosen=chosen||best;
+      const dropKey=normName(chosen.drop||"");
+      const role=plan.length===0?"PRIMARY":"SECONDARY";
+      const item={
+        ...chosen,
+        claimRank:plan.length+1,
+        claimRole:role,
+        planRole:"EXECUTE",
+        exclusiveDrop:chosen.drop||null,
+      };
+      plan.push(item);
+      if(dropKey)usedDrops.set(dropKey,item);
+    }
     if(plan.length>=limit)break;
   }
   return plan;
@@ -960,8 +1127,11 @@ export function deterministicRosterFallback({
     const faabPct=usesFaab?Math.min(Math.max(0,Math.round(faabRemainingPct)),faabBase):null;
     actions.push({
       type:"ADD_DROP",priority:i+1,confidence,
-      claimRank:w.claimRank??i+1,claimRole:w.claimRole||(i===0?"PRIMARY":"BACKUP"),
-      headline:w.waiverOnly
+      claimRank:w.claimRank??i+1,claimRole:w.claimRole||(i===0?"PRIMARY":"SECONDARY"),
+      planRole:w.planRole||"EXECUTE",alternativeTo:w.alternativeTo||null,exclusiveDrop:w.exclusiveDrop||w.drop||null,
+      headline:w.claimRole==="ALTERNATIVE"
+        ? `Alternative to ${w.alternativeTo}: add ${w.add}, drop ${w.drop}`
+        : w.waiverOnly
         ? `Claim ${w.add}, drop ${w.drop}`
         : w.immediateFreeAgent
           ? (w.movePurpose==="DYNASTY_VALUE"
@@ -972,7 +1142,9 @@ export function deterministicRosterFallback({
           : w.specialistMode==="BYE_HOLD"
             ? `Short-term hold ${w.add}, drop ${w.drop}`
             : `${w.stash?"Stash":"Add"} ${w.add}, drop ${w.drop}`,
-      why:w.waiverOnly
+      why:w.claimRole==="ALTERNATIVE"
+        ? `This uses the same roster spot as ${w.alternativeTo}; do not execute both. Choose this only if you prefer this player's risk/upside profile.`
+        : w.waiverOnly
         ? `Next-waiver scout: this player's game has started, so this is not an immediate add. ${agreement.count} independent signals agree, including ${[
             agreement.role?"role":null,agreement.injury?"injury opportunity":null,
             agreement.market?"add heat":null,agreement.value?"future value":null
@@ -1007,11 +1179,14 @@ export function deterministicRosterFallback({
       immediateFreeAgent:!!w.immediateFreeAgent,
       signalCount:agreement.count,signalAgreement:agreement,
       injuryOpportunity:w.injuryOpportunity||null,
+      contingentUpside:w.contingentUpside||null,
+      roleExpansion:w.roleExpansion||null,
       liveRole:w.liveRole||null,
       tdDependency:w.tdDependency??null,mirageRisk:w.mirageRisk??0,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
       trajectory:w.trajectory||null,schemeTrend:w.schemeTrend||null,
       explanation:w.explanation||null,
+      dropSafety:w.dropSafety||null,
     });
   }
   const tradePool=(teamState?.tradePosture==="hold_value"
@@ -1120,6 +1295,7 @@ export default async req=>{
     const vacatedByTeam=buildVacatedOpportunity(
       opportunityProfiles,unavailableForOpportunity
     );
+    const contingentByName=buildContingentOpportunity(opportunityProfiles,officialInjuries);
     const marketValue=name=>market.players?.[normName(name)]?.value??null;
     const rankedTeams=[...snapshot.teams].sort((a,b)=>(b.wins-a.wins)||(b.pointsFor-a.pointsFor));
     const tierOfOriginal=original=>{
@@ -1193,22 +1369,37 @@ export default async req=>{
       if(liveRole)liveRoleById[pid]=liveRole;
     }
     const liveRoleIds=Object.keys(liveRoleById);
+    const contingentIds=Object.entries(db||{})
+      .filter(([pid,p])=>pid&&!rostered.has(pid)&&!!contingentByName[normName(p?.n||"")])
+      .map(([pid])=>pid);
     const candidateIds=[...new Set([
       ...liveRoleIds,
       ...(core.trendingFast||[]).map(x=>x.player_id),
       ...(core.trending||[]).map(x=>x.player_id),
       ...topProj,
-      ...injuryOpportunityIds
+      ...injuryOpportunityIds,
+      ...contingentIds
     ])].filter(pid=>pid&&!rostered.has(pid));
 
     let free=candidateIds.map(pid=>{
       const basePlayer=playerView(pid,db,proj,formMap,gameLocks,officialInjuries);
-      const p=injuryOpportunityForecast(
+      const p0=injuryOpportunityForecast(
         basePlayer,
         opportunityProfiles[normName(basePlayer.name)]||null,
         vacatedByTeam[normTeam(basePlayer.team)]||null,
         week
       );
+      const key=normName(basePlayer.name);
+      const roleExpansion=roleExpansionSafety(
+        p0,
+        opportunityProfiles[key]||null,
+        vacatedByTeam[normTeam(basePlayer.team)]||null
+      );
+      const p={
+        ...p0,
+        roleExpansion,
+        contingentUpside:contingentByName[key]||null
+      };
       const trend=trendById[pid]||0;
       const fastTrend=fastTrendById[pid]||0;
       const priorTrend=Number(priorTrendById[pid]||0);
@@ -1267,12 +1458,21 @@ export default async req=>{
         }),
         kickoffAt:game?.kickoffAt||null,gameLocked:!!game?.locked
       };
-      return injuryOpportunityForecast(
+      const withOpportunity=injuryOpportunityForecast(
         baseForecast,
         opportunityProfiles[key]||null,
         vacatedByTeam[normTeam(p.team)]||null,
         week
       );
+      return {
+        ...withOpportunity,
+        roleExpansion:roleExpansionSafety(
+          withOpportunity,
+          opportunityProfiles[key]||null,
+          vacatedByTeam[normTeam(p.team)]||null
+        ),
+        contingentUpside:contingentByName[key]||null
+      };
     };
     const lineupByName=new Map((lineupData?.players||[]).map(p=>[normName(p.name),p]));
     const myRoster=me.players.map(p=>({
@@ -1281,12 +1481,22 @@ export default async req=>{
       gameLocked:!!lineupByName.get(normName(p.name))?.locked||!!p.gameLocked,
     }));
     const myPositionCounts=positionCounts(myRoster);
+    const replacementByPos={};
+    for(const pos of ["QB","RB","WR","TE","K","DEF","DL","LB","DB"]){
+      const vals=free.filter(p=>p.pos===pos).map(p=>actionForecast(p,week)).sort((a,b)=>b-a);
+      replacementByPos[pos]=vals.length?vals[Math.min(2,vals.length-1)]:0;
+    }
+    const marginal=p=>p?Math.max(0,actionForecast(p,week)-Number(replacementByPos[p.pos]||0)):0;
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
     const baseDropPool=myRoster.filter(p=>!starterSet.has(p.name)&&!p.onIR&&!p.gameLocked);
     const specialistSwapPool=myRoster.filter(p=>SPECIALIST_POSITIONS.has(p.pos)&&!p.onIR&&!p.gameLocked);
     const dropPool=[...new Map([...baseDropPool,...specialistSwapPool].map(p=>[p.pid,p])).values()];
     const drops=dropPool
-      .map(p=>({...p,dropScore:dropProtectionScore(p,0,mode)}))
+      .map(p=>({
+        ...p,
+        dropProtection:dropSafetyProfile(p,mode),
+        dropScore:dropProtectionScore(p,Number(replacementByPos[p.pos]||0),mode)
+      }))
       .sort((a,b)=>a.dropScore-b.dropScore).slice(0,12);
 
     const enrichPick=p=>{
@@ -1350,16 +1560,6 @@ export default async req=>{
     const weekReviews=completedWeekReviews(historicalMatchups,me.rosterId,activeSlots,db,3);
     const baselineRosterTotal=simTotal(myRoster,activeSlots);
 
-    // Replacement value matters for bench construction. The third-best
-    // available option at a position is a conservative approximation of what
-    // can be replaced from waivers in this specific league.
-    const replacementByPos={};
-    for(const pos of ["QB","RB","WR","TE","K","DEF","DL","LB","DB"]){
-      const vals=free.filter(p=>p.pos===pos).map(p=>actionForecast(p,week)).sort((a,b)=>b-a);
-      replacementByPos[pos]=vals.length?vals[Math.min(2,vals.length-1)]:0;
-    }
-    const marginal=p=>p?Math.max(0,actionForecast(p,week)-Number(replacementByPos[p.pos]||0)):0;
-
     const waiverPairs=[];
     for(const add of free.slice(0,22)){
       for(const drop of drops.slice(0,8)){
@@ -1375,6 +1575,8 @@ export default async req=>{
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add.market!=null&&drop.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
+        const dropSafety=dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta});
+        if(!dropSafety.allowed)continue;
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
@@ -1394,12 +1596,16 @@ export default async req=>{
         const injurySignal=add.injuryOpportunity?.applied
           ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
           : 0;
+        const contingencySignal=Math.max(0,Number(add.contingentUpside?.score||0));
+        const expansionSignal=add.roleExpansion?.strong?1:add.roleExpansion?.reason?.length?.5:0;
         const mirageRisk=Math.max(0,Number(add.mirageRisk||0));
         const breakoutScore=round(
-          roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+injurySignal*.7-mirageRisk*3
+          roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+
+          injurySignal*.7+contingencySignal*2.5+expansionSignal*2-mirageRisk*3
         );
         const independentOpportunity=
-          roleSurge>=.08 || injurySignal>=1.5 || !!add.liveRole?.strong;
+          roleSurge>=.08 || injurySignal>=1.5 || contingencySignal>=.35 ||
+          expansionSignal>=.5 || !!add.liveRole?.strong;
         const stash=!SPECIALIST_POSITIONS.has(add.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
           (
@@ -1413,19 +1619,23 @@ export default async req=>{
         const agreement=waiverSignalAgreement({
           weeklyDelta,depthDelta,marketDelta,
           addRoleRatio:add.roleRatio,injuryOpportunity:add.injuryOpportunity,
-          liveRole:add.liveRole,
+          liveRole:add.liveRole,contingentUpside:add.contingentUpside,
+          roleExpansion:add.roleExpansion,
           fastTrending:add.fastTrending,trendVelocity:add.trendVelocity,
           mirageRisk:add.mirageRisk,waiverOnly:add.waiverOnly
         });
         const agreementBonus=Math.max(0,agreement.count-1)*1.1;
         const score=mode==="DYNASTY"
-          ? weeklyDelta*4+(marketDelta??0)*.7+depthDelta*.8+(add.screenScore-drop.dropScore)*.10+injurySignal*.5+agreementBonus
+          ? weeklyDelta*4+(marketDelta??0)*.7+depthDelta*.8+(add.screenScore-drop.dropScore)*.10+
+            injurySignal*.5+contingencySignal*2+expansionSignal*2+agreementBonus
           : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2+agreementBonus;
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
           specialistMode:specialist.mode,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
-          rosterFitReason:specialist.reason||depthFit.reason||null,
+          rosterFitReason:specialist.reason||depthFit.reason||dropSafety.reason||null,
+          dropSafety,
+          dropSafety,dropProtectionScore:drop.dropScore,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
           movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
           score:round(score),addNext3:actionForecast(add,week),dropNext3:drop.next3,
@@ -1436,6 +1646,8 @@ export default async req=>{
           kickoffAt:add.kickoffAt||null,
           signalCount:agreement.count,signalAgreement:agreement,
           injuryOpportunity:add.injuryOpportunity||null,
+          contingentUpside:add.contingentUpside||null,
+          roleExpansion:add.roleExpansion||null,
           liveRole:add.liveRole||null,
           injuryOpportunityBonus:add.injuryOpportunityBonus||0,
           tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
@@ -1453,7 +1665,7 @@ export default async req=>{
     waiverPairs.sort((a,b)=>b.score-a.score);
     const bestWaiverPairs=waiverPairs
       .filter(x=>waiverMoveActionable(x,mode))
-      .slice(0,12)
+      .slice(0,24)
       .map(x=>{
         const addPlayer=free.find(p=>normName(p.name)===normName(x.add));
         const dropPlayer=myRoster.find(p=>normName(p.name)===normName(x.drop));
@@ -1863,6 +2075,9 @@ Return ONLY valid JSON:
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
+        const dropSafety=drop
+          ? dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta})
+          : {allowed:true,profile:null};
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
@@ -1880,13 +2095,20 @@ Return ONLY valid JSON:
         const injurySignal=add?.injuryOpportunity?.applied
           ? Math.max(0,Number(add.injuryOpportunity.edgePct||0))
           : 0;
-        const breakoutScore=round(roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+fastSignal+injurySignal*.7);
+        const contingencySignal=Math.max(0,Number(add?.contingentUpside?.score||0));
+        const expansionSignal=add?.roleExpansion?.strong?1:add?.roleExpansion?.reason?.length?.5:0;
+        const breakoutScore=round(
+          roleSurge*10+liveRoleSignal*2.5+trendSignal+velocitySignal*1.5+fastSignal+
+          injurySignal*.7+contingencySignal*2.5+expansionSignal*2
+        );
         const stash=!SPECIALIST_POSITIONS.has(add?.pos) &&
           weeklyDelta<=.2 && depthDelta>=1.5 &&
-          (roleSurge>=.08 || injurySignal>=1.5 || !!add?.liveRole?.strong || trendSignal>=2 || velocitySignal>=1.45);
+          (roleSurge>=.08 || injurySignal>=1.5 || contingencySignal>=.35 ||
+           expansionSignal>=.5 || !!add?.liveRole?.strong || trendSignal>=2 || velocitySignal>=1.45);
         const agreement=waiverSignalAgreement({
           weeklyDelta,depthDelta,marketDelta,
           addRoleRatio:add?.roleRatio,injuryOpportunity:add?.injuryOpportunity,
+          contingentUpside:add?.contingentUpside,roleExpansion:add?.roleExpansion,
           liveRole:add?.liveRole,
           fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity,
           mirageRisk:add?.mirageRisk,waiverOnly:add?.waiverOnly
@@ -1895,7 +2117,7 @@ Return ONLY valid JSON:
           ...a,addPlayer:addForSim||add,dropPlayer:drop,
           addNext3:actionForecast(addForSim||add,week),dropNext3:drop?.next3,
           weeklyDelta,depthDelta,stash,marketDelta,pos:add?.pos,dropPos:drop?.pos,
-          addRoleRatio:add?.roleRatio
+          addRoleRatio:add?.roleRatio,dropSafety
         },{mode,positionCounts:myPositionCounts});
         return {
           ...a,
@@ -1911,10 +2133,11 @@ Return ONLY valid JSON:
           signalCount:agreement.count,signalAgreement:agreement,
           fastTrending:add?.fastTrending??0,
           trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
-          rosterFitBlocked:!specialist.allowed||!depthFit.allowed,
+          rosterFitBlocked:!specialist.allowed||!depthFit.allowed||!dropSafety.allowed,
           specialistMode:specialist.mode||null,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
-          rosterFitReason:specialist.reason||depthFit.reason||null,
+          rosterFitReason:specialist.reason||depthFit.reason||dropSafety.reason||null,
+          dropSafety,
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
@@ -1924,6 +2147,8 @@ Return ONLY valid JSON:
           trajectory:add?.trajectory||null,schemeTrend:add?.schemeTrend||null,
           providerNext3:add?.providerNext3??null,
           injuryOpportunity:add?.injuryOpportunity||null,
+          contingentUpside:add?.contingentUpside||null,
+          roleExpansion:add?.roleExpansion||null,
           liveRole:add?.liveRole||null,
           mirageRisk:add?.mirageRisk??0,
           explanation,
@@ -2019,9 +2244,17 @@ Return ONLY valid JSON:
     actions=actions.map(a=>{
       if(!["ADD","WAIVER","ADD_DROP"].includes(a.type))return a;
       const planned=claimRankByAdd.get(normName(a.add?.name||""));
-      return planned
-        ? {...a,claimRank:planned.claimRank,claimRole:planned.claimRole}
-        : a;
+      if(!planned)return a;
+      const merged={
+        ...a,claimRank:planned.claimRank,claimRole:planned.claimRole,
+        planRole:planned.planRole||"EXECUTE",alternativeTo:planned.alternativeTo||null,
+        exclusiveDrop:planned.exclusiveDrop||null
+      };
+      if(merged.planRole==="ALTERNATIVE"){
+        merged.headline=`Alternative to ${merged.alternativeTo}: ${merged.headline||"roster move"}`;
+        merged.why=`This uses the same roster spot as ${merged.alternativeTo}; do not execute both. ${merged.why||""}`.trim();
+      }
+      return merged;
     }).sort((a,b)=>{
       const aw=["ADD","WAIVER","ADD_DROP"].includes(a.type),bw=["ADD","WAIVER","ADD_DROP"].includes(b.type);
       if(aw&&bw)return Number(a.claimRank||99)-Number(b.claimRank||99);

@@ -114,24 +114,65 @@ export function buildVacatedOpportunity(profiles,unavailableNames=new Set()){
     const t=out[p.team]||(out[p.team]={
       activeTargetShare:0,vacatedTargetShare:0,
       activeRbCarryShare:0,vacatedRbCarryShare:0,
-      vacatedNames:[],activeNames:[]
+      vacatedNames:[],activeNames:[],
+      vacatedByPosition:{WR:[],TE:[],RB:[]},
+      vacatedTargetShareByPosition:{WR:0,TE:0,RB:0}
     });
     const isOut=unavailable.has(p.key);
     if(p.targetShare!=null){
-      if(isOut)t.vacatedTargetShare+=Math.max(0,p.targetShare);
-      else t.activeTargetShare+=Math.max(0,p.targetShare);
+      if(isOut){
+        t.vacatedTargetShare+=Math.max(0,p.targetShare);
+        if(t.vacatedTargetShareByPosition[p.pos]!=null){
+          t.vacatedTargetShareByPosition[p.pos]+=Math.max(0,p.targetShare);
+        }
+      }else t.activeTargetShare+=Math.max(0,p.targetShare);
     }
     if(p.pos==="RB"&&p.carryShare!=null){
       if(isOut)t.vacatedRbCarryShare+=Math.max(0,p.carryShare);
       else t.activeRbCarryShare+=Math.max(0,p.carryShare);
     }
     (isOut?t.vacatedNames:t.activeNames).push(p.name);
+    if(isOut&&t.vacatedByPosition[p.pos])t.vacatedByPosition[p.pos].push(p.name);
   }
   for(const t of Object.values(out)){
     t.vacatedTargetShare=clamp(t.vacatedTargetShare,0,.65);
     t.vacatedRbCarryShare=clamp(t.vacatedRbCarryShare,0,.9);
+    for(const pos of ["WR","TE","RB"]){
+      t.vacatedTargetShareByPosition[pos]=clamp(Number(t.vacatedTargetShareByPosition[pos]||0),0,.65);
+    }
   }
   return out;
+}
+
+export function roleExpansionSafety(player,profile,teamContext){
+  if(!player||!teamContext||!["WR","TE","RB"].includes(player.pos))return null;
+  const samePos=teamContext.vacatedByPosition?.[player.pos]||[];
+  if(!samePos.length)return null;
+  const samePosTarget=Number(teamContext.vacatedTargetShareByPosition?.[player.pos]||0);
+  const samePosCarries=player.pos==="RB"?Number(teamContext.vacatedRbCarryShare||0):0;
+  const ownShare=Number(profile?.targetShare??player.recentTargetShare??0);
+  const recentVolume=player.pos==="RB"
+    ? Number(player.recentCarries||0)
+    : Number(player.recentTargets||0);
+  const young=Number(player.age||0)>0&&Number(player.age||0)<=26;
+  const strong=
+    samePos.length>=2 ||
+    samePosTarget>=.14 ||
+    (player.pos==="RB"&&samePosCarries>=.35);
+  const relevant=
+    strong ||
+    ownShare>=.025 ||
+    recentVolume>=1.5 ||
+    young;
+  if(!relevant)return null;
+  return {
+    strong,
+    names:samePos.slice(0,4),
+    vacatedTargetPct:round(samePosTarget*100),
+    vacatedCarryPct:round(samePosCarries*100),
+    reason:`${samePos.join(" / ")} unavailable at ${player.pos}; ${player.name} has a clearer path to role growth`,
+    source:"same_position_vacancy"
+  };
 }
 
 export function vacatedOpportunityEdge(profile,teamContext){

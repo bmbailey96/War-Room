@@ -1,4 +1,4 @@
-export const ROSTER_ACTIONS_CACHE_VERSION="v11";
+export const ROSTER_ACTIONS_CACHE_VERSION="v12";
 
 export function rosterActionsCacheKey(leagueId){
   return `roster_actions_${ROSTER_ACTIONS_CACHE_VERSION}_${leagueId}`;
