@@ -15,7 +15,7 @@ import { detectLeagueMode,validateActions,acquisitionPolicy,waiverScheduleFromSe
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 import { diagnoseTeamState,buildAllPlayMetrics } from "./lib/team-state.mjs";
 import {
-  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge
+  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge,roleExpansionSafety
 } from "./lib/opportunity-v2.mjs";
 import {
   normalizeSleeperWeekStats,liveGameProgress,liveRoleEmergence,liveUsageCounts
@@ -489,6 +489,56 @@ export function currentOfficialInjuries(csvText,week){
         injury:(r.report_primary_injury||r.practice_primary_injury||"").trim(),
       };
     }
+  }
+  return out;
+}
+
+export function buildContingentOpportunity(profiles={},injuryMap={}){
+  const risks=[];
+  for(const p of Object.values(profiles||{})){
+    const injury=injuryMap[p.key];
+    if(!injury||hardInjured(injury.status))continue;
+    const status=String(injury.status||"").toLowerCase();
+    const practice=String(injury.practice||"").toLowerCase();
+    let severity=0;
+    if(/questionable/.test(status)&&/did not participate|dnp/.test(practice))severity=.75;
+    else if(/questionable/.test(status)&&/limited/.test(practice))severity=.45;
+    else if(/questionable/.test(status))severity=.35;
+    else if(/did not participate|dnp/.test(practice))severity=.5;
+    else if(/limited/.test(practice))severity=.22;
+    if(severity<=0)continue;
+    const workload=p.pos==="RB"
+      ? Number(p.carryShare||0)
+      : Number(p.targetShare||0);
+    const threshold=p.pos==="RB"?.22:.11;
+    if(workload<threshold)continue;
+    risks.push({profile:p,injury,severity,workload});
+  }
+
+  const out={};
+  for(const candidate of Object.values(profiles||{})){
+    if(!candidate?.team||!["RB","WR","TE"].includes(candidate.pos))continue;
+    const matches=risks.filter(x=>
+      x.profile.key!==candidate.key &&
+      x.profile.team===candidate.team &&
+      x.profile.pos===candidate.pos
+    ).sort((a,b)=>(b.severity*b.workload)-(a.severity*a.workload));
+    const top=matches[0];
+    if(!top)continue;
+    const ownWork=candidate.pos==="RB"
+      ? Number(candidate.carryShare||0)
+      : Number(candidate.targetShare||0);
+    if(ownWork<=0&&Number(candidate.currentTargets||0)<=0)continue;
+    const score=round(Math.min(1,top.severity*(.55+Math.min(.65,top.workload))));
+    if(score<.25)continue;
+    out[candidate.key]={
+      conditional:true,score,
+      teammate:top.profile.name,
+      status:top.injury.status||top.injury.practice||"injury concern",
+      practice:top.injury.practice||null,
+      reason:`If ${top.profile.name} is limited or out, ${candidate.name}'s same-position opportunity could expand. This is contingent upside, not part of the base projection.`,
+      source:"current_injury_contingency"
+    };
   }
   return out;
 }
