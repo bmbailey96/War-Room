@@ -729,7 +729,51 @@ export function dropProtectionScore(player={},replacement=0,mode="REDRAFT"){
   return round(score);
 }
 
-export function dropSafetyProfile(player={},mode="REDRAFT"){
+export function rosterDecisionArchetypes(action={}){
+  const tags=[];
+  if(action.movePurpose==="DYNASTY_VALUE")tags.push("DYNASTY_VALUE");
+  if(action.stash)tags.push("STASH");
+  if(action.contingentUpside?.score>=.25)tags.push("CONTINGENT");
+  if(action.roleExpansion?.strong)tags.push("ROLE_EXPANSION");
+  if(action.trajectory==="RISING_ROLE"||Number(action.addRoleRatio||action.roleRatio||1)>=1.08)tags.push("RISING_ROLE");
+  if(action.liveRole?.strong)tags.push("LIVE_ROLE");
+  if(action.specialistMode)tags.push("SPECIALIST");
+  if(Number(action.weeklyDelta||0)>=.75)tags.push("LINEUP_UPGRADE");
+  if(
+    !tags.some(x=>["CONTINGENT","ROLE_EXPANSION","RISING_ROLE","LIVE_ROLE"].includes(x)) &&
+    (Number(action.fastTrending||0)>=15||Number(action.trendVelocity||0)>=8)
+  )tags.push("TRENDING_ONLY");
+  const timing=action.tradeTiming?.code;
+  if(timing==="BUY_LOW")tags.push("TRADE_BUY_LOW");
+  else if(timing==="BUY_ROLE")tags.push("TRADE_BUY_ROLE");
+  else if(timing==="SELL_HIGH")tags.push("TRADE_SELL_HIGH");
+  if(["TRADE_FOR","SELL"].includes(action.type))tags.push("TRADE_GENERAL");
+  return [...new Set(tags.length?tags:["GENERAL"])];
+}
+
+export function rosterLearningAdjustment(model={},tags=[]){
+  const stats=model?.archetypes||{};
+  const usable=(tags||[]).map(tag=>({tag,stat:stats[tag]}))
+    .filter(x=>Number(x.stat?.n||0)>=4);
+  if(!usable.length)return {bonus:0,evidence:[]};
+  let weighted=0,totalWeight=0;
+  const evidence=[];
+  for(const {tag,stat} of usable){
+    const n=Number(stat.n||0);
+    const hit=Number.isFinite(Number(stat.hitRate))?Number(stat.hitRate):.5;
+    const avg=Number.isFinite(Number(stat.avgScore))?Number(stat.avgScore):0;
+    const quality=Math.max(0,Math.min(1,.5+(hit-.5)*.7+avg*.15));
+    const shrink=Math.min(.65,(n-3)/18);
+    const adj=(quality-.5)*5*shrink;
+    const w=Math.min(1.5,.6+n/20);
+    weighted+=adj*w;totalWeight+=w;
+    evidence.push({tag,n,hitRate:hit,avgScore:avg,adjustment:round(adj)});
+  }
+  const bonus=totalWeight?Math.max(-2.5,Math.min(2.5,weighted/totalWeight)):0;
+  return {bonus:round(bonus),evidence};
+}
+
+export function dropSafetyProfile(player={},mode="REDRAFT",informationConfidence="STANDARD"){
   const reasons=[];
   const age=Number(player.age||0);
   const young=age>0&&age<=26;
@@ -755,6 +799,12 @@ export function dropSafetyProfile(player={},mode="REDRAFT"){
   if(young&&(timing==="BUY_LOW"||timing==="BUY_ROLE")){
     reasons.push("current role/market timing says hold or buy, not cut");
   }
+  if(
+    mode==="DYNASTY" && informationConfidence==="LIMITED" &&
+    young && Number(player.market||0)>=6
+  ){
+    reasons.push("live-news coverage is limited, so this young dynasty asset gets an uncertainty buffer");
+  }
 
   const protectedNow=mode==="DYNASTY"&&reasons.length>0;
   let requiredMarketDelta=0,requiredWeeklyDelta=0;
@@ -767,6 +817,10 @@ export function dropSafetyProfile(player={},mode="REDRAFT"){
   }else if(reasons.length){
     requiredMarketDelta=12;requiredWeeklyDelta=2.75;
   }
+  if(informationConfidence==="LIMITED"&&protectedNow){
+    requiredMarketDelta+=2;
+    requiredWeeklyDelta+=.5;
+  }
   return {
     protected:protectedNow,
     reasons,
@@ -777,9 +831,9 @@ export function dropSafetyProfile(player={},mode="REDRAFT"){
 }
 
 export function dropSafetyDecision(player={},{
-  mode="REDRAFT",marketDelta=0,weeklyDelta=0
+  mode="REDRAFT",marketDelta=0,weeklyDelta=0,informationConfidence="STANDARD"
 }={}){
-  const profile=dropSafetyProfile(player,mode);
+  const profile=dropSafetyProfile(player,mode,informationConfidence);
   if(!profile.protected)return {allowed:true,profile};
   const clearsMarket=Number(marketDelta||0)>=profile.requiredMarketDelta;
   const clearsLineup=Number(weeklyDelta||0)>=profile.requiredWeeklyDelta;
