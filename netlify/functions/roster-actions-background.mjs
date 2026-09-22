@@ -350,26 +350,85 @@ async function recentFormMap(season,week,league){
     const tdDependency=recentTdDependency!=null&&baselineTdDependency!=null
       ? recentTdDependency*tdWeight+baselineTdDependency*(1-tdWeight)
       : recentTdDependency??baselineTdDependency??null;
+    const recentTargets=weightedMean(recent,r=>n(r.targets));
+    const baselineTargets=weightedMean(baseline,r=>n(r.targets));
+    const recentCarries=weightedMean(recent,r=>n(r.carries));
+    const baselineCarries=weightedMean(baseline,r=>n(r.carries));
+    const recentTargetShare=weightedMean(recent,r=>{
+      const v=Number(r.target_share); return Number.isFinite(v)&&v>=0?v:0;
+    });
+    const baselineTargetShare=weightedMean(baseline,r=>{
+      const v=Number(r.target_share); return Number.isFinite(v)&&v>=0?v:0;
+    });
+    const pointRatio=baselinePts!=null&&baselinePts>2?recentPts/baselinePts:1;
+    const shareDelta=(recentTargetShare??0)-(baselineTargetShare??0);
+    let trajectory="STABLE";
+    if(roleRatio>=1.08 || shareDelta>=.035)trajectory="RISING_ROLE";
+    if(roleRatio<=.90 && pointRatio<=.88)trajectory="SLUMPING_ROLE";
+    else if(pointRatio<=.82 && roleRatio>=.97)trajectory="SCORING_SLUMP_ROLE_OK";
     out[name]={
-      pos,currentGames:current.length,recentGames:recent.length,
+      pos,team:current.at(-1)?.team||old.at(-1)?.team||null,
+      currentGames:current.length,recentGames:recent.length,
       recentPts:recentPts==null?null:round(recentPts),
       baselinePts:baselinePts==null?null:round(baselinePts),
-      recentTargets:round(weightedMean(recent,r=>n(r.targets))||0),
-      baselineTargets:round(weightedMean(baseline,r=>n(r.targets))||0),
-      recentCarries:round(weightedMean(recent,r=>n(r.carries))||0),
-      baselineCarries:round(weightedMean(baseline,r=>n(r.carries))||0),
-      roleRatio:round(roleRatio),
+      recentTargets:round(recentTargets||0),
+      baselineTargets:round(baselineTargets||0),
+      recentCarries:round(recentCarries||0),
+      baselineCarries:round(baselineCarries||0),
+      recentTargetShare:recentTargetShare==null?null:Math.round(recentTargetShare*1000)/1000,
+      baselineTargetShare:baselineTargetShare==null?null:Math.round(baselineTargetShare*1000)/1000,
+      recentPointSequence:recent.map(r=>round(fantasyPoints(r,league.scoring_settings||{},pos))),
+      recentTargetSequence:recent.map(r=>n(r.targets)),
+      recentCarrySequence:recent.map(r=>n(r.carries)),
+      roleRatio:round(roleRatio),trajectory,
       tdDependency:tdDependency==null?null:round(tdDependency),
     };
   }
   return {map:out,currentRows,priorRows};
 }
 
+export function buildTeamSchemeTrends(rows=[],week=null){
+  const byTeam={};
+  for(const r of rows||[]){
+    if(r.season_type&&r.season_type!=="REG")continue;
+    const wk=n(r.week);
+    if(!wk||(week!=null&&wk>=Number(week)))continue;
+    const team=normTeam(r.team);
+    if(!team)continue;
+    const key=`${team}|${wk}`;
+    const x=byTeam[key]||(byTeam[key]={team,week:wk,attempts:0,carries:0});
+    x.attempts+=n(r.attempts);
+    x.carries+=n(r.carries);
+  }
+  const grouped={};
+  for(const x of Object.values(byTeam))(grouped[x.team]=grouped[x.team]||[]).push(x);
+  const out={};
+  for(const [team,games] of Object.entries(grouped)){
+    games.sort((a,b)=>a.week-b.week);
+    const calc=list=>{
+      const att=list.reduce((s,x)=>s+x.attempts,0),car=list.reduce((s,x)=>s+x.carries,0);
+      const plays=att+car;
+      return {passRate:plays?att/plays:null,attemptsPerGame:list.length?att/list.length:0,carriesPerGame:list.length?car/list.length:0};
+    };
+    const season=calc(games),recent=calc(games.slice(-3));
+    if(season.passRate==null||recent.passRate==null)continue;
+    const delta=recent.passRate-season.passRate;
+    const direction=delta>=.04?"PASS_HEAVIER":delta<=-.04?"RUN_HEAVIER":"STABLE";
+    const label=direction==="PASS_HEAVIER"
+      ? `offense has shifted more pass-heavy recently (${Math.round(season.passRate*100)}% to ${Math.round(recent.passRate*100)}%)`
+      : direction==="RUN_HEAVIER"
+        ? `offense has shifted more run-heavy recently (${Math.round(season.passRate*100)}% to ${Math.round(recent.passRate*100)}% pass rate)`
+        : `offensive pass/run mix is stable around ${Math.round(recent.passRate*100)}% pass`;
+    out[team]={team,games:games.length,direction,label,seasonPassRate:round(season.passRate*100),recentPassRate:round(recent.passRate*100),recentAttempts:round(recent.attemptsPerGame),recentCarries:round(recent.carriesPerGame)};
+  }
+  return out;
+}
+
 export function blendedRosterForecast(providerAvg,form){
   const provider=Number(providerAvg||0);
   if(!form || form.recentPts==null)return {
     forecast:round(provider),source:"provider",roleRatio:1,
-    recentPts:null,baselinePts:null,currentGames:0
+    recentPts:null,baselinePts:null,recentTargets:null,baselineTargets:null,recentCarries:null,baselineCarries:null,recentTargetShare:null,baselineTargetShare:null,trajectory:"UNKNOWN",recentPointSequence:[],recentTargetSequence:[],recentCarrySequence:[],currentGames:0
   };
   const games=Number(form.currentGames||0);
   // Real football earns weight slowly: 30% after one game, topping out at
@@ -400,6 +459,13 @@ export function blendedRosterForecast(providerAvg,form){
     roleRatio:form.roleRatio||1,
     recentPts:form.recentPts,
     baselinePts:form.baselinePts,
+    recentTargets:form.recentTargets??null,baselineTargets:form.baselineTargets??null,
+    recentCarries:form.recentCarries??null,baselineCarries:form.baselineCarries??null,
+    recentTargetShare:form.recentTargetShare??null,baselineTargetShare:form.baselineTargetShare??null,
+    trajectory:form.trajectory||"STABLE",
+    recentPointSequence:form.recentPointSequence||[],
+    recentTargetSequence:form.recentTargetSequence||[],
+    recentCarrySequence:form.recentCarrySequence||[],
     tdDependency:round(tdDependency),
     mirageRisk:round(mirageRisk),
     currentGames:games
