@@ -538,7 +538,12 @@ function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
     next3:form.forecast,providerNext3:provider,weeks:proj[pid]?.weeks||{},
     tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
     forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
-    baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
+    baselinePts:form.baselinePts,recentTargets:form.recentTargets??null,
+    baselineTargets:form.baselineTargets??null,recentCarries:form.recentCarries??null,
+    baselineCarries:form.baselineCarries??null,recentTargetShare:form.recentTargetShare??null,
+    baselineTargetShare:form.baselineTargetShare??null,trajectory:form.trajectory||"STABLE",
+    recentPointSequence:form.recentPointSequence||[],recentTargetSequence:form.recentTargetSequence||[],
+    recentCarrySequence:form.recentCarrySequence||[],tdDependency:form.tdDependency??null,
     mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
     tradeTiming:roleMarketTiming({
       currentGames:form.currentGames,recentPts:form.recentPts,baselinePts:form.baselinePts,
@@ -1026,6 +1031,7 @@ export default async req=>{
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
     const officialInjuries=currentOfficialInjuries(injuryCsv,week);
     const formMap=formContext?.map||{};
+    const teamSchemeTrends=buildTeamSchemeTrends(formContext?.currentRows||[],week);
     const liveStatsById=normalizeSleeperWeekStats(liveStatsRaw);
     const opportunityProfiles=buildOpportunityProfiles(
       formContext?.currentRows||[],formContext?.priorRows||[],week
@@ -1152,7 +1158,7 @@ export default async req=>{
       return {
         ...p,market:mv,trending:trend,fastTrending:fastTrend,
         trendDelta:round(trendDelta),trendVelocity:round(trendVelocity),
-        liveRole,
+        liveRole,schemeTrend:teamSchemeTrends[normTeam(p.team)]||null,
         immediateFreeAgent:!!p.gameLocked&&acquisition.canAddStartedPlayers,
         waiverNext3:forecast,waiverOnly,screenScore:round(score)
       };
@@ -1174,7 +1180,14 @@ export default async req=>{
         next3:form.forecast,providerNext3:provider,weeks:proj[p.pid]?.weeks||{},
         tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
         forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
-        baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
+        baselinePts:form.baselinePts,recentTargets:form.recentTargets??null,
+        baselineTargets:form.baselineTargets??null,recentCarries:form.recentCarries??null,
+        baselineCarries:form.baselineCarries??null,recentTargetShare:form.recentTargetShare??null,
+        baselineTargetShare:form.baselineTargetShare??null,trajectory:form.trajectory||"STABLE",
+        recentPointSequence:form.recentPointSequence||[],recentTargetSequence:form.recentTargetSequence||[],
+        recentCarrySequence:form.recentCarrySequence||[],
+        schemeTrend:teamSchemeTrends[normTeam(p.team)]||null,
+        tdDependency:form.tdDependency??null,
         mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
         tradeTiming:roleMarketTiming({
           currentGames:form.currentGames,recentPts:form.recentPts,baselinePts:form.baselinePts,
