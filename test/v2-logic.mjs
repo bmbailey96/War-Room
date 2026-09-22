@@ -713,7 +713,10 @@ assert.equal(waiverMoveActionable({
 console.log("Redraft specialist roster-construction and no-churn checks passed");
 
 
-const { positionalDepthDecision } = await import("../netlify/functions/roster-actions-background.mjs");
+const {
+  positionalDepthDecision,pickupExplanation,positionCounts,
+  completedWeekReviews,buildTeamSchemeTrends,ownerBehaviorSummary,tradeExplanation
+} = await import("../netlify/functions/roster-actions-background.mjs");
 
 let depthFit=positionalDepthDecision({
   mode:"REDRAFT",
@@ -752,6 +755,99 @@ depthFit=positionalDepthDecision({
   weeklyDelta:.8
 });
 assert.equal(depthFit.allowed,true);
+
+depthFit=positionalDepthDecision({
+  mode:"REDRAFT",
+  add:{name:"Fourth TE",pos:"TE"},
+  drop:{name:"Bench WR",pos:"WR"},
+  roster:[
+    {name:"TE1",pos:"TE"},{name:"TE2",pos:"TE"},{name:"TE3",pos:"TE"},
+    {name:"Bench WR",pos:"WR"}
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  weeklyDelta:.2,depthDelta:1.8
+});
+assert.equal(depthFit.allowed,false);
+assert.match(depthFit.reason,/already roster 3 TEs/i);
+
+depthFit=positionalDepthDecision({
+  mode:"DYNASTY",
+  add:{name:"Fifth TE",pos:"TE"},
+  drop:{name:"Bench WR",pos:"WR"},
+  roster:[
+    {name:"TE1",pos:"TE"},{name:"TE2",pos:"TE"},{name:"TE3",pos:"TE"},{name:"TE4",pos:"TE"},
+    {name:"Bench WR",pos:"WR"}
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  weeklyDelta:.3,depthDelta:1.8,marketDelta:4
+});
+assert.equal(depthFit.allowed,false);
+
+depthFit=positionalDepthDecision({
+  mode:"DYNASTY",
+  add:{name:"Elite TE Value",pos:"TE"},
+  drop:{name:"Bench WR",pos:"WR"},
+  roster:[
+    {name:"TE1",pos:"TE"},{name:"TE2",pos:"TE"},{name:"TE3",pos:"TE"},{name:"TE4",pos:"TE"},
+    {name:"Bench WR",pos:"WR"}
+  ],
+  activeSlots:["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"],
+  weeklyDelta:.3,depthDelta:1.8,marketDelta:15
+});
+assert.equal(depthFit.allowed,true);
+
+const explanation=pickupExplanation({
+  add:"Vele",drop:"Raymond",stash:true,depthDelta:2.1,weeklyDelta:.1,
+  addNext3:8.8,dropNext3:5.9,
+  addPlayer:{name:"Vele",pos:"WR",roleRatio:1.15,recentTargets:7,baselineTargets:4.5,trajectory:"RISING_ROLE"},
+  dropPlayer:{name:"Raymond",pos:"WR",next3:5.9}
+},{mode:"REDRAFT",positionCounts:{WR:5,TE:2}});
+assert.match(explanation.add,/targets up/i);
+assert.match(explanation.drop,/Raymond/i);
+assert.match(explanation.net,/bench stash/i);
+
+const reviewDb={
+  s:{n:"Starter",p:"WR",fp:["WR"],t:"A"},
+  b:{n:"Bench Boom",p:"WR",fp:["WR"],t:"A"}
+};
+const reviews=completedWeekReviews([
+  [
+    {roster_id:1,matchup_id:1,points:10,players:["s","b"],starters:["s"],players_points:{s:10,b:20}},
+    {roster_id:2,matchup_id:1,points:15,players:[],starters:[],players_points:{}},
+    {roster_id:3,matchup_id:2,points:18},{roster_id:4,matchup_id:2,points:17}
+  ],
+  [
+    {roster_id:1,matchup_id:1,points:20,players:["s","b"],starters:["s"],players_points:{s:20,b:5}},
+    {roster_id:2,matchup_id:1,points:25,players:[],starters:[],players_points:{}},
+    {roster_id:3,matchup_id:2,points:15},{roster_id:4,matchup_id:2,points:10}
+  ]
+],1,["WR"],reviewDb,3);
+assert.equal(reviews[0].week,2);
+assert.equal(reviews[0].code,"SCHEDULE");
+assert.equal(reviews[1].code,"LINEUP");
+assert.ok(reviews[1].benchLeak>=10);
+
+const schemeRows=[];
+for(let w=1;w<=5;w++){
+  schemeRows.push({season_type:"REG",week:String(w),team:"BUF",attempts:String(w<=2?20:40),carries:"0"});
+  schemeRows.push({season_type:"REG",week:String(w),team:"BUF",attempts:"0",carries:String(w<=2?30:10)});
+}
+const schemes=buildTeamSchemeTrends(schemeRows,6);
+assert.equal(schemes.BUF.direction,"PASS_HEAVIER");
+
+const birkeyBehavior=ownerBehaviorSummary("863157773284864000",{trades:2,picksReceived:1});
+assert.equal(birkeyBehavior.activeTrader,true);
+assert.ok(birkeyBehavior.preferredPositions.includes("RB"));
+const tradeWhy=tradeExplanation({
+  target:"Target WR",partner:"Birkey",weeklyDelta:2.2,partnerWeeklyDelta:.4,
+  send:[{type:"player",name:"Bench RB"},{type:"pick",name:"2027 2nd"}],
+  sendValue:30,receiveValue:31,partnerBehavior:birkeyBehavior,partnerCuts:[]
+},{mode:"DYNASTY"});
+assert.match(tradeWhy.partner,/Frequent trader/i);
+assert.match(tradeWhy.price,/Picks are used/i);
+
+console.log("Human explanations, TE/QB roster fit, week review, scheme trend, and owner behavior checks passed");
+
 
 const gameDayRosterRefresh = await import("../netlify/functions/roster-gameday-refresh.mjs");
 assert.equal(typeof gameDayRosterRefresh.default,"function");
@@ -869,9 +965,9 @@ const {
   ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey,
   rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
-assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v9");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v9_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v9_123");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v10");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v10_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v10_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
 assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);

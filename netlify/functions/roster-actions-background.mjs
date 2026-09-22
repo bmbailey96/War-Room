@@ -47,6 +47,64 @@ async function allPlayHistory(s,leagueId,week){
   return weeks;
 }
 
+export function completedWeekReviews(weeks=[],rosterId=null,activeSlots=[],db={},limit=3){
+  if(rosterId==null)return [];
+  const reviews=[];
+  for(let i=0;i<(weeks||[]).length;i++){
+    const rows=Array.isArray(weeks[i])?weeks[i]:(weeks[i]?.rows||[]);
+    const mine=rows.find(r=>Number(r?.roster_id)===Number(rosterId));
+    if(!mine||mine.matchup_id==null)continue;
+    const opp=rows.find(r=>r.matchup_id===mine.matchup_id&&Number(r.roster_id)!==Number(rosterId));
+    const myScore=Number(mine.points),oppScore=Number(opp?.points);
+    if(!Number.isFinite(myScore)||!Number.isFinite(oppScore))continue;
+    const points=mine.players_points||{};
+    const ids=(mine.players||Object.keys(points)).filter(Boolean);
+    const actualPlayers=ids.map(pid=>{
+      const info=pInfo(db,pid);
+      return {pid,name:info.name,slot:slotPos(info),eligibleSlots:info.fps||[],projection:Number(points[pid]||0),out:false,locked:false};
+    });
+    const best=activeSlots.length?optimize(actualPlayers,activeSlots,[]):{total:myScore,picked:[]};
+    const bestTotal=round(Number(best.total||myScore));
+    const leak=Math.max(0,round(bestTotal-myScore));
+    const starterSet=new Set((mine.starters||[]).filter(Boolean));
+    const missed=(best.picked||[]).map(x=>x.player)
+      .filter(p=>p&&!starterSet.has(p.pid)&&Number(p.projection||0)>0)
+      .sort((a,b)=>Number(b.projection||0)-Number(a.projection||0))
+      .slice(0,3).map(p=>({name:p.name,points:round(p.projection)}));
+    const scores=rows.map(r=>Number(r?.points)).filter(Number.isFinite).sort((a,b)=>b-a);
+    const rank=1+scores.filter(x=>x>myScore+1e-9).length;
+    const oppRank=1+scores.filter(x=>x>oppScore+1e-9).length;
+    const otherScores=rows.filter(r=>Number(r.roster_id)!==Number(rosterId)).map(r=>Number(r.points)).filter(Number.isFinite);
+    const wins=otherScores.filter(x=>myScore>x).length,ties=otherScores.filter(x=>Math.abs(myScore-x)<1e-9).length;
+    const allPlayPct=otherScores.length?round((wins+ties*.5)/otherScores.length*100):null;
+    const lost=myScore<oppScore,gap=round(Math.abs(oppScore-myScore));
+    const enoughOnBench=lost&&leak>=gap+.1;
+    const topThird=oppRank<=Math.max(1,Math.ceil(scores.length/3));
+    const mineTopHalf=rank<=Math.ceil(scores.length/2);
+    const bestWouldWin=bestTotal>oppScore+.05;
+    let code="WIN",summary=`Won ${myScore.toFixed(1)} to ${oppScore.toFixed(1)}.`;
+    if(lost){
+      if(enoughOnBench&&topThird){
+        code="MIXED";
+        summary=`Lost by ${gap.toFixed(1)}. The opponent had the #${oppRank} score of the week, but ${leak.toFixed(1)} points were also available in a better legal lineup.`;
+      }else if(enoughOnBench){
+        code="LINEUP";
+        summary=`Lost by ${gap.toFixed(1)}, and a best-possible legal lineup scored ${leak.toFixed(1)} more. Lineup decisions were large enough to change the result.`;
+      }else if(topThird&&mineTopHalf){
+        code="SCHEDULE";
+        summary=`Lost by ${gap.toFixed(1)} despite scoring #${rank} of ${scores.length}. The opponent scored #${oppRank}; this was mostly schedule variance, not a roster emergency.`;
+      }else{
+        code="OUTSCORED";
+        summary=bestWouldWin
+          ? `Lost by ${gap.toFixed(1)}. A perfect lineup could have won, but only ${leak.toFixed(1)} points were left between the actual lineup and the best legal lineup.`
+          : `Lost by ${gap.toFixed(1)}. Even the best legal lineup would have scored ${bestTotal.toFixed(1)}, still below the opponent's ${oppScore.toFixed(1)}.`;
+      }
+    }
+    reviews.push({week:i+1,result:lost?"LOSS":"WIN",code,summary,score:round(myScore),opponentScore:round(oppScore),margin:round(myScore-oppScore),leagueScoreRank:rank,opponentScoreRank:oppRank,leagueTeams:scores.length,allPlayWinPct:allPlayPct,bestPossible:bestTotal,benchLeak:leak,bestWouldWin,missedBench:missed});
+  }
+  return reviews.slice(-Math.max(1,limit)).reverse();
+}
+
 export function computeTrendVelocity(current=0,prior=0,elapsedHours=null){
   if(elapsedHours==null || !Number.isFinite(Number(elapsedHours)) || Number(elapsedHours)<=0){
     return {delta:0,perHour:0};
@@ -292,26 +350,85 @@ async function recentFormMap(season,week,league){
     const tdDependency=recentTdDependency!=null&&baselineTdDependency!=null
       ? recentTdDependency*tdWeight+baselineTdDependency*(1-tdWeight)
       : recentTdDependency??baselineTdDependency??null;
+    const recentTargets=weightedMean(recent,r=>n(r.targets));
+    const baselineTargets=weightedMean(baseline,r=>n(r.targets));
+    const recentCarries=weightedMean(recent,r=>n(r.carries));
+    const baselineCarries=weightedMean(baseline,r=>n(r.carries));
+    const recentTargetShare=weightedMean(recent,r=>{
+      const v=Number(r.target_share); return Number.isFinite(v)&&v>=0?v:0;
+    });
+    const baselineTargetShare=weightedMean(baseline,r=>{
+      const v=Number(r.target_share); return Number.isFinite(v)&&v>=0?v:0;
+    });
+    const pointRatio=baselinePts!=null&&baselinePts>2?recentPts/baselinePts:1;
+    const shareDelta=(recentTargetShare??0)-(baselineTargetShare??0);
+    let trajectory="STABLE";
+    if(roleRatio>=1.08 || shareDelta>=.035)trajectory="RISING_ROLE";
+    if(roleRatio<=.90 && pointRatio<=.88)trajectory="SLUMPING_ROLE";
+    else if(pointRatio<=.82 && roleRatio>=.97)trajectory="SCORING_SLUMP_ROLE_OK";
     out[name]={
-      pos,currentGames:current.length,recentGames:recent.length,
+      pos,team:current.at(-1)?.team||old.at(-1)?.team||null,
+      currentGames:current.length,recentGames:recent.length,
       recentPts:recentPts==null?null:round(recentPts),
       baselinePts:baselinePts==null?null:round(baselinePts),
-      recentTargets:round(weightedMean(recent,r=>n(r.targets))||0),
-      baselineTargets:round(weightedMean(baseline,r=>n(r.targets))||0),
-      recentCarries:round(weightedMean(recent,r=>n(r.carries))||0),
-      baselineCarries:round(weightedMean(baseline,r=>n(r.carries))||0),
-      roleRatio:round(roleRatio),
+      recentTargets:round(recentTargets||0),
+      baselineTargets:round(baselineTargets||0),
+      recentCarries:round(recentCarries||0),
+      baselineCarries:round(baselineCarries||0),
+      recentTargetShare:recentTargetShare==null?null:Math.round(recentTargetShare*1000)/1000,
+      baselineTargetShare:baselineTargetShare==null?null:Math.round(baselineTargetShare*1000)/1000,
+      recentPointSequence:recent.map(r=>round(fantasyPoints(r,league.scoring_settings||{},pos))),
+      recentTargetSequence:recent.map(r=>n(r.targets)),
+      recentCarrySequence:recent.map(r=>n(r.carries)),
+      roleRatio:round(roleRatio),trajectory,
       tdDependency:tdDependency==null?null:round(tdDependency),
     };
   }
   return {map:out,currentRows,priorRows};
 }
 
+export function buildTeamSchemeTrends(rows=[],week=null){
+  const byTeam={};
+  for(const r of rows||[]){
+    if(r.season_type&&r.season_type!=="REG")continue;
+    const wk=n(r.week);
+    if(!wk||(week!=null&&wk>=Number(week)))continue;
+    const team=normTeam(r.team);
+    if(!team)continue;
+    const key=`${team}|${wk}`;
+    const x=byTeam[key]||(byTeam[key]={team,week:wk,attempts:0,carries:0});
+    x.attempts+=n(r.attempts);
+    x.carries+=n(r.carries);
+  }
+  const grouped={};
+  for(const x of Object.values(byTeam))(grouped[x.team]=grouped[x.team]||[]).push(x);
+  const out={};
+  for(const [team,games] of Object.entries(grouped)){
+    games.sort((a,b)=>a.week-b.week);
+    const calc=list=>{
+      const att=list.reduce((s,x)=>s+x.attempts,0),car=list.reduce((s,x)=>s+x.carries,0);
+      const plays=att+car;
+      return {passRate:plays?att/plays:null,attemptsPerGame:list.length?att/list.length:0,carriesPerGame:list.length?car/list.length:0};
+    };
+    const season=calc(games),recent=calc(games.slice(-3));
+    if(season.passRate==null||recent.passRate==null)continue;
+    const delta=recent.passRate-season.passRate;
+    const direction=delta>=.04?"PASS_HEAVIER":delta<=-.04?"RUN_HEAVIER":"STABLE";
+    const label=direction==="PASS_HEAVIER"
+      ? `offense has shifted more pass-heavy recently (${Math.round(season.passRate*100)}% to ${Math.round(recent.passRate*100)}%)`
+      : direction==="RUN_HEAVIER"
+        ? `offense has shifted more run-heavy recently (${Math.round(season.passRate*100)}% to ${Math.round(recent.passRate*100)}% pass rate)`
+        : `offensive pass/run mix is stable around ${Math.round(recent.passRate*100)}% pass`;
+    out[team]={team,games:games.length,direction,label,seasonPassRate:round(season.passRate*100),recentPassRate:round(recent.passRate*100),recentAttempts:round(recent.attemptsPerGame),recentCarries:round(recent.carriesPerGame)};
+  }
+  return out;
+}
+
 export function blendedRosterForecast(providerAvg,form){
   const provider=Number(providerAvg||0);
   if(!form || form.recentPts==null)return {
     forecast:round(provider),source:"provider",roleRatio:1,
-    recentPts:null,baselinePts:null,currentGames:0
+    recentPts:null,baselinePts:null,recentTargets:null,baselineTargets:null,recentCarries:null,baselineCarries:null,recentTargetShare:null,baselineTargetShare:null,trajectory:"UNKNOWN",recentPointSequence:[],recentTargetSequence:[],recentCarrySequence:[],currentGames:0
   };
   const games=Number(form.currentGames||0);
   // Real football earns weight slowly: 30% after one game, topping out at
@@ -342,6 +459,13 @@ export function blendedRosterForecast(providerAvg,form){
     roleRatio:form.roleRatio||1,
     recentPts:form.recentPts,
     baselinePts:form.baselinePts,
+    recentTargets:form.recentTargets??null,baselineTargets:form.baselineTargets??null,
+    recentCarries:form.recentCarries??null,baselineCarries:form.baselineCarries??null,
+    recentTargetShare:form.recentTargetShare??null,baselineTargetShare:form.baselineTargetShare??null,
+    trajectory:form.trajectory||"STABLE",
+    recentPointSequence:form.recentPointSequence||[],
+    recentTargetSequence:form.recentTargetSequence||[],
+    recentCarrySequence:form.recentCarrySequence||[],
     tdDependency:round(tdDependency),
     mirageRisk:round(mirageRisk),
     currentGames:games
@@ -414,7 +538,12 @@ function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
     next3:form.forecast,providerNext3:provider,weeks:proj[pid]?.weeks||{},
     tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
     forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
-    baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
+    baselinePts:form.baselinePts,recentTargets:form.recentTargets??null,
+    baselineTargets:form.baselineTargets??null,recentCarries:form.recentCarries??null,
+    baselineCarries:form.baselineCarries??null,recentTargetShare:form.recentTargetShare??null,
+    baselineTargetShare:form.baselineTargetShare??null,trajectory:form.trajectory||"STABLE",
+    recentPointSequence:form.recentPointSequence||[],recentTargetSequence:form.recentTargetSequence||[],
+    recentCarrySequence:form.recentCarrySequence||[],tdDependency:form.tdDependency??null,
     mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
     tradeTiming:roleMarketTiming({
       currentGames:form.currentGames,recentPts:form.recentPts,baselinePts:form.baselinePts,
@@ -469,27 +598,159 @@ function assetName(x){return x?.name||String(x||"");}
 const SPECIALIST_POSITIONS=new Set(["DEF","K"]);
 
 export function positionalDepthDecision({
-  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],weeklyDelta=0
+  mode="REDRAFT",add=null,drop=null,roster=[],activeSlots=[],
+  weeklyDelta=0,depthDelta=0,marketDelta=0
 }={}){
-  if(mode!=="REDRAFT" || !add || !drop || add.pos===drop.pos){
-    return {allowed:true,reason:null};
-  }
-  if(!["RB","WR"].includes(drop.pos)){
+  if(!add || !drop || add.pos===drop.pos){
     return {allowed:true,reason:null};
   }
 
-  const dedicatedStarters=activeSlots.filter(s=>s===drop.pos).length;
-  const minimum=Math.max(1,dedicatedStarters+1);
-  const current=roster.filter(p=>p.pos===drop.pos&&!p.onIR).length;
-  const after=current-1;
+  const active=roster.filter(p=>!p.onIR);
+  const count=pos=>active.filter(p=>p.pos===pos).length;
+  const starterNeed=pos=>Math.max(1,activeSlots.filter(s=>s===pos).length);
 
-  if(after<minimum && Number(weeklyDelta||0)<2.5){
-    return {
-      allowed:false,
-      reason:`would leave only ${after} ${drop.pos}s; protect at least ${minimum} unless the lineup gain is substantial`
-    };
+  if(["QB","TE"].includes(add.pos)){
+    const current=count(add.pos);
+    const softMax=mode==="DYNASTY"
+      ? Math.max(3,starterNeed(add.pos)+2)
+      : starterNeed(add.pos)+1;
+    const exceptional=
+      Number(weeklyDelta||0)>=2.0 ||
+      Number(depthDelta||0)>=3.0 ||
+      (mode==="DYNASTY" && Number(marketDelta||0)>=12);
+    if(current>=softMax && !exceptional){
+      return {
+        allowed:false,
+        reason:`already roster ${current} ${add.pos}s; a ${current+1}th ${add.pos} needs a clear starter-level or dynasty-value edge`
+      };
+    }
+  }
+
+  if(mode==="REDRAFT" && ["RB","WR"].includes(drop.pos)){
+    const minimum=Math.max(1,starterNeed(drop.pos)+1);
+    const current=count(drop.pos);
+    const after=current-1;
+    if(after<minimum && Number(weeklyDelta||0)<2.5){
+      return {
+        allowed:false,
+        reason:`would leave only ${after} ${drop.pos}s; protect at least ${minimum} unless the lineup gain is substantial`
+      };
+    }
   }
   return {allowed:true,reason:null};
+}
+
+export function positionCounts(roster=[]){
+  const out={};
+  for(const p of roster||[]){
+    if(!p?.pos||p.onIR)continue;
+    out[p.pos]=(out[p.pos]||0)+1;
+  }
+  return out;
+}
+
+export function pickupExplanation(x={},context={}){
+  const add=x.addPlayer||{},drop=x.dropPlayer||{};
+  const counts=context.positionCounts||{};
+  const mode=context.mode||"REDRAFT";
+  const addPos=add.pos||x.pos||"player",dropPos=drop.pos||x.dropPos||"player";
+  const addCount=Number(counts[addPos]||0);
+  const afterAdd=addPos===dropPos?addCount:addCount+1;
+  const role=Number(add.roleRatio??x.addRoleRatio??1);
+  const recentTargets=Number(add.recentTargets??x.addRecentTargets);
+  const baselineTargets=Number(add.baselineTargets??x.addBaselineTargets);
+  const recentCarries=Number(add.recentCarries??x.addRecentCarries);
+  const baselineCarries=Number(add.baselineCarries??x.addBaselineCarries);
+  const recentShare=Number(add.recentTargetShare??x.addRecentTargetShare);
+  const baselineShare=Number(add.baselineTargetShare??x.addBaselineTargetShare);
+  const scheme=add.schemeTrend||x.schemeTrend||null;
+  const trajectory=add.trajectory||x.trajectory||null;
+
+  const evidence=[];
+  if(Number.isFinite(recentTargets)&&Number.isFinite(baselineTargets)&&recentTargets+baselineTargets>0){
+    const d=recentTargets-baselineTargets;
+    if(Math.abs(d)>=.8)evidence.push(`targets ${d>0?"up":"down"} from ${baselineTargets.toFixed(1)} to ${recentTargets.toFixed(1)} per game`);
+  }
+  if(Number.isFinite(recentCarries)&&Number.isFinite(baselineCarries)&&recentCarries+baselineCarries>0){
+    const d=recentCarries-baselineCarries;
+    if(Math.abs(d)>=1)evidence.push(`carries ${d>0?"up":"down"} from ${baselineCarries.toFixed(1)} to ${recentCarries.toFixed(1)} per game`);
+  }
+  if(Number.isFinite(recentShare)&&Number.isFinite(baselineShare)&&recentShare>0&&baselineShare>0){
+    const pts=(recentShare-baselineShare)*100;
+    if(Math.abs(pts)>=2)evidence.push(`target share ${pts>0?"up":"down"} ${Math.abs(pts).toFixed(0)} points`);
+  }
+  if(Math.abs(role-1)>=.06)evidence.push(`overall workload ${role>1?"up":"down"} ${Math.abs((role-1)*100).toFixed(0)}%`);
+  if(trajectory==="RISING_ROLE")evidence.push("role is rising before the fantasy scoring has fully followed");
+  else if(trajectory==="SLUMPING_ROLE")evidence.push("both role and scoring are trending down");
+  else if(trajectory==="SCORING_SLUMP_ROLE_OK")evidence.push("fantasy scoring is down, but the underlying role has held");
+  if(scheme?.label)evidence.push(scheme.label.toLowerCase());
+
+  const addForecast=Number(x.addNext3??add.next3);
+  const dropForecast=Number(x.dropNext3??drop.next3);
+  const weekly=Number(x.weeklyDelta||0),depth=Number(x.depthDelta||0);
+  const addSentence=evidence.length
+    ? `${add.name||x.add} is interesting because ${evidence.slice(0,3).join("; ")}.`
+    : `${add.name||x.add} cleared the value screen, but there is not a strong role-trend claim behind it.`;
+  const dropSentence=Number.isFinite(dropForecast)&&Number.isFinite(addForecast)
+    ? `${drop.name||x.drop} is the proposed cut because the short-horizon forecast is ${dropForecast.toFixed(1)} versus ${addForecast.toFixed(1)} for ${add.name||x.add}, after accounting for replacement value.`
+    : `${drop.name||x.drop} is the lowest-cost legal cut among the bench options that were screened.`;
+  const fitSentence=addPos==="TE"||addPos==="QB"
+    ? `Roster fit: you have ${addCount} ${addPos}s now; this move would leave you with ${afterAdd}. ${afterAdd>=4?"That is a luxury position count, so the move should only survive if the value edge is exceptional.":"That count is still within the roster-construction guardrail."}`
+    : `Roster fit: the move changes ${dropPos} depth into ${addPos} depth without crossing the position-protection rules.`;
+  const netSentence=x.stash
+    ? `This is a bench stash, not a claim that he should start now. Bench-value edge: ${depth>=0?"+":""}${depth.toFixed(1)}.`
+    : `Expected best-lineup change: ${weekly>=0?"+":""}${weekly.toFixed(1)} points per week over the short horizon.`;
+
+  return {add:addSentence,drop:dropSentence,fit:fitSentence,net:netSentence,mode};
+}
+
+export function ownerBehaviorSummary(ownerId,seasonProfile={}){
+  const h=ownerHistory(ownerId)||{};
+  const acquired={...(h.trade_positions_acquired||{})};
+  const top=Object.entries(acquired).sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,2).map(([p])=>p);
+  const careerTrades=Number(h.trades_count||0);
+  const seasonTrades=Number(seasonProfile.trades||0);
+  const picksReceived=Number(seasonProfile.picksReceived||0);
+  return {
+    name:h.display_name||null,
+    careerTrades,seasonTrades,
+    preferredPositions:top,
+    picksReceivedThisSeason:picksReceived,
+    lineupEfficiency:h.lineup_efficiency_pct??null,
+    activeTrader:careerTrades>=15||seasonTrades>=2,
+    summary:`${careerTrades>=15?"Frequent":"Selective"} trader${top.length?`; historically acquires ${top.join(" and ")} most often`:""}${picksReceived?`; has received ${picksReceived} pick${picksReceived===1?"":"s"} this season`:""}.`
+  };
+}
+
+export function tradeExplanation(x={},context={}){
+  const mode=context.mode||"REDRAFT";
+  const target=x.target||x.receive?.[0]?.name||"the target";
+  const partner=x.partner||"the other manager";
+  const send=(x.send||[]).map(assetName);
+  const weekly=Number(x.weeklyDelta||0),partnerWeekly=Number(x.partnerWeeklyDelta||0);
+  const behavior=x.partnerBehavior||context.partnerBehavior||null;
+  const timing=x.tradeTiming||null;
+  const timingText=timing?.code==="BUY_LOW"
+    ? "His underlying role is stronger than the recent fantasy scoring."
+    : timing?.code==="BUY_ROLE"
+      ? "His usage is rising before the box score has fully caught up."
+      : timing?.code==="SELL_HIGH"
+        ? "His recent scoring is running ahead of the underlying role, so the target is being treated cautiously."
+        : null;
+  const targetText=`Why target ${target}: the trade improves the best lineup by ${weekly>=0?"+":""}${weekly.toFixed(1)} points per week.${timingText?" "+timingText:""}`;
+  const valueText=mode==="DYNASTY"&&x.sendValue!=null&&x.receiveValue!=null
+    ? `Why this price: the package sends about ${Number(x.sendValue).toFixed(0)} of dynasty value for about ${Number(x.receiveValue).toFixed(0)} back. Picks are used only when they make the value and manager fit more plausible.`
+    : x.horizonSend!=null&&x.horizonReceive!=null
+      ? `Why this price: the six-week value is ${Number(x.horizonSend).toFixed(0)} out and ${Number(x.horizonReceive).toFixed(0)} back.`
+      : `Why this price: ${send.join(" + ")||"the outgoing package"} cleared the two-team fairness screen.`;
+  const behaviorText=behavior?.summary
+    ? `Why ${partner} might listen: ${behavior.summary} Their projected lineup changes ${partnerWeekly>=0?"+":""}${partnerWeekly.toFixed(1)} points per week in this model.`
+    : `Why ${partner} might listen: their projected lineup changes ${partnerWeekly>=0?"+":""}${partnerWeekly.toFixed(1)} points per week in this model.`;
+  const cuts=(x.partnerCuts||[]).map(p=>p.name||p).filter(Boolean);
+  const rosterText=cuts.length
+    ? `Roster-space reality: they would likely need to cut ${cuts.join(" and ")} to take the extra players, and that cost is included in the plausibility score.`
+    : "Roster-space reality: the package does not require them to create an extra player slot.";
+  return {target:targetText,price:valueText,partner:behaviorText,roster:rosterText};
 }
 
 export function waiverSignalAgreement(x={}){
@@ -713,6 +974,8 @@ export function deterministicRosterFallback({
       liveRole:w.liveRole||null,
       tdDependency:w.tdDependency??null,mirageRisk:w.mirageRisk??0,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
+      trajectory:w.trajectory||null,schemeTrend:w.schemeTrend||null,
+      explanation:w.explanation||null,
     });
   }
   const tradePool=(teamState?.tradePosture==="hold_value"
@@ -735,6 +998,9 @@ export function deterministicRosterFallback({
       marketDelta:t.marketDelta??null,managerFit:t.managerFit??null,
       tradeTiming:t.tradeTiming||null,
       sentTradeTiming:t.sentTradeTiming||[],
+      partnerCuts:t.partnerCuts||[],
+      partnerBehavior:t.partnerBehavior||null,
+      explanation:t.explanation||tradeExplanation(t,{mode,partnerBehavior:t.partnerBehavior||null}),
       timingScore:t.timingScore??null,
       partnerCareerTrades:t.partnerCareerTrades??null,
     });
@@ -801,6 +1067,7 @@ export default async req=>{
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
     const officialInjuries=currentOfficialInjuries(injuryCsv,week);
     const formMap=formContext?.map||{};
+    const teamSchemeTrends=buildTeamSchemeTrends(formContext?.currentRows||[],week);
     const liveStatsById=normalizeSleeperWeekStats(liveStatsRaw);
     const opportunityProfiles=buildOpportunityProfiles(
       formContext?.currentRows||[],formContext?.priorRows||[],week
@@ -927,7 +1194,7 @@ export default async req=>{
       return {
         ...p,market:mv,trending:trend,fastTrending:fastTrend,
         trendDelta:round(trendDelta),trendVelocity:round(trendVelocity),
-        liveRole,
+        liveRole,schemeTrend:teamSchemeTrends[normTeam(p.team)]||null,
         immediateFreeAgent:!!p.gameLocked&&acquisition.canAddStartedPlayers,
         waiverNext3:forecast,waiverOnly,screenScore:round(score)
       };
@@ -949,7 +1216,14 @@ export default async req=>{
         next3:form.forecast,providerNext3:provider,weeks:proj[p.pid]?.weeks||{},
         tradeAvg:tradeForm.forecast,tradeTotal:round(tradeForm.forecast*Math.max(1,tradeWeeks)),tradeWeeks,
         forecastSource:form.source,roleRatio:form.roleRatio,recentPts:form.recentPts,
-        baselinePts:form.baselinePts,tdDependency:form.tdDependency??null,
+        baselinePts:form.baselinePts,recentTargets:form.recentTargets??null,
+        baselineTargets:form.baselineTargets??null,recentCarries:form.recentCarries??null,
+        baselineCarries:form.baselineCarries??null,recentTargetShare:form.recentTargetShare??null,
+        baselineTargetShare:form.baselineTargetShare??null,trajectory:form.trajectory||"STABLE",
+        recentPointSequence:form.recentPointSequence||[],recentTargetSequence:form.recentTargetSequence||[],
+        recentCarrySequence:form.recentCarrySequence||[],
+        schemeTrend:teamSchemeTrends[normTeam(p.team)]||null,
+        tdDependency:form.tdDependency??null,
         mirageRisk:form.mirageRisk??0,currentGames:form.currentGames,
         tradeTiming:roleMarketTiming({
           currentGames:form.currentGames,recentPts:form.recentPts,baselinePts:form.baselinePts,
@@ -970,6 +1244,7 @@ export default async req=>{
       market:mode==="DYNASTY"?marketValue(p.name):null,
       gameLocked:!!lineupByName.get(normName(p.name))?.locked||!!p.gameLocked,
     }));
+    const myPositionCounts=positionCounts(myRoster);
     const starterSet=new Set(snapshot.matchup?.myStarters||[]);
     const baseDropPool=myRoster.filter(p=>!starterSet.has(p.name)&&!p.onIR&&!p.gameLocked);
     const specialistSwapPool=myRoster.filter(p=>SPECIALIST_POSITIONS.has(p.pos)&&!p.onIR&&!p.gameLocked);
@@ -1000,17 +1275,23 @@ export default async req=>{
       }
     }
 
+    const matchupByRoster=new Map((core.matchups||[]).map(r=>[Number(r.roster_id),r]));
     const otherTeams=snapshot.teams.filter(t=>!t.isMe).map(t=>{
       const hist=ownerHistory(t.ownerId);
+      const seasonProfile=seasonTradeProfile[t.rosterId]||{};
+      const matchupRow=matchupByRoster.get(Number(t.rosterId));
       return {
-        name:t.name,ownerId:t.ownerId,record:`${t.wins}-${t.losses}`,stance:t.stance,
+        name:t.name,rosterId:t.rosterId,ownerId:t.ownerId,ownerName:hist.display_name||"",
+        record:`${t.wins}-${t.losses}`,stance:t.stance,
         holes:t.holes,surplus:t.surplus,
+        starters:(matchupRow?.starters||[]).filter(Boolean).map(pid=>pInfo(db,pid).name),
+        behavior:ownerBehaviorSummary(t.ownerId,seasonProfile),
         tradeProfile:{
           careerTrades:Number(hist.trades_count||0),
-          seasonTrades:Number(seasonTradeProfile[t.rosterId]?.trades||0),
+          seasonTrades:Number(seasonProfile.trades||0),
           acquired:hist.trade_positions_acquired||{},
-          seasonAcquired:seasonTradeProfile[t.rosterId]?.acquired||{},
-          seasonPicksReceived:Number(seasonTradeProfile[t.rosterId]?.picksReceived||0),
+          seasonAcquired:seasonProfile.acquired||{},
+          seasonPicksReceived:Number(seasonProfile.picksReceived||0),
           lineupEfficiency:hist.lineup_efficiency_pct??null,
           benchLeak:hist.avg_bench_leak_per_week??null,
         },
@@ -1022,6 +1303,7 @@ export default async req=>{
       };
     });
     const myPicks=mode==="DYNASTY"?me.picks.map(enrichPick):[];
+    const myTradeBehavior=ownerBehaviorSummary(me.ownerId,seasonTradeProfile[me.rosterId]||{});
     const myNames=new Set(myRoster.map(p=>normName(p.name)));
     const freeNames=new Set(free.map(p=>normName(p.name)));
     const teamPlayers=Object.fromEntries(otherTeams.map(t=>[t.name,new Set(t.players.map(p=>normName(p.name)))]));
@@ -1029,6 +1311,7 @@ export default async req=>{
     const myPickNames=new Set(myPicks.map(p=>p.name));
 
     const activeSlots=(league.roster_positions||[]).filter(s=>!["BN","IR","TAXI"].includes(s));
+    const weekReviews=completedWeekReviews(historicalMatchups,me.rosterId,activeSlots,db,3);
     const baselineRosterTotal=simTotal(myRoster,activeSlots);
 
     // Replacement value matters for bench construction. The third-best
@@ -1061,7 +1344,7 @@ export default async req=>{
         });
         if(!specialist.allowed)continue;
         const depthFit=positionalDepthDecision({
-          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta
+          mode,add,drop,roster:myRoster,activeSlots,weeklyDelta,depthDelta,marketDelta
         });
         if(!depthFit.allowed)continue;
         const stream=specialist.mode==="STREAM_SWAP"
@@ -1121,6 +1404,11 @@ export default async req=>{
           tdDependency:add.tdDependency??null,mirageRisk:add.mirageRisk??0,
           addSource:add.forecastSource,dropSource:drop.forecastSource,
           addRoleRatio:add.roleRatio,dropRoleRatio:drop.roleRatio,
+          addRecentPts:add.recentPts,addBaselinePts:add.baselinePts,
+          addRecentTargets:add.recentTargets,addBaselineTargets:add.baselineTargets,
+          addRecentCarries:add.recentCarries,addBaselineCarries:add.baselineCarries,
+          addRecentTargetShare:add.recentTargetShare,addBaselineTargetShare:add.baselineTargetShare,
+          trajectory:add.trajectory||null,schemeTrend:add.schemeTrend||null,
           replacement:Number(replacementByPos[add.pos]||0)
         });
       }
@@ -1128,7 +1416,15 @@ export default async req=>{
     waiverPairs.sort((a,b)=>b.score-a.score);
     const bestWaiverPairs=waiverPairs
       .filter(x=>waiverMoveActionable(x,mode))
-      .slice(0,12);
+      .slice(0,12)
+      .map(x=>{
+        const addPlayer=free.find(p=>normName(p.name)===normName(x.add));
+        const dropPlayer=myRoster.find(p=>normName(p.name)===normName(x.drop));
+        return {
+          ...x,
+          explanation:pickupExplanation({...x,addPlayer,dropPlayer},{mode,positionCounts:myPositionCounts})
+        };
+      });
     const waiverPlan=buildWaiverPlan(bestWaiverPairs,3);
 
     const irCandidates=myRoster
@@ -1238,10 +1534,32 @@ export default async req=>{
       if(!partner||!targetPlayer)continue;
       const partnerBase=simTotal(partner.players,activeSlots);
       const targetValue=mode==="DYNASTY"?(target.market??null):(target.tradeTotal||0);
-      const combos=[];
-      for(const a of sendAssets)combos.push([a]);
-      for(let i=0;i<Math.min(sendAssets.length,12);i++){
-        for(let j=i+1;j<Math.min(sendAssets.length,12);j++)combos.push([sendAssets[i],sendAssets[j]]);
+      const nearValue=[...sendAssets]
+        .sort((a,b)=>Math.abs(Number(a.value||0)-Number(targetValue||0))-Math.abs(Number(b.value||0)-Number(targetValue||0)))
+        .slice(0,12);
+      const pickAssets=mode==="DYNASTY"
+        ? sendAssets.filter(x=>x.type==="pick").sort((a,b)=>Math.abs(Number(a.value||0)-Number(targetValue||0))-Math.abs(Number(b.value||0)-Number(targetValue||0))).slice(0,6)
+        : [];
+      const playerAssets=nearValue.filter(x=>x.type==="player").slice(0,8);
+      const pool=[...new Map([...nearValue,...pickAssets].map(x=>[`${x.type}|${x.name}`,x])).values()];
+      const combos=[],comboKeys=new Set();
+      const addCombo=parts=>{
+        const key=parts.map(x=>`${x.type}|${x.name}`).sort().join("::");
+        if(!parts.length||comboKeys.has(key))return;
+        comboKeys.add(key);combos.push(parts);
+      };
+      for(const a of pool)addCombo([a]);
+      for(let i=0;i<Math.min(pool.length,14);i++){
+        for(let j=i+1;j<Math.min(pool.length,14);j++)addCombo([pool[i],pool[j]]);
+      }
+      if(mode==="DYNASTY"){
+        // Explicitly explore player + picks packages. Picks are not an
+        // afterthought or an AI invention; only picks actually owned appear.
+        for(const player of playerAssets){
+          for(let i=0;i<pickAssets.length;i++){
+            for(let j=i+1;j<pickAssets.length;j++)addCombo([player,pickAssets[i],pickAssets[j]]);
+          }
+        }
       }
 
       let best=null;
@@ -1251,11 +1569,25 @@ export default async req=>{
         const myAfter=simTotal(rosterAfter(myRoster,{
           removeNames:sentPlayers.map(p=>p.name),addPlayers:[targetPlayer]
         }),activeSlots);
+        const partnerStarterSet=new Set((partner.starters||[]).map(normName));
+        const extraPlayerSlots=Math.max(0,sentPlayers.length-1);
+        const cutPool=partner.players
+          .filter(p=>normName(p.name)!==normName(targetPlayer.name)&&!partnerStarterSet.has(normName(p.name))&&!p.onIR)
+          .sort((a,b)=>{
+            const av=mode==="DYNASTY"?Number(a.market||0):Number(a.tradeTotal||a.next3||0);
+            const bv=mode==="DYNASTY"?Number(b.market||0):Number(b.tradeTotal||b.next3||0);
+            return av-bv;
+          });
+        const partnerCuts=cutPool.slice(0,extraPlayerSlots);
+        if(partnerCuts.length<extraPlayerSlots)continue;
         const partnerAfter=simTotal(rosterAfter(partner.players,{
-          removeNames:[targetPlayer.name],addPlayers:sentPlayers
+          removeNames:[targetPlayer.name,...partnerCuts.map(p=>p.name)],addPlayers:sentPlayers
         }),activeSlots);
         const weeklyDelta=round(myAfter-baselineRosterTotal);
         const partnerWeeklyDelta=round(partnerAfter-partnerBase);
+        const partnerSpaceCost=round(partnerCuts.reduce((sum,p)=>
+          sum+Number(mode==="DYNASTY"?(p.market||0):(p.tradeTotal||p.next3||0)),0
+        ));
         if(weeklyDelta<=.2)continue;
 
         const receiveValue=targetValue;
@@ -1266,8 +1598,8 @@ export default async req=>{
         if(!tradeFit.allowed)continue;
 
         const fairnessPenalty=mode==="DYNASTY"
-          ? Math.abs(receiveValue-sendValue)*.30
-          : Math.abs(receiveValue-sendValue)*.035+Math.abs(Math.min(0,partnerWeeklyDelta))*1.2;
+          ? Math.abs(receiveValue-sendValue)*.30+partnerSpaceCost*.22
+          : Math.abs(receiveValue-sendValue)*.035+Math.abs(Math.min(0,partnerWeeklyDelta))*1.2+partnerSpaceCost*.025;
 
         // Manager realism: prefer packages that resemble what this owner has
         // actually acquired historically. This is a soft ranking factor, not
@@ -1291,7 +1623,9 @@ export default async req=>{
         const stanceFit=hasPick
           ? (/rebuild|retool/i.test(partner.stance||"")?1.4:/win-now|ascending/i.test(partner.stance||"")?-.6:0)+Math.min(.8,pickHistory*.25)
           : (/win-now|ascending/i.test(partner.stance||"")?.7:0);
-        const managerFit=positionTaste*.8+stanceFit;
+        const behavior=partner.behavior||ownerBehaviorSummary(partner.ownerId,seasonTradeProfile[partner.rosterId]||{});
+        const activityFit=behavior.activeTrader?.35:-.15;
+        const managerFit=positionTaste*.8+stanceFit+activityFit;
         const targetTiming=targetPlayer.tradeTiming||roleMarketTiming(targetPlayer);
         const sentTiming=sentPlayers.map(p=>p.tradeTiming||roleMarketTiming(p));
         const sellHighScore=sentTiming
@@ -1326,6 +1660,9 @@ export default async req=>{
             timingScore:round(timingScore),
             partnerCareerTrades:careerTrades,
             partnerSeasonTrades:seasonTrades,
+            partnerCuts:partnerCuts.map(p=>({name:p.name,pos:p.pos,value:mode==="DYNASTY"?p.market:(p.tradeTotal||p.next3||0)})),
+            partnerSpaceCost,
+            partnerBehavior:behavior,
           };
         }
       }
@@ -1341,9 +1678,10 @@ export default async req=>{
                 ? " The outgoing side includes a box-score-ahead-of-role asset, which modestly improves timing."
                 : "";
         best.why=(mode==="DYNASTY"
-          ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical trade behavior.`
-          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`
+          ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical behavior and real roster-space cost.`
+          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}; extra roster spots are charged to the partner side.`
         )+timingNote;
+        best.explanation=tradeExplanation(best,{mode,partnerBehavior:best.partnerBehavior});
         deterministicTrades.push(best);
       }
     }
@@ -1369,6 +1707,12 @@ MY WAIVER POSITION: ${me.waiverPosition??"unknown"}
 WAIVER SCHEDULE SETTINGS: ${JSON.stringify(waiverSchedule)}
 TEAM STATE DIAGNOSIS:
 ${JSON.stringify(teamState,null,2)}
+
+RECENT COMPLETED-WEEK REVIEWS:
+${JSON.stringify(weekReviews,null,2)}
+
+MY TRADE BEHAVIOR:
+${JSON.stringify(myTradeBehavior,null,2)}
 ${modeRules}
 
 CURRENT BEST LINEUP:
@@ -1409,14 +1753,17 @@ Hard rules:
 - If a candidate has immediateFreeAgent=true, this league permits the acquisition despite the game already starting. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
 - Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
 - Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
+- For every pickup, compare the add directly with the proposed drop: role trend, targets/carries/share, short-horizon value, and roster construction. Do not recommend a fourth/fifth QB or TE just because the isolated player looks interesting unless the deterministic roster-fit gate says the value is exceptional.
 - If an add needs a roster spot, give an exact drop from MY ROSTER.
 - A trade target must be on the named partner's roster.
 - I can only send assets I actually own.
-- In dynasty, only use the exact pick labels listed under MY ACTUAL PICKS.
+- In dynasty, only use the exact pick labels listed under MY ACTUAL PICKS. Use picks to bridge or shape a trade when that creates a fairer, more manager-plausible package; do not force a pick into every deal.
 - In redraft, never use draft picks.
 - Give at most 5 actions, ordered by importance.
 - Prefer exact packages from DETERMINISTIC EXACT TRADE PACKAGES when one exists. Otherwise use the deterministic target screen.
-- For a trade, explain briefly why the other manager might accept.
+- For a trade, explain briefly why the other manager might accept. Use the named owner's observed trade activity and acquired-position history as a soft plausibility signal.
+- A multi-player offer must survive roster-space reality. If the other manager would need to cut a useful bench player, that hidden cost counts against the offer.
+- If no exact trade package clearly helps me and remains plausible for the other manager, recommend no trade. Creating trade activity is not a goal.
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
 - Do not recommend lateral churn.
@@ -1482,7 +1829,7 @@ Return ONLY valid JSON:
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
         const depthFit=positionalDepthDecision({
-          mode,add:addForSim,drop,roster:myRoster,activeSlots,weeklyDelta
+          mode,add:addForSim,drop,roster:myRoster,activeSlots,weeklyDelta,depthDelta,marketDelta
         });
         const stream=specialist.mode==="STREAM_SWAP"
           ? specialistScheduleEdge(addForSim,drop,week)
@@ -1506,6 +1853,12 @@ Return ONLY valid JSON:
           fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity,
           mirageRisk:add?.mirageRisk,waiverOnly:add?.waiverOnly
         });
+        const explanation=pickupExplanation({
+          ...a,addPlayer:addForSim||add,dropPlayer:drop,
+          addNext3:actionForecast(addForSim||add,week),dropNext3:drop?.next3,
+          weeklyDelta,depthDelta,stash,pos:add?.pos,dropPos:drop?.pos,
+          addRoleRatio:add?.roleRatio
+        },{mode,positionCounts:myPositionCounts});
         return {
           ...a,
           headline:add?.waiverOnly&&add?.name
@@ -1526,10 +1879,15 @@ Return ONLY valid JSON:
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
+          recentTargets:add?.recentTargets??null,baselineTargets:add?.baselineTargets??null,
+          recentCarries:add?.recentCarries??null,baselineCarries:add?.baselineCarries??null,
+          recentTargetShare:add?.recentTargetShare??null,baselineTargetShare:add?.baselineTargetShare??null,
+          trajectory:add?.trajectory||null,schemeTrend:add?.schemeTrend||null,
           providerNext3:add?.providerNext3??null,
           injuryOpportunity:add?.injuryOpportunity||null,
           liveRole:add?.liveRole||null,
           mirageRisk:add?.mirageRisk??0,
+          explanation,
         };
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
@@ -1543,11 +1901,24 @@ Return ONLY valid JSON:
           removeNames:sentPlayers.map(p=>p.name),addPlayers:gotPlayers
         }),activeSlots);
         const partnerBase=simTotal(partner.players,activeSlots);
+        const partnerStarterSet=new Set((partner.starters||[]).map(normName));
+        const extraPlayerSlots=Math.max(0,sentPlayers.length-gotPlayers.length);
+        const partnerCuts=partner.players
+          .filter(p=>!gotPlayers.some(g=>normName(g.name)===normName(p.name))&&!partnerStarterSet.has(normName(p.name))&&!p.onIR)
+          .sort((a,b)=>{
+            const av=mode==="DYNASTY"?Number(a.market||0):Number(a.tradeTotal||a.next3||0);
+            const bv=mode==="DYNASTY"?Number(b.market||0):Number(b.tradeTotal||b.next3||0);
+            return av-bv;
+          }).slice(0,extraPlayerSlots);
+        if(partnerCuts.length<extraPlayerSlots)return {...a,invalidMath:true};
         const partnerAfter=simTotal(rosterAfter(partner.players,{
-          removeNames:gotPlayers.map(p=>p.name),addPlayers:sentPlayers
+          removeNames:[...gotPlayers.map(p=>p.name),...partnerCuts.map(p=>p.name)],addPlayers:sentPlayers
         }),activeSlots);
         const weeklyDelta=round(myAfter-baselineRosterTotal);
         const partnerWeeklyDelta=round(partnerAfter-partnerBase);
+        const partnerSpaceCost=round(partnerCuts.reduce((sum,p)=>
+          sum+Number(mode==="DYNASTY"?(p.market||0):(p.tradeTotal||p.next3||0)),0
+        ));
         let sendValue=null,receiveValue=null,marketDelta=null;
         let horizonSend=null,horizonReceive=null,tradeRatio=null,tradeEfficient=true,tradeEfficiencyReason=null;
         if(mode==="DYNASTY"){
@@ -1557,21 +1928,30 @@ Return ONLY valid JSON:
             sendValue=sv.reduce((x,y)=>x+y,0);
             receiveValue=rv.reduce((x,y)=>x+y,0);
             marketDelta=receiveValue-sendValue;
-            const fit=dynastyTradeEfficient({sendValue,receiveValue,weeklyDelta,partnerWeeklyDelta});
+            const effectiveReceive=receiveValue+partnerSpaceCost*.35;
+            const fit=dynastyTradeEfficient({sendValue,receiveValue:effectiveReceive,weeklyDelta,partnerWeeklyDelta});
             tradeEfficient=fit.allowed;tradeRatio=fit.ratio;tradeEfficiencyReason=fit.reason;
           }
         }else{
           horizonSend=round(sentPlayers.reduce((s,p)=>s+Number(p.tradeTotal||0),0));
           horizonReceive=round(gotPlayers.reduce((s,p)=>s+Number(p.tradeTotal||0),0));
           const fit=redraftTradeEfficient({
-            sendHorizon:horizonSend,receiveHorizon:horizonReceive,weeklyDelta,partnerWeeklyDelta
+            sendHorizon:horizonSend,receiveHorizon:horizonReceive+partnerSpaceCost*.25,weeklyDelta,partnerWeeklyDelta
           });
           tradeEfficient=fit.allowed;tradeRatio=fit.ratio;tradeEfficiencyReason=fit.reason;
         }
         const primaryGet=gotPlayers[0]||null;
+        const partnerBehavior=partner.behavior||ownerBehaviorSummary(partner.ownerId,seasonTradeProfile[partner.rosterId]||{});
+        const explanation=tradeExplanation({
+          ...a,target:primaryGet?.name||a.receive?.[0]?.name,
+          weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,horizonSend,horizonReceive,
+          tradeTiming:primaryGet?.tradeTiming||roleMarketTiming(primaryGet||{}),
+          partnerCuts,partnerBehavior
+        },{mode,partnerBehavior});
         return {
           ...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta,
           horizonSend,horizonReceive,tradeRatio,tradeEfficient,tradeEfficiencyReason,
+          partnerCuts:partnerCuts.map(p=>({name:p.name,pos:p.pos})),partnerSpaceCost,partnerBehavior,explanation,
           forecastSource:primaryGet?.forecastSource||null,
           roleRatio:primaryGet?.roleRatio??null,
           recentPts:primaryGet?.recentPts??null,
@@ -1641,6 +2021,9 @@ Return ONLY valid JSON:
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
         teamState,
+        weekReviews,
+        myTradeBehavior,
+        positionCounts:myPositionCounts,
         acquisition,
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
@@ -1660,9 +2043,9 @@ Return ONLY valid JSON:
           name:p.name,pos:p.pos,team:p.team,waiverOnly:p.waiverOnly,
           immediateFreeAgent:p.immediateFreeAgent,liveRole:p.liveRole
         })),
-        rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
+        rosterConstruction:"specialists default to same-position swaps; duplicate defense only for a near-term bye/schedule hold with a replacement-level drop; extra QB/TE depth must clear a stronger luxury-depth gate",
         noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
-        depthProtection:"redraft protects one RB and WR beyond dedicated starting slots unless a cross-position move adds at least 2.5 pts/week",
+        depthProtection:"redraft protects one RB and WR beyond dedicated starting slots; both formats block unnecessary fourth/fifth QB or TE stashes unless the value edge is exceptional",
         gameDayLegality:acquisition.canAddStartedPlayers
           ?"Team Ocho uses open free agency: live RB/WR/TE breakouts can be immediate adds when role evidence clears the actionability screen."
           :"Started players are next-waiver targets only; unlocked free agents can still be added immediately.",

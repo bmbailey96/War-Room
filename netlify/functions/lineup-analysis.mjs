@@ -117,7 +117,9 @@ export default async req => {
       vacatedOpportunity:x.player.signals?.vacatedOpportunity||null,
       opportunityShare:x.player.signals?.opportunityShare??null,
       opportunityLabel:x.player.signals?.opportunityLabel||null,
-      matchupExposure:x.player.signals?.matchupExposure??1
+      matchupExposure:x.player.signals?.matchupExposure??1,
+      roleRatio:x.player.signals?.roleRatio??1,
+      schemeRatio:x.player.signals?.schemeRatio??1
     }));
     const bench=(data.players||[])
       .filter(p=>!(data.current||[]).some(x=>x.player?.pid===p.pid))
@@ -131,7 +133,9 @@ export default async req => {
         passRush:p.signals?.passRush||null,
         opportunityShare:p.signals?.opportunityShare??null,
         opportunityLabel:p.signals?.opportunityLabel||null,
-        matchupExposure:p.signals?.matchupExposure??1}));
+        matchupExposure:p.signals?.matchupExposure??1,
+        roleRatio:p.signals?.roleRatio??1,
+        schemeRatio:p.signals?.schemeRatio??1}));
     const computed=(data.calls||[]).map(c=>({
       start:c.start?.name,sit:c.sit?.name,slot:c.slot,
       actionable:c.actionable,callStrength:c.callStrength,actionReason:c.actionReason,
@@ -160,7 +164,7 @@ export default async req => {
       .map(p=>({name:p.name,status:p.injury,injury:p.injuryDetail,practice:p.practiceStatus}));
     const learnedDrivers=reasoningModel?.drivers||{};
 
-    const prompt=`You are the final sit/start editor for one fantasy football roster. The projection engine below is deterministic and is the default answer. Your job is NOT to make a second projection model or invent a different number. Use web search for current, dated information from this week: injury/practice reports, confirmed role or depth-chart changes, coach statements, expected limitations, inactives, and major scheme changes.
+    const prompt=`You are the final sit/start editor for one fantasy football roster. The projection engine below is deterministic and is the default answer. Your job is NOT to make a second projection model or invent a different number. Use web search for current, dated information from this week: injury/practice reports, confirmed role or depth-chart changes, coach statements, expected limitations, inactives, major scheme changes, and game-day weather when wind/precipitation/temperature is material enough to change passing, kicking, or ball-security expectations.
 
 League: ${data.league.name}. NFL week ${data.week}. Opponent: ${data.opponent}.
 MATCHUP STATE:
@@ -199,7 +203,7 @@ Rules:
 6. Override only when you find specific CURRENT evidence the arithmetic does not know, such as a snap limitation, newly won/lost role, return from injury, a scheme change, credible inactive news, or a confirmed shadow/slot coverage assignment.
 7. Respect the engine's uncertainty. A LOW decision-confidence call or beat probability near 50% is genuinely close even if the raw point gap looks noticeable. A HIGH-confidence mathematical edge should require strong concrete news to override.
 8. If MATCHUP STATE posture is protect_floor, use floor as a tiebreak only for genuinely close calls. If it is chase_ceiling, use ceiling as a tiebreak only for genuinely close calls. Do not sacrifice a clear expected-value edge just to chase variance.
-9. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust.
+9. Use the graded track record above as calibration, not gospel. If "scheme" is 1/5, demand stronger scheme evidence. If "role" is 8/10, that evidence has earned more trust. Weather is also graded from prior weeks: do not cite ordinary conditions, and require a genuinely material forecast before using it as a driver.
 10. A source of "sleeper" is the weakest projection source and should lower confidence. "league_history" is actual scoring from this league and is stronger than a provider fallback, but may still have a thin sample.
 11. COVERAGE MATCHUP is an inferred likely assignment from current depth metadata plus actual defender coverage results. Respect assignmentConfidence and the APPLIED/INFO gate. Never turn it into a claimed shadow assignment unless current reporting explicitly confirms one.
 12. MATCHUP EXPOSURE scales team/coverage matchup effects by actual target or workload ownership. A low-volume player should not receive the same boost from a soft defense as an alpha player.
