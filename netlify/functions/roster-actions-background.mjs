@@ -1524,10 +1524,32 @@ export default async req=>{
       if(!partner||!targetPlayer)continue;
       const partnerBase=simTotal(partner.players,activeSlots);
       const targetValue=mode==="DYNASTY"?(target.market??null):(target.tradeTotal||0);
-      const combos=[];
-      for(const a of sendAssets)combos.push([a]);
-      for(let i=0;i<Math.min(sendAssets.length,12);i++){
-        for(let j=i+1;j<Math.min(sendAssets.length,12);j++)combos.push([sendAssets[i],sendAssets[j]]);
+      const nearValue=[...sendAssets]
+        .sort((a,b)=>Math.abs(Number(a.value||0)-Number(targetValue||0))-Math.abs(Number(b.value||0)-Number(targetValue||0)))
+        .slice(0,12);
+      const pickAssets=mode==="DYNASTY"
+        ? sendAssets.filter(x=>x.type==="pick").sort((a,b)=>Math.abs(Number(a.value||0)-Number(targetValue||0))-Math.abs(Number(b.value||0)-Number(targetValue||0))).slice(0,6)
+        : [];
+      const playerAssets=nearValue.filter(x=>x.type==="player").slice(0,8);
+      const pool=[...new Map([...nearValue,...pickAssets].map(x=>[`${x.type}|${x.name}`,x])).values()];
+      const combos=[],comboKeys=new Set();
+      const addCombo=parts=>{
+        const key=parts.map(x=>`${x.type}|${x.name}`).sort().join("::");
+        if(!parts.length||comboKeys.has(key))return;
+        comboKeys.add(key);combos.push(parts);
+      };
+      for(const a of pool)addCombo([a]);
+      for(let i=0;i<Math.min(pool.length,14);i++){
+        for(let j=i+1;j<Math.min(pool.length,14);j++)addCombo([pool[i],pool[j]]);
+      }
+      if(mode==="DYNASTY"){
+        // Explicitly explore player + picks packages. Picks are not an
+        // afterthought or an AI invention; only picks actually owned appear.
+        for(const player of playerAssets){
+          for(let i=0;i<pickAssets.length;i++){
+            for(let j=i+1;j<pickAssets.length;j++)addCombo([player,pickAssets[i],pickAssets[j]]);
+          }
+        }
       }
 
       let best=null;
@@ -1537,11 +1559,25 @@ export default async req=>{
         const myAfter=simTotal(rosterAfter(myRoster,{
           removeNames:sentPlayers.map(p=>p.name),addPlayers:[targetPlayer]
         }),activeSlots);
+        const partnerStarterSet=new Set((partner.starters||[]).map(normName));
+        const extraPlayerSlots=Math.max(0,sentPlayers.length-1);
+        const cutPool=partner.players
+          .filter(p=>normName(p.name)!==normName(targetPlayer.name)&&!partnerStarterSet.has(normName(p.name))&&!p.onIR)
+          .sort((a,b)=>{
+            const av=mode==="DYNASTY"?Number(a.market||0):Number(a.tradeTotal||a.next3||0);
+            const bv=mode==="DYNASTY"?Number(b.market||0):Number(b.tradeTotal||b.next3||0);
+            return av-bv;
+          });
+        const partnerCuts=cutPool.slice(0,extraPlayerSlots);
+        if(partnerCuts.length<extraPlayerSlots)continue;
         const partnerAfter=simTotal(rosterAfter(partner.players,{
-          removeNames:[targetPlayer.name],addPlayers:sentPlayers
+          removeNames:[targetPlayer.name,...partnerCuts.map(p=>p.name)],addPlayers:sentPlayers
         }),activeSlots);
         const weeklyDelta=round(myAfter-baselineRosterTotal);
         const partnerWeeklyDelta=round(partnerAfter-partnerBase);
+        const partnerSpaceCost=round(partnerCuts.reduce((sum,p)=>
+          sum+Number(mode==="DYNASTY"?(p.market||0):(p.tradeTotal||p.next3||0)),0
+        ));
         if(weeklyDelta<=.2)continue;
 
         const receiveValue=targetValue;
@@ -1552,8 +1588,8 @@ export default async req=>{
         if(!tradeFit.allowed)continue;
 
         const fairnessPenalty=mode==="DYNASTY"
-          ? Math.abs(receiveValue-sendValue)*.30
-          : Math.abs(receiveValue-sendValue)*.035+Math.abs(Math.min(0,partnerWeeklyDelta))*1.2;
+          ? Math.abs(receiveValue-sendValue)*.30+partnerSpaceCost*.22
+          : Math.abs(receiveValue-sendValue)*.035+Math.abs(Math.min(0,partnerWeeklyDelta))*1.2+partnerSpaceCost*.025;
 
         // Manager realism: prefer packages that resemble what this owner has
         // actually acquired historically. This is a soft ranking factor, not
@@ -1577,7 +1613,9 @@ export default async req=>{
         const stanceFit=hasPick
           ? (/rebuild|retool/i.test(partner.stance||"")?1.4:/win-now|ascending/i.test(partner.stance||"")?-.6:0)+Math.min(.8,pickHistory*.25)
           : (/win-now|ascending/i.test(partner.stance||"")?.7:0);
-        const managerFit=positionTaste*.8+stanceFit;
+        const behavior=partner.behavior||ownerBehaviorSummary(partner.ownerId,seasonTradeProfile[partner.rosterId]||{});
+        const activityFit=behavior.activeTrader?.35:-.15;
+        const managerFit=positionTaste*.8+stanceFit+activityFit;
         const targetTiming=targetPlayer.tradeTiming||roleMarketTiming(targetPlayer);
         const sentTiming=sentPlayers.map(p=>p.tradeTiming||roleMarketTiming(p));
         const sellHighScore=sentTiming
@@ -1612,6 +1650,9 @@ export default async req=>{
             timingScore:round(timingScore),
             partnerCareerTrades:careerTrades,
             partnerSeasonTrades:seasonTrades,
+            partnerCuts:partnerCuts.map(p=>({name:p.name,pos:p.pos,value:mode==="DYNASTY"?p.market:(p.tradeTotal||p.next3||0)})),
+            partnerSpaceCost,
+            partnerBehavior:behavior,
           };
         }
       }
@@ -1627,9 +1668,10 @@ export default async req=>{
                 ? " The outgoing side includes a box-score-ahead-of-role asset, which modestly improves timing."
                 : "";
         best.why=(mode==="DYNASTY"
-          ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical trade behavior.`
-          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}.`
+          ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical behavior and real roster-space cost.`
+          : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}; extra roster spots are charged to the partner side.`
         )+timingNote;
+        best.explanation=tradeExplanation(best,{mode,partnerBehavior:best.partnerBehavior});
         deterministicTrades.push(best);
       }
     }
