@@ -715,6 +715,7 @@ console.log("Redraft specialist roster-construction and no-churn checks passed")
 
 const {
   positionalDepthDecision,pickupExplanation,positionCounts,dropProtectionScore,
+  dropSafetyDecision,buildContingentOpportunity,
   completedWeekReviews,buildTeamSchemeTrends,ownerBehaviorSummary,tradeExplanation
 } = await import("../netlify/functions/roster-actions-background.mjs");
 
@@ -836,6 +837,36 @@ const raymondProtection=dropProtectionScore({
   recentTargetShare:.15,baselineTargetShare:.15
 },0,"DYNASTY");
 assert.ok(gadsdenProtection>raymondProtection);
+
+const protectedGadsden={
+  name:"Young TE",pos:"TE",age:22,market:7,next3:7.7,
+  roleExpansion:{strong:true,names:["Veteran TE 1","Veteran TE 2"]},
+  roleRatio:1.04,trajectory:"STABLE"
+};
+assert.equal(dropSafetyDecision(protectedGadsden,{
+  mode:"DYNASTY",marketDelta:11,weeklyDelta:0
+}).allowed,false);
+assert.equal(dropSafetyDecision(protectedGadsden,{
+  mode:"DYNASTY",marketDelta:16,weeklyDelta:0
+}).allowed,true);
+
+const raymondSafe={
+  name:"Older WR",pos:"WR",age:31,market:2,next3:9.5,
+  roleRatio:1,trajectory:"STABLE"
+};
+assert.equal(dropSafetyDecision(raymondSafe,{
+  mode:"DYNASTY",marketDelta:11,weeklyDelta:0
+}).allowed,true);
+
+const contingency=buildContingentOpportunity({
+  "lead rb":{key:"lead rb",name:"Lead RB",team:"PHI",pos:"RB",carryShare:.58,targetShare:.08,currentTargets:4},
+  "backup rb":{key:"backup rb",name:"Backup RB",team:"PHI",pos:"RB",carryShare:.22,targetShare:.04,currentTargets:2},
+},{
+  "lead rb":{status:"Questionable",practice:"Did Not Participate",injury:"Shoulder"}
+});
+assert.ok(contingency["backup rb"]);
+assert.ok(contingency["backup rb"].score>=.45);
+assert.match(contingency["backup rb"].reason,/not part of the base projection/i);
 
 const dynastyValueExplanation=pickupExplanation({
   add:"Jordan Addison",drop:"Bench WR",weeklyDelta:0,depthDelta:1,marketDelta:11,
@@ -992,8 +1023,10 @@ assert.equal(claimPlan[0].add,"Best Add");
 assert.equal(claimPlan[0].claimRole,"PRIMARY");
 assert.equal(claimPlan[0].claimRank,1);
 assert.equal(claimPlan[1].add,"Second Add");
-assert.equal(claimPlan[1].claimRole,"BACKUP");
+assert.equal(claimPlan[1].claimRole,"ALTERNATIVE");
+assert.equal(claimPlan[1].alternativeTo,"Best Add");
 assert.equal(claimPlan[2].add,"Third Add");
+assert.equal(claimPlan[2].planRole,"EXECUTE");
 
 const crispFallback=deterministicRosterFallback({
   mode:"REDRAFT",usesFaab:false,
@@ -1015,9 +1048,9 @@ const {
   ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey,
   rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
-assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v11");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v11_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v11_123");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v12");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v12_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v12_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
 assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);
@@ -1144,7 +1177,7 @@ console.log("Role-versus-box-score trade timing checks passed");
 
 
 const {
-  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge,
+  buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge,roleExpansionSafety,
   receiverArchetype,buildWrArchetypeDefense,receiverArchetypeEdge
 } = await import("../netlify/functions/lib/opportunity-v2.mjs");
 
@@ -1181,6 +1214,26 @@ assert.equal(vacatedOpportunityEdge(profiles["alpha wr"],{
   activeRbCarryShare:0,vacatedRbCarryShare:0,
   vacatedNames:[]
 }),null);
+
+const teRows=[
+  {player_display_name:"Young TE",position:"TE",team:"LAC",week:"1",targets:"2",target_share:"0.05"},
+  {player_display_name:"Young TE",position:"TE",team:"LAC",week:"2",targets:"3",target_share:"0.07"},
+  {player_display_name:"Veteran TE 1",position:"TE",team:"LAC",week:"1",targets:"6",target_share:"0.18"},
+  {player_display_name:"Veteran TE 1",position:"TE",team:"LAC",week:"2",targets:"5",target_share:"0.16"},
+  {player_display_name:"Veteran TE 2",position:"TE",team:"LAC",week:"1",targets:"3",target_share:"0.09"},
+  {player_display_name:"Veteran TE 2",position:"TE",team:"LAC",week:"2",targets:"3",target_share:"0.09"},
+];
+const teProfiles=buildOpportunityProfiles(teRows,[],3);
+const teVacated=buildVacatedOpportunity(
+  teProfiles,new Set(["veteran te 1","veteran te 2"])
+);
+const teExpansion=roleExpansionSafety(
+  {name:"Young TE",pos:"TE",age:22,recentTargets:2.5},
+  teProfiles["young te"],
+  teVacated.LAC
+);
+assert.equal(teExpansion.strong,true);
+assert.deepEqual(teExpansion.names.sort(),["Veteran TE 1","Veteran TE 2"].sort());
 
 const archetypeRows=[
   {player_display_name:"Vertical One",position:"WR",team:"BUF",opponent_team:"NYJ",week:"1",targets:"20",receptions:"14",receiving_yards:"360",receiving_tds:"3",receiving_air_yards:"360"},
