@@ -995,16 +995,58 @@ export function specialistRosterDecision({
 }
 
 export function buildWaiverPlan(pairs=[],limit=3){
-  const plan=[],seenAdds=new Set();
+  const byAdd=new Map();
   for(const pair of pairs||[]){
-    const key=normName(pair?.add||"");
-    if(!key||seenAdds.has(key))continue;
-    seenAdds.add(key);
-    plan.push({
-      ...pair,
-      claimRank:plan.length+1,
-      claimRole:plan.length===0?"PRIMARY":"BACKUP",
-    });
+    const addKey=normName(pair?.add||"");
+    if(!addKey)continue;
+    const rows=byAdd.get(addKey)||[];
+    rows.push(pair);
+    byAdd.set(addKey,rows);
+  }
+  const groups=[...byAdd.values()]
+    .map(rows=>rows.sort((a,b)=>Number(b.score||0)-Number(a.score||0)))
+    .sort((a,b)=>Number(b[0]?.score||0)-Number(a[0]?.score||0));
+
+  const plan=[],usedDrops=new Map();
+  for(const rows of groups){
+    const best=rows[0];
+    if(!best)continue;
+    const bestDrop=normName(best.drop||"");
+    let chosen=rows.find(r=>{
+      const d=normName(r.drop||"");
+      return !d||!usedDrops.has(d);
+    })||null;
+
+    if(chosen&&chosen!==best){
+      const penalty=Number(best.score||0)-Number(chosen.score||0);
+      const allowedPenalty=Math.max(1.5,Math.abs(Number(best.score||0))*.18);
+      if(penalty>allowedPenalty)chosen=null;
+    }
+
+    if(!chosen&&bestDrop&&usedDrops.has(bestDrop)){
+      const primary=usedDrops.get(bestDrop);
+      plan.push({
+        ...best,
+        claimRank:plan.length+1,
+        claimRole:"ALTERNATIVE",
+        planRole:"ALTERNATIVE",
+        alternativeTo:primary.add,
+        exclusiveDrop:best.drop,
+      });
+    }else{
+      chosen=chosen||best;
+      const dropKey=normName(chosen.drop||"");
+      const role=plan.length===0?"PRIMARY":"SECONDARY";
+      const item={
+        ...chosen,
+        claimRank:plan.length+1,
+        claimRole:role,
+        planRole:"EXECUTE",
+        exclusiveDrop:chosen.drop||null,
+      };
+      plan.push(item);
+      if(dropKey)usedDrops.set(dropKey,item);
+    }
     if(plan.length>=limit)break;
   }
   return plan;
