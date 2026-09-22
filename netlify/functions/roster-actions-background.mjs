@@ -974,6 +974,8 @@ export function deterministicRosterFallback({
       liveRole:w.liveRole||null,
       tdDependency:w.tdDependency??null,mirageRisk:w.mirageRisk??0,
       roleRatio:w.addRoleRatio??null,forecastSource:w.addSource||null,
+      trajectory:w.trajectory||null,schemeTrend:w.schemeTrend||null,
+      explanation:w.explanation||null,
     });
   }
   const tradePool=(teamState?.tradePosture==="hold_value"
@@ -1279,7 +1281,7 @@ export default async req=>{
       const seasonProfile=seasonTradeProfile[t.rosterId]||{};
       const matchupRow=matchupByRoster.get(Number(t.rosterId));
       return {
-        name:t.name,ownerId:t.ownerId,ownerName:hist.display_name||"",
+        name:t.name,rosterId:t.rosterId,ownerId:t.ownerId,ownerName:hist.display_name||"",
         record:`${t.wins}-${t.losses}`,stance:t.stance,
         holes:t.holes,surplus:t.surplus,
         starters:(matchupRow?.starters||[]).filter(Boolean).map(pid=>pInfo(db,pid).name),
@@ -1414,7 +1416,15 @@ export default async req=>{
     waiverPairs.sort((a,b)=>b.score-a.score);
     const bestWaiverPairs=waiverPairs
       .filter(x=>waiverMoveActionable(x,mode))
-      .slice(0,12);
+      .slice(0,12)
+      .map(x=>{
+        const addPlayer=free.find(p=>normName(p.name)===normName(x.add));
+        const dropPlayer=myRoster.find(p=>normName(p.name)===normName(x.drop));
+        return {
+          ...x,
+          explanation:pickupExplanation({...x,addPlayer,dropPlayer},{mode,positionCounts:myPositionCounts})
+        };
+      });
     const waiverPlan=buildWaiverPlan(bestWaiverPairs,3);
 
     const irCandidates=myRoster
@@ -1697,6 +1707,12 @@ MY WAIVER POSITION: ${me.waiverPosition??"unknown"}
 WAIVER SCHEDULE SETTINGS: ${JSON.stringify(waiverSchedule)}
 TEAM STATE DIAGNOSIS:
 ${JSON.stringify(teamState,null,2)}
+
+RECENT COMPLETED-WEEK REVIEWS:
+${JSON.stringify(weekReviews,null,2)}
+
+MY TRADE BEHAVIOR:
+${JSON.stringify(myTradeBehavior,null,2)}
 ${modeRules}
 
 CURRENT BEST LINEUP:
@@ -1737,14 +1753,17 @@ Hard rules:
 - If a candidate has immediateFreeAgent=true, this league permits the acquisition despite the game already starting. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
 - Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
 - Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
+- For every pickup, compare the add directly with the proposed drop: role trend, targets/carries/share, short-horizon value, and roster construction. Do not recommend a fourth/fifth QB or TE just because the isolated player looks interesting unless the deterministic roster-fit gate says the value is exceptional.
 - If an add needs a roster spot, give an exact drop from MY ROSTER.
 - A trade target must be on the named partner's roster.
 - I can only send assets I actually own.
-- In dynasty, only use the exact pick labels listed under MY ACTUAL PICKS.
+- In dynasty, only use the exact pick labels listed under MY ACTUAL PICKS. Use picks to bridge or shape a trade when that creates a fairer, more manager-plausible package; do not force a pick into every deal.
 - In redraft, never use draft picks.
 - Give at most 5 actions, ordered by importance.
 - Prefer exact packages from DETERMINISTIC EXACT TRADE PACKAGES when one exists. Otherwise use the deterministic target screen.
-- For a trade, explain briefly why the other manager might accept.
+- For a trade, explain briefly why the other manager might accept. Use the named owner's observed trade activity and acquired-position history as a soft plausibility signal.
+- A multi-player offer must survive roster-space reality. If the other manager would need to cut a useful bench player, that hidden cost counts against the offer.
+- If no exact trade package clearly helps me and remains plausible for the other manager, recommend no trade. Creating trade activity is not a goal.
 - In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
 - In redraft, the other manager also needs a credible weekly roster reason to accept.
 - Do not recommend lateral churn.
