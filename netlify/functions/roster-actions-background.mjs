@@ -1790,7 +1790,7 @@ Hard rules:
 - If a candidate has immediateFreeAgent=true, this league uses open free agency and the player is addable NOW. In The Ocho this remains true even after that player's game starts. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
 - Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
 - Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
-- For every pickup, compare the add directly with the proposed drop: role trend, targets/carries/share, short-horizon value, and roster construction. Do not recommend a fourth/fifth QB or TE just because the isolated player looks interesting unless the deterministic roster-fit gate says the value is exceptional.
+- For every pickup, compare the add directly with the proposed drop: role trend, targets/carries/share, short-horizon value, dynasty market value, and roster construction. Before cutting someone, check whether current injuries, depth-chart changes, or coaching comments have just expanded that player's role; a newly opened role should make him harder to drop, not easier. Do not recommend a fourth/fifth QB or TE just because the isolated player looks interesting unless the deterministic roster-fit gate says the value is exceptional.
 - If an add needs a roster spot, give an exact drop from MY ROSTER.
 - A trade target must be on the named partner's roster.
 - I can only send assets I actually own.
@@ -1894,7 +1894,7 @@ Return ONLY valid JSON:
         const explanation=pickupExplanation({
           ...a,addPlayer:addForSim||add,dropPlayer:drop,
           addNext3:actionForecast(addForSim||add,week),dropNext3:drop?.next3,
-          weeklyDelta,depthDelta,stash,pos:add?.pos,dropPos:drop?.pos,
+          weeklyDelta,depthDelta,stash,marketDelta,pos:add?.pos,dropPos:drop?.pos,
           addRoleRatio:add?.roleRatio
         },{mode,positionCounts:myPositionCounts});
         return {
@@ -1906,6 +1906,7 @@ Return ONLY valid JSON:
               : a.headline,
           window:add?.waiverOnly?"NEXT WAIVER RUN":add?.immediateFreeAgent?"NOW":a.window,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
+          movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
           waiverOnly:!!add?.waiverOnly,immediateFreeAgent:!!add?.immediateFreeAgent,
           signalCount:agreement.count,signalAgreement:agreement,
           fastTrending:add?.fastTrending??0,
