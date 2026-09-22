@@ -1829,7 +1829,7 @@ Return ONLY valid JSON:
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
         const depthFit=positionalDepthDecision({
-          mode,add:addForSim,drop,roster:myRoster,activeSlots,weeklyDelta
+          mode,add:addForSim,drop,roster:myRoster,activeSlots,weeklyDelta,depthDelta,marketDelta
         });
         const stream=specialist.mode==="STREAM_SWAP"
           ? specialistScheduleEdge(addForSim,drop,week)
@@ -1853,6 +1853,12 @@ Return ONLY valid JSON:
           fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity,
           mirageRisk:add?.mirageRisk,waiverOnly:add?.waiverOnly
         });
+        const explanation=pickupExplanation({
+          ...a,addPlayer:addForSim||add,dropPlayer:drop,
+          addNext3:actionForecast(addForSim||add,week),dropNext3:drop?.next3,
+          weeklyDelta,depthDelta,stash,pos:add?.pos,dropPos:drop?.pos,
+          addRoleRatio:add?.roleRatio
+        },{mode,positionCounts:myPositionCounts});
         return {
           ...a,
           headline:add?.waiverOnly&&add?.name
@@ -1873,10 +1879,15 @@ Return ONLY valid JSON:
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
           recentPts:add?.recentPts??null,
+          recentTargets:add?.recentTargets??null,baselineTargets:add?.baselineTargets??null,
+          recentCarries:add?.recentCarries??null,baselineCarries:add?.baselineCarries??null,
+          recentTargetShare:add?.recentTargetShare??null,baselineTargetShare:add?.baselineTargetShare??null,
+          trajectory:add?.trajectory||null,schemeTrend:add?.schemeTrend||null,
           providerNext3:add?.providerNext3??null,
           injuryOpportunity:add?.injuryOpportunity||null,
           liveRole:add?.liveRole||null,
           mirageRisk:add?.mirageRisk??0,
+          explanation,
         };
       }
       if(["TRADE_FOR","SELL"].includes(a.type)){
@@ -1890,11 +1901,24 @@ Return ONLY valid JSON:
           removeNames:sentPlayers.map(p=>p.name),addPlayers:gotPlayers
         }),activeSlots);
         const partnerBase=simTotal(partner.players,activeSlots);
+        const partnerStarterSet=new Set((partner.starters||[]).map(normName));
+        const extraPlayerSlots=Math.max(0,sentPlayers.length-gotPlayers.length);
+        const partnerCuts=partner.players
+          .filter(p=>!gotPlayers.some(g=>normName(g.name)===normName(p.name))&&!partnerStarterSet.has(normName(p.name))&&!p.onIR)
+          .sort((a,b)=>{
+            const av=mode==="DYNASTY"?Number(a.market||0):Number(a.tradeTotal||a.next3||0);
+            const bv=mode==="DYNASTY"?Number(b.market||0):Number(b.tradeTotal||b.next3||0);
+            return av-bv;
+          }).slice(0,extraPlayerSlots);
+        if(partnerCuts.length<extraPlayerSlots)return {...a,invalidMath:true};
         const partnerAfter=simTotal(rosterAfter(partner.players,{
-          removeNames:gotPlayers.map(p=>p.name),addPlayers:sentPlayers
+          removeNames:[...gotPlayers.map(p=>p.name),...partnerCuts.map(p=>p.name)],addPlayers:sentPlayers
         }),activeSlots);
         const weeklyDelta=round(myAfter-baselineRosterTotal);
         const partnerWeeklyDelta=round(partnerAfter-partnerBase);
+        const partnerSpaceCost=round(partnerCuts.reduce((sum,p)=>
+          sum+Number(mode==="DYNASTY"?(p.market||0):(p.tradeTotal||p.next3||0)),0
+        ));
         let sendValue=null,receiveValue=null,marketDelta=null;
         let horizonSend=null,horizonReceive=null,tradeRatio=null,tradeEfficient=true,tradeEfficiencyReason=null;
         if(mode==="DYNASTY"){
@@ -1904,21 +1928,30 @@ Return ONLY valid JSON:
             sendValue=sv.reduce((x,y)=>x+y,0);
             receiveValue=rv.reduce((x,y)=>x+y,0);
             marketDelta=receiveValue-sendValue;
-            const fit=dynastyTradeEfficient({sendValue,receiveValue,weeklyDelta,partnerWeeklyDelta});
+            const effectiveReceive=receiveValue+partnerSpaceCost*.35;
+            const fit=dynastyTradeEfficient({sendValue,receiveValue:effectiveReceive,weeklyDelta,partnerWeeklyDelta});
             tradeEfficient=fit.allowed;tradeRatio=fit.ratio;tradeEfficiencyReason=fit.reason;
           }
         }else{
           horizonSend=round(sentPlayers.reduce((s,p)=>s+Number(p.tradeTotal||0),0));
           horizonReceive=round(gotPlayers.reduce((s,p)=>s+Number(p.tradeTotal||0),0));
           const fit=redraftTradeEfficient({
-            sendHorizon:horizonSend,receiveHorizon:horizonReceive,weeklyDelta,partnerWeeklyDelta
+            sendHorizon:horizonSend,receiveHorizon:horizonReceive+partnerSpaceCost*.25,weeklyDelta,partnerWeeklyDelta
           });
           tradeEfficient=fit.allowed;tradeRatio=fit.ratio;tradeEfficiencyReason=fit.reason;
         }
         const primaryGet=gotPlayers[0]||null;
+        const partnerBehavior=partner.behavior||ownerBehaviorSummary(partner.ownerId,seasonTradeProfile[partner.rosterId]||{});
+        const explanation=tradeExplanation({
+          ...a,target:primaryGet?.name||a.receive?.[0]?.name,
+          weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,horizonSend,horizonReceive,
+          tradeTiming:primaryGet?.tradeTiming||roleMarketTiming(primaryGet||{}),
+          partnerCuts,partnerBehavior
+        },{mode,partnerBehavior});
         return {
           ...a,weeklyDelta,partnerWeeklyDelta,sendValue,receiveValue,marketDelta,
           horizonSend,horizonReceive,tradeRatio,tradeEfficient,tradeEfficiencyReason,
+          partnerCuts:partnerCuts.map(p=>({name:p.name,pos:p.pos})),partnerSpaceCost,partnerBehavior,explanation,
           forecastSource:primaryGet?.forecastSource||null,
           roleRatio:primaryGet?.roleRatio??null,
           recentPts:primaryGet?.recentPts??null,
@@ -1988,6 +2021,9 @@ Return ONLY valid JSON:
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
         teamState,
+        weekReviews,
+        myTradeBehavior,
+        positionCounts:myPositionCounts,
         acquisition,
         freeAgentsScreened:free.length,
         waiverPosition:me.waiverPosition??null,
@@ -2007,9 +2043,9 @@ Return ONLY valid JSON:
           name:p.name,pos:p.pos,team:p.team,waiverOnly:p.waiverOnly,
           immediateFreeAgent:p.immediateFreeAgent,liveRole:p.liveRole
         })),
-        rosterConstruction:"redraft specialists default to same-position swaps; duplicate DST only for a near-term bye/schedule hold with a replacement-level drop",
+        rosterConstruction:"specialists default to same-position swaps; duplicate defense only for a near-term bye/schedule hold with a replacement-level drop; extra QB/TE depth must clear a stronger luxury-depth gate",
         noChurnThreshold:"redraft add/drop requires +0.75 pts/week, stream swap +0.35, or a qualified breakout stash",
-        depthProtection:"redraft protects one RB and WR beyond dedicated starting slots unless a cross-position move adds at least 2.5 pts/week",
+        depthProtection:"redraft protects one RB and WR beyond dedicated starting slots; both formats block unnecessary fourth/fifth QB or TE stashes unless the value edge is exceptional",
         gameDayLegality:acquisition.canAddStartedPlayers
           ?"Team Ocho uses open free agency: live RB/WR/TE breakouts can be immediate adds when role evidence clears the actionability screen."
           :"Started players are next-waiver targets only; unlocked free agents can still be added immediately.",
