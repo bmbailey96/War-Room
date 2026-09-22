@@ -2227,6 +2227,30 @@ Return ONLY valid JSON:
           roleExpansion:add?.roleExpansion||null,
           liveRole:add?.liveRole||null,
           mirageRisk:add?.mirageRisk??0,
+          informationConfidence,
+          confidence:informationConfidence==="LIMITED"&&dropSafety.profile?.protected&&a.confidence==="HIGH"
+            ?"MEDIUM":a.confidence,
+          decisionSnapshot:{
+            kind:"PICKUP",week,season,mode,informationConfidence,
+            archetypes:rosterDecisionArchetypes({
+              ...a,movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
+              stash,contingentUpside:add?.contingentUpside,roleExpansion:add?.roleExpansion,
+              trajectory:add?.trajectory,addRoleRatio:add?.roleRatio,liveRole:add?.liveRole,
+              specialistMode:specialist.mode,weeklyDelta,
+              fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity
+            }),
+            add:add?{
+              name:add.name,pos:add.pos,market:add.market??null,next3:actionForecast(addForSim||add,week),
+              replacement:Number(replacementByPos[add.pos]||0),roleRatio:add.roleRatio??1,
+              recentTargetShare:add.recentTargetShare??null,baselineTargetShare:add.baselineTargetShare??null
+            }:null,
+            drop:drop?{
+              name:drop.name,pos:drop.pos,market:drop.market??null,next3:drop.next3??null,
+              replacement:Number(replacementByPos[drop.pos]||0),roleRatio:drop.roleRatio??1,
+              protected:!!dropSafety.profile?.protected
+            }:null,
+            predicted:{weeklyDelta,depthDelta,marketDelta}
+          },
           explanation,
         };
       }
@@ -2300,6 +2324,24 @@ Return ONLY valid JSON:
           sentTradeTiming:sentPlayers.map(p=>({
             name:p.name,...(p.tradeTiming||roleMarketTiming(p))
           })),
+          informationConfidence,
+          decisionSnapshot:{
+            kind:"TRADE",week,season,mode,informationConfidence,
+            archetypes:rosterDecisionArchetypes({
+              type:a.type,tradeTiming:primaryGet?.tradeTiming||roleMarketTiming(primaryGet||{})
+            }),
+            send:(a.send||[]).map(x=>({
+              type:x.type,name:assetName(x),
+              initialValue:mode==="DYNASTY"?dynastyAssetValue(x):null,
+              pos:x.type==="pick"?null:rosterByName.get(normName(assetName(x)))?.pos||null
+            })),
+            receive:(a.receive||[]).map(x=>({
+              type:x.type,name:assetName(x),
+              initialValue:mode==="DYNASTY"?dynastyAssetValue(x):null,
+              pos:x.type==="pick"?null:partner.players.find(p=>normName(p.name)===normName(assetName(x)))?.pos||null
+            })),
+            predicted:{weeklyDelta,partnerWeeklyDelta,marketDelta,sendValue,receiveValue}
+          },
         };
       }
       return a;
@@ -2399,6 +2441,12 @@ Return ONLY valid JSON:
           :"Started players are next-waiver targets only; unlocked free agents can still be added immediately.",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
+        rosterLearning:{
+          samples:Number(rosterLearning.samples||0),
+          archetypes:rosterLearning.archetypes||{},
+          updatedAt:rosterLearning.at||null
+        },
+        informationConfidence,
         trendingSnapshot:trendById,
         fastTrendingSnapshot:fastTrendById,
         freshness:{mode:rosterFreshnessLabel(Date.now()),targetMinutes:Math.round(rosterActionsFreshnessMs(Date.now())/60000)},
