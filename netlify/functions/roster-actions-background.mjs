@@ -822,10 +822,13 @@ export function pickupExplanation(x={},context={}){
     const pts=(recentShare-baselineShare)*100;
     if(Math.abs(pts)>=2)evidence.push(`target share ${pts>0?"up":"down"} ${Math.abs(pts).toFixed(0)} points`);
   }
-  if(Math.abs(role-1)>=.06)evidence.push(`overall workload ${role>1?"up":"down"} ${Math.abs((role-1)*100).toFixed(0)}%`);
+  if(role>=1.06)evidence.push(`overall workload up ${Math.abs((role-1)*100).toFixed(0)}%`);
+  else if(role<=.94&&trajectory==="SLUMPING_ROLE")evidence.push(`overall workload down ${Math.abs((role-1)*100).toFixed(0)}%`);
   if(trajectory==="RISING_ROLE")evidence.push("role is rising before the fantasy scoring has fully followed");
   else if(trajectory==="SLUMPING_ROLE")evidence.push("both role and scoring are trending down");
   else if(trajectory==="SCORING_SLUMP_ROLE_OK")evidence.push("fantasy scoring is down, but the underlying role has held");
+  if(add.roleExpansion?.reason)evidence.push(add.roleExpansion.reason);
+  if(add.contingentUpside?.reason)evidence.push(add.contingentUpside.reason);
   if(scheme?.label)evidence.push(scheme.label.toLowerCase());
 
   const addForecast=Number(x.addNext3??add.next3);
@@ -834,9 +837,12 @@ export function pickupExplanation(x={},context={}){
   const addSentence=evidence.length
     ? `${add.name||x.add} is interesting because ${evidence.slice(0,3).join("; ")}.`
     : `${add.name||x.add} cleared the value screen, but there is not a strong role-trend claim behind it.`;
-  const dropSentence=Number.isFinite(dropForecast)&&Number.isFinite(addForecast)
-    ? `${drop.name||x.drop} is the proposed cut because the short-horizon forecast is ${dropForecast.toFixed(1)} versus ${addForecast.toFixed(1)} for ${add.name||x.add}, after accounting for replacement value.`
-    : `${drop.name||x.drop} is the lowest-cost legal cut among the bench options that were screened.`;
+  const dropSafety=x.dropSafety||null;
+  const dropSentence=dropSafety?.profile?.protected
+    ? `${drop.name||x.drop} normally has a do-not-cut flag because ${dropSafety.profile.reasons.join("; ")}. This move only survives because the incoming upgrade clears that protection threshold.`
+    : Number.isFinite(dropForecast)&&Number.isFinite(addForecast)
+      ? `${drop.name||x.drop} is the proposed cut because he is the lowest-cost safe cut after comparing short-horizon value, dynasty value, role trend, and current opportunity. Base forecast: ${dropForecast.toFixed(1)} versus ${addForecast.toFixed(1)} for ${add.name||x.add}.`
+      : `${drop.name||x.drop} is the lowest-cost safe cut among the bench options that were screened.`;
   const fitSentence=addPos==="TE"||addPos==="QB"
     ? `Roster fit: you have ${addCount} ${addPos}s now; this move would leave you with ${afterAdd}. ${afterAdd>=4?"That is a luxury position count, so the move should only survive if the value edge is exceptional.":"That count is still within the roster-construction guardrail."}`
     : `Roster fit: the move changes ${dropPos} depth into ${addPos} depth without crossing the position-protection rules.`;
