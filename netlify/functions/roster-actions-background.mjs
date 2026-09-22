@@ -1957,8 +1957,12 @@ export default async req=>{
           (targetTiming.code==="BUY_ROLE"?Number(targetTiming.score||0)*1.15:0)-
           (targetTiming.code==="SELL_HIGH"?Number(targetTiming.score||0)*.8:0)+
           sellHighScore*.65-protectedRoleBuyScore*1.15;
+        const tradeLearningTags=rosterDecisionArchetypes({
+          type:"TRADE_FOR",tradeTiming:targetTiming
+        });
+        const tradeLearned=rosterLearningAdjustment(rosterLearning,tradeLearningTags);
         const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+
-          managerFit+timingScore;
+          managerFit+timingScore+tradeLearned.bonus;
         if(!best||score>best.score){
           best={
             score,partner:target.partner,target:target.name,
@@ -1976,6 +1980,8 @@ export default async req=>{
               name:p.name,...(p.tradeTiming||roleMarketTiming(p))
             })),
             timingScore:round(timingScore),
+            learningTags:tradeLearningTags,learningBonus:tradeLearned.bonus,
+            learningEvidence:tradeLearned.evidence,
             partnerCareerTrades:careerTrades,
             partnerSeasonTrades:seasonTrades,
             partnerCuts:partnerCuts.map(p=>({name:p.name,pos:p.pos,value:mode==="DYNASTY"?p.market:(p.tradeTotal||p.next3||0)})),
@@ -2126,6 +2132,7 @@ Return ONLY valid JSON:
     if(!parsed)parsed=deterministicRosterFallback({
       waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct,teamState
     });
+    const informationConfidence=(!coreOnly&&!error)?"FULL":"LIMITED";
 
     let actions=validateActions(parsed.actions,{
       myNames,freeNames,teamPlayers,teamPicks,myPicks:myPickNames,dynasty:mode==="DYNASTY"
@@ -2145,7 +2152,7 @@ Return ONLY valid JSON:
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
         const dropSafety=drop
-          ? dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta})
+          ? dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta,informationConfidence})
           : {allowed:true,profile:null};
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
