@@ -840,7 +840,7 @@ assert.ok(gadsdenProtection>raymondProtection);
 
 const protectedGadsden={
   name:"Young TE",pos:"TE",age:22,market:7,next3:7.7,
-  roleExpansion:{strong:true,names:["Veteran TE 1","Veteran TE 2"]},
+  roleExpansion:{strong:true,names:["Veteran Alpha","Veteran Bravo"]},
   roleRatio:1.04,trajectory:"STABLE"
 };
 assert.equal(dropSafetyDecision(protectedGadsden,{
@@ -1218,14 +1218,14 @@ assert.equal(vacatedOpportunityEdge(profiles["alpha wr"],{
 const teRows=[
   {player_display_name:"Young TE",position:"TE",team:"LAC",week:"1",targets:"2",target_share:"0.05"},
   {player_display_name:"Young TE",position:"TE",team:"LAC",week:"2",targets:"3",target_share:"0.07"},
-  {player_display_name:"Veteran TE 1",position:"TE",team:"LAC",week:"1",targets:"6",target_share:"0.18"},
-  {player_display_name:"Veteran TE 1",position:"TE",team:"LAC",week:"2",targets:"5",target_share:"0.16"},
-  {player_display_name:"Veteran TE 2",position:"TE",team:"LAC",week:"1",targets:"3",target_share:"0.09"},
-  {player_display_name:"Veteran TE 2",position:"TE",team:"LAC",week:"2",targets:"3",target_share:"0.09"},
+  {player_display_name:"Veteran Alpha",position:"TE",team:"LAC",week:"1",targets:"6",target_share:"0.18"},
+  {player_display_name:"Veteran Alpha",position:"TE",team:"LAC",week:"2",targets:"5",target_share:"0.16"},
+  {player_display_name:"Veteran Bravo",position:"TE",team:"LAC",week:"1",targets:"3",target_share:"0.09"},
+  {player_display_name:"Veteran Bravo",position:"TE",team:"LAC",week:"2",targets:"3",target_share:"0.09"},
 ];
 const teProfiles=buildOpportunityProfiles(teRows,[],3);
 const teVacated=buildVacatedOpportunity(
-  teProfiles,new Set(["veteran te 1","veteran te 2"])
+  teProfiles,new Set(["veteran alpha","veteran bravo"])
 );
 const teExpansion=roleExpansionSafety(
   {name:"Young TE",pos:"TE",age:22,recentTargets:2.5},
@@ -1233,7 +1233,7 @@ const teExpansion=roleExpansionSafety(
   teVacated.LAC
 );
 assert.equal(teExpansion.strong,true);
-assert.deepEqual(teExpansion.names.sort(),["Veteran TE 1","Veteran TE 2"].sort());
+assert.deepEqual(teExpansion.names.sort(),["Veteran Alpha","Veteran Bravo"].sort());
 
 const archetypeRows=[
   {player_display_name:"Vertical One",position:"WR",team:"BUF",opponent_team:"NYJ",week:"1",targets:"20",receptions:"14",receiving_yards:"360",receiving_tds:"3",receiving_air_yards:"360"},
