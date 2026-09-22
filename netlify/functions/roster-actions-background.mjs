@@ -729,7 +729,51 @@ export function dropProtectionScore(player={},replacement=0,mode="REDRAFT"){
   return round(score);
 }
 
-export function dropSafetyProfile(player={},mode="REDRAFT"){
+export function rosterDecisionArchetypes(action={}){
+  const tags=[];
+  if(action.movePurpose==="DYNASTY_VALUE")tags.push("DYNASTY_VALUE");
+  if(action.stash)tags.push("STASH");
+  if(action.contingentUpside?.score>=.25)tags.push("CONTINGENT");
+  if(action.roleExpansion?.strong)tags.push("ROLE_EXPANSION");
+  if(action.trajectory==="RISING_ROLE"||Number(action.addRoleRatio||action.roleRatio||1)>=1.08)tags.push("RISING_ROLE");
+  if(action.liveRole?.strong)tags.push("LIVE_ROLE");
+  if(action.specialistMode)tags.push("SPECIALIST");
+  if(Number(action.weeklyDelta||0)>=.75)tags.push("LINEUP_UPGRADE");
+  if(
+    !tags.some(x=>["CONTINGENT","ROLE_EXPANSION","RISING_ROLE","LIVE_ROLE"].includes(x)) &&
+    (Number(action.fastTrending||0)>=15||Number(action.trendVelocity||0)>=8)
+  )tags.push("TRENDING_ONLY");
+  const timing=action.tradeTiming?.code;
+  if(timing==="BUY_LOW")tags.push("TRADE_BUY_LOW");
+  else if(timing==="BUY_ROLE")tags.push("TRADE_BUY_ROLE");
+  else if(timing==="SELL_HIGH")tags.push("TRADE_SELL_HIGH");
+  if(["TRADE_FOR","SELL"].includes(action.type))tags.push("TRADE_GENERAL");
+  return [...new Set(tags.length?tags:["GENERAL"])];
+}
+
+export function rosterLearningAdjustment(model={},tags=[]){
+  const stats=model?.archetypes||{};
+  const usable=(tags||[]).map(tag=>({tag,stat:stats[tag]}))
+    .filter(x=>Number(x.stat?.n||0)>=4);
+  if(!usable.length)return {bonus:0,evidence:[]};
+  let weighted=0,totalWeight=0;
+  const evidence=[];
+  for(const {tag,stat} of usable){
+    const n=Number(stat.n||0);
+    const hit=Number.isFinite(Number(stat.hitRate))?Number(stat.hitRate):.5;
+    const avg=Number.isFinite(Number(stat.avgScore))?Number(stat.avgScore):0;
+    const quality=Math.max(0,Math.min(1,.5+(hit-.5)*.7+avg*.15));
+    const shrink=Math.min(.65,(n-3)/18);
+    const adj=(quality-.5)*5*shrink;
+    const w=Math.min(1.5,.6+n/20);
+    weighted+=adj*w;totalWeight+=w;
+    evidence.push({tag,n,hitRate:hit,avgScore:avg,adjustment:round(adj)});
+  }
+  const bonus=totalWeight?Math.max(-2.5,Math.min(2.5,weighted/totalWeight)):0;
+  return {bonus:round(bonus),evidence};
+}
+
+export function dropSafetyProfile(player={},mode="REDRAFT",informationConfidence="STANDARD"){
   const reasons=[];
   const age=Number(player.age||0);
   const young=age>0&&age<=26;
@@ -755,6 +799,12 @@ export function dropSafetyProfile(player={},mode="REDRAFT"){
   if(young&&(timing==="BUY_LOW"||timing==="BUY_ROLE")){
     reasons.push("current role/market timing says hold or buy, not cut");
   }
+  if(
+    mode==="DYNASTY" && informationConfidence==="LIMITED" &&
+    young && Number(player.market||0)>=6
+  ){
+    reasons.push("live-news coverage is limited, so this young dynasty asset gets an uncertainty buffer");
+  }
 
   const protectedNow=mode==="DYNASTY"&&reasons.length>0;
   let requiredMarketDelta=0,requiredWeeklyDelta=0;
@@ -767,6 +817,10 @@ export function dropSafetyProfile(player={},mode="REDRAFT"){
   }else if(reasons.length){
     requiredMarketDelta=12;requiredWeeklyDelta=2.75;
   }
+  if(informationConfidence==="LIMITED"&&protectedNow){
+    requiredMarketDelta+=2;
+    requiredWeeklyDelta+=.5;
+  }
   return {
     protected:protectedNow,
     reasons,
@@ -777,9 +831,9 @@ export function dropSafetyProfile(player={},mode="REDRAFT"){
 }
 
 export function dropSafetyDecision(player={},{
-  mode="REDRAFT",marketDelta=0,weeklyDelta=0
+  mode="REDRAFT",marketDelta=0,weeklyDelta=0,informationConfidence="STANDARD"
 }={}){
-  const profile=dropSafetyProfile(player,mode);
+  const profile=dropSafetyProfile(player,mode,informationConfidence);
   if(!profile.protected)return {allowed:true,profile};
   const clearsMarket=Number(marketDelta||0)>=profile.requiredMarketDelta;
   const clearsLineup=Number(weeklyDelta||0)>=profile.requiredWeeklyDelta;
@@ -1273,6 +1327,7 @@ export default async req=>{
       j(`https://api.sleeper.app/v1/stats/nfl/regular/${season}/${week}`).catch(()=>({})),
       allPlayHistory(s,chosen.id,week)
     ]);
+    const rosterLearning=await s.get(`roster_learning_${chosen.id}`,{type:"json"}).catch(()=>null)||{};
     const allPlay=buildAllPlayMetrics(historicalMatchups,me.rosterId,me.wins);
     const teamState=diagnoseTeamState(snapshot.teams,me,{allPlay});
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
@@ -1494,7 +1549,7 @@ export default async req=>{
     const drops=dropPool
       .map(p=>({
         ...p,
-        dropProtection:dropSafetyProfile(p,mode),
+        dropProtection:dropSafetyProfile(p,mode,coreOnly?"LIMITED":"STANDARD"),
         dropScore:dropProtectionScore(p,Number(replacementByPos[p.pos]||0),mode)
       }))
       .sort((a,b)=>a.dropScore-b.dropScore).slice(0,12);
@@ -1575,7 +1630,10 @@ export default async req=>{
         const weeklyDelta=round(after-baselineRosterTotal);
         const marketDelta=mode==="DYNASTY"&&add.market!=null&&drop.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
-        const dropSafety=dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta});
+        const dropSafety=dropSafetyDecision(drop,{
+          mode,marketDelta,weeklyDelta,
+          informationConfidence:coreOnly?"LIMITED":"STANDARD"
+        });
         if(!dropSafety.allowed)continue;
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
@@ -1625,10 +1683,21 @@ export default async req=>{
           mirageRisk:add.mirageRisk,waiverOnly:add.waiverOnly
         });
         const agreementBonus=Math.max(0,agreement.count-1)*1.1;
-        const score=mode==="DYNASTY"
+        const movePurpose=mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5
+          ?"DYNASTY_VALUE":stash?"STASH":"LINEUP";
+        const learningTags=rosterDecisionArchetypes({
+          movePurpose,stash,contingentUpside:add.contingentUpside,
+          roleExpansion:add.roleExpansion,trajectory:add.trajectory,
+          addRoleRatio:add.roleRatio,liveRole:add.liveRole,
+          specialistMode:specialist.mode,weeklyDelta,
+          fastTrending:add.fastTrending,trendVelocity:add.trendVelocity
+        });
+        const learned=rosterLearningAdjustment(rosterLearning,learningTags);
+        const score=(mode==="DYNASTY"
           ? weeklyDelta*4+(marketDelta??0)*.7+depthDelta*.8+(add.screenScore-drop.dropScore)*.10+
             injurySignal*.5+contingencySignal*2+expansionSignal*2+agreementBonus
-          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2+agreementBonus;
+          : weeklyDelta*8+depthDelta*2.5+breakoutScore*1.5+specialistBonus+injurySignal*1.2+agreementBonus)
+          +learned.bonus;
         waiverPairs.push({
           add:add.name,drop:drop.name,pos:add.pos,dropPos:drop.pos,
           specialistMode:specialist.mode,
@@ -1637,7 +1706,7 @@ export default async req=>{
           dropSafety,
           dropSafety,dropProtectionScore:drop.dropScore,
           weeklyDelta,depthDelta,breakoutScore,stash,marketDelta,
-          movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
+          movePurpose,learningTags,learningBonus:learned.bonus,learningEvidence:learned.evidence,
           score:round(score),addNext3:actionForecast(add,week),dropNext3:drop.next3,
           addMarket:add.market,dropMarket:drop.market,trending:add.trending,
           fastTrending:add.fastTrending??0,
@@ -1888,8 +1957,12 @@ export default async req=>{
           (targetTiming.code==="BUY_ROLE"?Number(targetTiming.score||0)*1.15:0)-
           (targetTiming.code==="SELL_HIGH"?Number(targetTiming.score||0)*.8:0)+
           sellHighScore*.65-protectedRoleBuyScore*1.15;
+        const tradeLearningTags=rosterDecisionArchetypes({
+          type:"TRADE_FOR",tradeTiming:targetTiming
+        });
+        const tradeLearned=rosterLearningAdjustment(rosterLearning,tradeLearningTags);
         const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+
-          managerFit+timingScore;
+          managerFit+timingScore+tradeLearned.bonus;
         if(!best||score>best.score){
           best={
             score,partner:target.partner,target:target.name,
@@ -1907,6 +1980,8 @@ export default async req=>{
               name:p.name,...(p.tradeTiming||roleMarketTiming(p))
             })),
             timingScore:round(timingScore),
+            learningTags:tradeLearningTags,learningBonus:tradeLearned.bonus,
+            learningEvidence:tradeLearned.evidence,
             partnerCareerTrades:careerTrades,
             partnerSeasonTrades:seasonTrades,
             partnerCuts:partnerCuts.map(p=>({name:p.name,pos:p.pos,value:mode==="DYNASTY"?p.market:(p.tradeTotal||p.next3||0)})),
@@ -2057,6 +2132,7 @@ Return ONLY valid JSON:
     if(!parsed)parsed=deterministicRosterFallback({
       waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct,teamState
     });
+    const informationConfidence=(!coreOnly&&!error)?"FULL":"LIMITED";
 
     let actions=validateActions(parsed.actions,{
       myNames,freeNames,teamPlayers,teamPicks,myPicks:myPickNames,dynasty:mode==="DYNASTY"
@@ -2076,7 +2152,7 @@ Return ONLY valid JSON:
         const marketDelta=mode==="DYNASTY"&&add?.market!=null&&drop?.market!=null?add.market-drop.market:null;
         const depthDelta=round(marginal(add)-marginal(drop));
         const dropSafety=drop
-          ? dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta})
+          ? dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta,informationConfidence})
           : {allowed:true,profile:null};
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
@@ -2151,6 +2227,30 @@ Return ONLY valid JSON:
           roleExpansion:add?.roleExpansion||null,
           liveRole:add?.liveRole||null,
           mirageRisk:add?.mirageRisk??0,
+          informationConfidence,
+          confidence:informationConfidence==="LIMITED"&&dropSafety.profile?.protected&&a.confidence==="HIGH"
+            ?"MEDIUM":a.confidence,
+          decisionSnapshot:{
+            kind:"PICKUP",week,season,mode,informationConfidence,
+            archetypes:rosterDecisionArchetypes({
+              ...a,movePurpose:mode==="DYNASTY"&&Number(marketDelta||0)>=6&&weeklyDelta<.5?"DYNASTY_VALUE":stash?"STASH":"LINEUP",
+              stash,contingentUpside:add?.contingentUpside,roleExpansion:add?.roleExpansion,
+              trajectory:add?.trajectory,addRoleRatio:add?.roleRatio,liveRole:add?.liveRole,
+              specialistMode:specialist.mode,weeklyDelta,
+              fastTrending:add?.fastTrending,trendVelocity:add?.trendVelocity
+            }),
+            add:add?{
+              name:add.name,pos:add.pos,market:add.market??null,next3:actionForecast(addForSim||add,week),
+              replacement:Number(replacementByPos[add.pos]||0),roleRatio:add.roleRatio??1,
+              recentTargetShare:add.recentTargetShare??null,baselineTargetShare:add.baselineTargetShare??null
+            }:null,
+            drop:drop?{
+              name:drop.name,pos:drop.pos,market:drop.market??null,next3:drop.next3??null,
+              replacement:Number(replacementByPos[drop.pos]||0),roleRatio:drop.roleRatio??1,
+              protected:!!dropSafety.profile?.protected
+            }:null,
+            predicted:{weeklyDelta,depthDelta,marketDelta}
+          },
           explanation,
         };
       }
@@ -2224,6 +2324,24 @@ Return ONLY valid JSON:
           sentTradeTiming:sentPlayers.map(p=>({
             name:p.name,...(p.tradeTiming||roleMarketTiming(p))
           })),
+          informationConfidence,
+          decisionSnapshot:{
+            kind:"TRADE",week,season,mode,informationConfidence,
+            archetypes:rosterDecisionArchetypes({
+              type:a.type,tradeTiming:primaryGet?.tradeTiming||roleMarketTiming(primaryGet||{})
+            }),
+            send:(a.send||[]).map(x=>({
+              type:x.type,name:assetName(x),
+              initialValue:mode==="DYNASTY"?dynastyAssetValue(x):null,
+              pos:x.type==="pick"?null:rosterByName.get(normName(assetName(x)))?.pos||null
+            })),
+            receive:(a.receive||[]).map(x=>({
+              type:x.type,name:assetName(x),
+              initialValue:mode==="DYNASTY"?dynastyAssetValue(x):null,
+              pos:x.type==="pick"?null:partner.players.find(p=>normName(p.name)===normName(assetName(x)))?.pos||null
+            })),
+            predicted:{weeklyDelta,partnerWeeklyDelta,marketDelta,sendValue,receiveValue}
+          },
         };
       }
       return a;
@@ -2323,6 +2441,12 @@ Return ONLY valid JSON:
           :"Started players are next-waiver targets only; unlocked free agents can still be added immediately.",
         deterministicTradeTargets:bestTradeTargets.slice(0,8),
         deterministicTrades:deterministicTrades.slice(0,5),
+        rosterLearning:{
+          samples:Number(rosterLearning.samples||0),
+          archetypes:rosterLearning.archetypes||{},
+          updatedAt:rosterLearning.at||null
+        },
+        informationConfidence,
         trendingSnapshot:trendById,
         fastTrendingSnapshot:fastTrendById,
         freshness:{mode:rosterFreshnessLabel(Date.now()),targetMinutes:Math.round(rosterActionsFreshnessMs(Date.now())/60000)},

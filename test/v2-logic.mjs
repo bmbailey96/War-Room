@@ -533,7 +533,8 @@ console.log("Current front-seven and run-blocking personnel checks passed");
 
 
 const {
-  microEdge,microReliability,microWeightFromStat,fitMicroWeights
+  microEdge,microReliability,microWeightFromStat,fitMicroWeights,
+  rosterOutcomeScore,aggregateRosterLearning
 } = await import("../netlify/functions/learn.mjs");
 
 const structuralWeights={role:.28,matchup:.25,environment:.35,scheme:.22};
@@ -715,9 +716,65 @@ console.log("Redraft specialist roster-construction and no-churn checks passed")
 
 const {
   positionalDepthDecision,pickupExplanation,positionCounts,dropProtectionScore,
-  dropSafetyDecision,buildContingentOpportunity,
+  dropSafetyDecision,buildContingentOpportunity,rosterDecisionArchetypes,rosterLearningAdjustment,
   completedWeekReviews,buildTeamSchemeTrends,ownerBehaviorSummary,tradeExplanation
 } = await import("../netlify/functions/roster-actions-background.mjs");
+
+const oneWeekOutcome=rosterOutcomeScore({
+  mode:"DYNASTY",horizon:1,
+  addPoints:14,dropPoints:6,addReplacement:7,dropReplacement:7,
+  initialAddMarket:20,initialDropMarket:8,currentAddMarket:24,currentDropMarket:7
+});
+assert.ok(oneWeekOutcome.score>.5);
+assert.equal(oneWeekOutcome.hit,true);
+
+const churnOutcome=rosterOutcomeScore({
+  mode:"REDRAFT",horizon:3,
+  addPoints:15,dropPoints:15,addReplacement:5,dropReplacement:5
+});
+assert.ok(churnOutcome.score<0);
+assert.equal(churnOutcome.unnecessaryChurn,true);
+
+const rosterLearn=aggregateRosterLearning([
+  {decisionId:"a",horizon:3,score:.6,archetypes:["CONTINGENT"]},
+  {decisionId:"b",horizon:3,score:.4,archetypes:["CONTINGENT"]},
+  {decisionId:"c",horizon:3,score:.5,archetypes:["CONTINGENT"]},
+  {decisionId:"d",horizon:3,score:.7,archetypes:["CONTINGENT"]},
+]);
+assert.equal(rosterLearn.samples,4);
+assert.equal(rosterLearn.archetypes.CONTINGENT.n,4);
+assert.equal(rosterLearn.archetypes.CONTINGENT.hitRate,1);
+
+const learnedBoost=rosterLearningAdjustment({
+  archetypes:{CONTINGENT:{n:4,hitRate:1,avgScore:.55}}
+},["CONTINGENT"]);
+assert.ok(learnedBoost.bonus>0);
+assert.equal(rosterLearningAdjustment({
+  archetypes:{CONTINGENT:{n:3,hitRate:1,avgScore:.9}}
+},["CONTINGENT"]).bonus,0);
+
+const archetypes=rosterDecisionArchetypes({
+  movePurpose:"DYNASTY_VALUE",stash:true,
+  contingentUpside:{score:.6},trajectory:"RISING_ROLE",
+  weeklyDelta:0,fastTrending:40
+});
+assert.ok(archetypes.includes("DYNASTY_VALUE"));
+assert.ok(archetypes.includes("CONTINGENT"));
+assert.ok(archetypes.includes("RISING_ROLE"));
+assert.equal(archetypes.includes("TRENDING_ONLY"),false);
+
+const uncertaintyAsset={name:"Young WR",pos:"WR",age:23,market:8,next3:7,trajectory:"STABLE"};
+assert.equal(dropSafetyDecision(uncertaintyAsset,{
+  mode:"DYNASTY",marketDelta:8,weeklyDelta:.2,informationConfidence:"STANDARD"
+}).allowed,true);
+const uncertaintyDecision=dropSafetyDecision(uncertaintyAsset,{
+  mode:"DYNASTY",marketDelta:8,weeklyDelta:.2,informationConfidence:"LIMITED"
+});
+assert.equal(uncertaintyDecision.allowed,false);
+assert.match(uncertaintyDecision.reason,/live-news coverage is limited/i);
+
+console.log("Roster outcome learning and uncertainty-aware safety checks passed");
+
 
 let depthFit=positionalDepthDecision({
   mode:"REDRAFT",
@@ -1048,9 +1105,9 @@ const {
   ROSTER_ACTIONS_CACHE_VERSION,rosterActionsCacheKey,rosterActionsLockKey,
   rosterActionsFreshnessMs,rosterFreshnessLabel
 } = await import("../netlify/functions/lib/roster-cache.mjs");
-assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v12");
-assert.equal(rosterActionsCacheKey("123"),"roster_actions_v12_123");
-assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v12_123");
+assert.equal(ROSTER_ACTIONS_CACHE_VERSION,"v13");
+assert.equal(rosterActionsCacheKey("123"),"roster_actions_v13_123");
+assert.equal(rosterActionsLockKey("123"),"roster_actions_refresh_v13_123");
 const sundayNoon=Date.parse("2026-09-20T18:00:00Z");
 const wednesdayNoon=Date.parse("2026-09-23T18:00:00Z");
 assert.equal(rosterActionsFreshnessMs(sundayNoon),6*60*1000);
