@@ -722,8 +722,74 @@ export function dropProtectionScore(player={},replacement=0,mode="REDRAFT"){
   score+=Math.min(10,injuryEdge*1.4);
   score+=Math.min(5,shareGain*.45);
   if(timing==="BUY_LOW"||timing==="BUY_ROLE")score+=4;
+  if(player.roleExpansion?.strong)score+=12;
+  else if(player.roleExpansion)score+=6;
+  if(player.contingentUpside?.score)score+=Math.min(6,Number(player.contingentUpside.score)*7);
   if(mode==="DYNASTY"&&age>0&&age<=25)score+=(26-age)*1.25;
   return round(score);
+}
+
+export function dropSafetyProfile(player={},mode="REDRAFT"){
+  const reasons=[];
+  const age=Number(player.age||0);
+  const young=age>0&&age<=26;
+  const injuryEdge=player.injuryOpportunity?.applied?Number(player.injuryOpportunity.edgePct||0):0;
+  const shareGain=(Number(player.recentTargetShare||0)-Number(player.baselineTargetShare||0))*100;
+  const role=Number(player.roleRatio||1);
+  const timing=player.tradeTiming?.code||null;
+
+  if(player.roleExpansion?.strong){
+    reasons.push(`same-position vacancies just opened: ${(player.roleExpansion.names||[]).join(" / ")}`);
+  }else if(injuryEdge>=4){
+    reasons.push(`current teammate absences create +${injuryEdge.toFixed(1)}% opportunity`);
+  }
+  if(young&&player.trajectory==="RISING_ROLE"&&role>=1.06){
+    reasons.push("young player with a rising role");
+  }
+  if(young&&shareGain>=4){
+    reasons.push(`target share is up ${shareGain.toFixed(0)} points`);
+  }
+  if(player.contingentUpside?.score>=.45){
+    reasons.push(player.contingentUpside.reason);
+  }
+  if(young&&(timing==="BUY_LOW"||timing==="BUY_ROLE")){
+    reasons.push("current role/market timing says hold or buy, not cut");
+  }
+
+  const protectedNow=mode==="DYNASTY"&&reasons.length>0;
+  let requiredMarketDelta=0,requiredWeeklyDelta=0;
+  if(player.roleExpansion?.strong){
+    requiredMarketDelta=15;requiredWeeklyDelta=3.5;
+  }else if(injuryEdge>=4){
+    requiredMarketDelta=14;requiredWeeklyDelta=3.0;
+  }else if(player.contingentUpside?.score>=.45){
+    requiredMarketDelta=11;requiredWeeklyDelta=2.5;
+  }else if(reasons.length){
+    requiredMarketDelta=12;requiredWeeklyDelta=2.75;
+  }
+  return {
+    protected:protectedNow,
+    reasons,
+    requiredMarketDelta,
+    requiredWeeklyDelta,
+    label:protectedNow?"DO NOT CUT YET":"CUTTABLE"
+  };
+}
+
+export function dropSafetyDecision(player={},{
+  mode="REDRAFT",marketDelta=0,weeklyDelta=0
+}={}){
+  const profile=dropSafetyProfile(player,mode);
+  if(!profile.protected)return {allowed:true,profile};
+  const clearsMarket=Number(marketDelta||0)>=profile.requiredMarketDelta;
+  const clearsLineup=Number(weeklyDelta||0)>=profile.requiredWeeklyDelta;
+  return {
+    allowed:clearsMarket||clearsLineup,
+    profile,
+    reason:(clearsMarket||clearsLineup)
+      ? null
+      : `protected drop: ${profile.reasons.join("; ")}; require at least +${profile.requiredMarketDelta} dynasty market value or +${profile.requiredWeeklyDelta.toFixed(1)} points/week before cutting him`
+  };
 }
 
 export function pickupExplanation(x={},context={}){
