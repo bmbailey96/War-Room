@@ -19,11 +19,11 @@ export function leagueRuleProfile(league={}) {
   // Prefer the stable Sleeper league id. The name fallback keeps older/test
   // fixtures working if the id is absent, but renaming the live league no
   // longer changes transaction behavior.
-  if(id===OCHO_LEAGUE_ID || (!id&&/ocho/i.test(name))){
+  if(id===OCHO_LEAGUE_ID || /\bocho\b/i.test(name)){
     return {
       acquisitionMode:"OPEN_FA",
       canAddStartedPlayers:true,
-      source:id===OCHO_LEAGUE_ID?"USER_CONFIRMED_ID":"USER_CONFIRMED_NAME_FALLBACK"
+      source:id===OCHO_LEAGUE_ID?"USER_CONFIRMED_ID":"USER_CONFIRMED_OCHO_NAME"
     };
   }
 
