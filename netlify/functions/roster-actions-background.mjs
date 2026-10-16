@@ -9,7 +9,7 @@ import {
   rosterActionsCacheKey,rosterActionsLockKey,rosterActionsFreshnessMs,rosterFreshnessLabel
 } from "./lib/roster-cache.mjs";
 import lineup, {
-  scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean,easternKickoffMs
+  scoreSleeperProjection,optimize,fantasyPoints,parseCsv,usage,weightedMean,easternKickoffMs,byeTeamsFromGames
 } from "./lineup.mjs";
 import { detectLeagueMode,validateActions,acquisitionPolicy,waiverScheduleFromSettings } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
@@ -571,6 +571,28 @@ async function projectionMap(season,week,league,db){
   }
   return out;
 }
+// Provider projections omit bye games. Explicit zeroes must count in the
+// roster's 3- and 6-week averages or waiver/trade math inflates bye players.
+export function applyByeWeeksToProjections(projections,db,gamesCsv,season,week){
+  const rows=parseCsv(gamesCsv,["season","week","game_type","home_team","away_team"]);
+  const weeks=Array.from({length:6},(_,i)=>week+i).filter(w=>w<=18);
+  const byes=new Map(weeks.map(w=>[w,byeTeamsFromGames(rows,season,w)]));
+  for(const [pid,rec] of Object.entries(projections||{})){
+    const team=normTeam(pInfo(db,pid).team);
+    if(!team)continue;
+    for(const w of weeks){
+      if(byes.get(w)?.has(team))rec.weeks[w]=0;
+    }
+    const first3=weeks.slice(0,3).map(w=>rec.weeks[w]).filter(v=>v!=null);
+    const six=weeks.map(w=>rec.weeks[w]).filter(v=>v!=null);
+    rec.avg=first3.length?round(first3.reduce((a,b)=>a+b,0)/first3.length):0;
+    rec.tradeAvg=six.length?round(six.reduce((a,b)=>a+b,0)/six.length):rec.avg;
+    rec.tradeTotal=round(six.reduce((a,b)=>a+b,0));
+    rec.tradeWeeks=six.length;
+  }
+  return projections;
+}
+
 function playerView(pid,db,proj,formMap={},gameLocks={},injuryMap={}){
   const p=pInfo(db,pid);
   const key=normName(p.name);
@@ -1330,6 +1352,7 @@ export default async req=>{
     const rosterLearning=await s.get(`roster_learning_${chosen.id}`,{type:"json"}).catch(()=>null)||{};
     const allPlay=buildAllPlayMetrics(historicalMatchups,me.rosterId,me.wins);
     const teamState=diagnoseTeamState(snapshot.teams,me,{allPlay});
+    applyByeWeeksToProjections(proj,db,gamesCsv,season,week);
     const gameLocks=buildTeamGameLocks(gamesCsv,season,week,Date.now());
     const officialInjuries=currentOfficialInjuries(injuryCsv,week);
     const formMap=formContext?.map||{};

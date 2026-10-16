@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
+  byeTeamsFromGames, eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence,
   projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, lineupCallDrivers, hardUnavailable,
   matchupExposureFor, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall,
   buildStrategicTiebreaks
@@ -53,6 +53,23 @@ assert.equal(solved.total,29);
 assert.deepEqual(solved.picked.map(x=>x.player?.pid),["B","A"]);
 
 console.log("Exact assignment optimizer check passed");
+
+// Week 6 has four teams on bye; only a complete NFL season schedule can
+// identify them. Never mark a player on bye from a partial/failed feed.
+const nflTeams=["ARI","ATL","BAL","BUF","CAR","CHI","CIN","CLE","DAL","DEN","DET","GB","HOU","IND","JAX","KC","LAC","LAR","LV","MIA","MIN","NE","NO","NYG","NYJ","PHI","PIT","SEA","SF","TB","TEN","WAS"];
+const fullSchedule=[
+  ...Array.from({length:16},(_,i)=>({season:"2026",week:"1",game_type:"REG",home_team:nflTeams[i*2],away_team:nflTeams[i*2+1]})),
+  ...Array.from({length:14},(_,i)=>({season:"2026",week:"6",game_type:"REG",home_team:nflTeams[i*2],away_team:nflTeams[i*2+1]})),
+];
+assert.deepEqual([...byeTeamsFromGames(fullSchedule,2026,6)].sort(),nflTeams.slice(28).sort());
+assert.equal(byeTeamsFromGames(fullSchedule,2026,1).size,0);
+assert.equal(byeTeamsFromGames(fullSchedule.slice(0,8),2026,6).size,0);
+const byePlayer={pid:"BYE",slot:"RB",eligibleSlots:["RB"],projection:0,out:true,bye:true,locked:false};
+const activePlayer={pid:"LIVE",slot:"RB",eligibleSlots:["RB"],projection:8,out:false,locked:false};
+assert.equal(optimize([byePlayer,activePlayer],["RB"],[]).picked[0].player.pid,"LIVE");
+assert.equal(optimize([byePlayer],["RB"],[]).picked[0].player,null);
+console.log("Bye-week and incomplete-schedule checks passed");
+
 
 
 assert.equal(confidence(5, null, false), "HIGH");
@@ -182,7 +199,18 @@ assert.equal(offlineLineup.calls[0].start,"Healthy Starter");
 assert.equal(offlineLineup.calls[0].drivers[0],"projection_only");
 assert.ok(offlineLineup.watch[0].includes("Questionable Player"));
 
-const { deterministicRosterFallback,waiverMoveActionable } = await import("../netlify/functions/roster-actions-background.mjs");
+const { deterministicRosterFallback,waiverMoveActionable,applyByeWeeksToProjections } = await import("../netlify/functions/roster-actions-background.mjs");
+const scheduleCsv="season,week,game_type,home_team,away_team\n"+fullSchedule.map(g=>[g.season,g.week,g.game_type,g.home_team,g.away_team].join(",")).join("\n");
+const projectionWithBye={P1:{weeks:{6:10,7:14,8:12},avg:12,tradeAvg:12,tradeTotal:36,tradeWeeks:3}};
+applyByeWeeksToProjections(projectionWithBye,{P1:{n:"Example WR",p:"WR",fp:["WR"],t:"TEN"}},scheduleCsv,2026,6);
+assert.equal(projectionWithBye.P1.weeks[6],0);
+assert.equal(projectionWithBye.P1.avg,8.7);
+assert.equal(projectionWithBye.P1.tradeTotal,26);
+const incompleteBye={P1:{weeks:{6:10,7:14,8:12},avg:12,tradeAvg:12,tradeTotal:36,tradeWeeks:3}};
+applyByeWeeksToProjections(incompleteBye,{P1:{n:"Example WR",p:"WR",fp:["WR"],t:"TEN"}},scheduleCsv.split("\n").slice(0,6).join("\n"),2026,6);
+assert.equal(incompleteBye.P1.weeks[6],10);
+console.log("Bye-aware roster valuation checks passed");
+
 const priorityFallback = deterministicRosterFallback({
   mode:"REDRAFT",usesFaab:false,
   waivers:[{add:"Free Agent",drop:"Bench Guy",weeklyDelta:1.8,marketDelta:null,trending:250}],
@@ -412,6 +440,27 @@ const noLockedFlex=lateSwapFlexMoves([
   {slot:"FLEX",player:flexEarly},
 ]);
 assert.equal(noLockedFlex.length,0);
+
+// Three FLEX slots are distinct lineup rows, not a boolean membership.
+const additionalEarly={pid:"F3",name:"Second Early WR",slot:"WR",eligibleSlots:["WR"],projection:9,kickoffAt:"2026-09-20T18:00:00.000Z",locked:false,out:false};
+const additionalLate={pid:"F4",name:"Already Flexed Late WR",slot:"WR",eligibleSlots:["WR"],projection:12,kickoffAt:"2026-09-20T23:20:00.000Z",locked:false,out:false};
+const threeFlexMoves=lateSwapFlexMoves([
+  {slot:"WR",player:wrLate},
+  {slot:"FLEX",player:flexEarly},
+  {slot:"FLEX",player:additionalEarly},
+  {slot:"FLEX",player:additionalLate},
+]);
+assert.equal(threeFlexMoves.length,1); // The two early flex slots cannot both claim the same WR.
+assert.equal(threeFlexMoves[0].positionPlayerPid,"F2");
+assert.equal(threeFlexMoves.some(x=>x.positionPlayerPid==="F4"),false); // Already in FLEX.
+const correctFlex=lateSwapFlexMoves([
+  {slot:"WR",player:flexEarly},
+  {slot:"FLEX",player:wrLate},
+  {slot:"FLEX",player:additionalEarly},
+  {slot:"FLEX",player:additionalLate},
+]);
+assert.equal(correctFlex.length,0);
+assert.equal(lateSwapFlexMoves([{slot:"WR",player:wrLate},{slot:"FLEX",player:{...flexEarly,out:true,bye:true}}]).length,0);
 
 console.log("Late-swap and flex-preservation checks passed");
 

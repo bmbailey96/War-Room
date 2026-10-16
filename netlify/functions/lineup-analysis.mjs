@@ -73,6 +73,8 @@ export function deterministicAnalysis(data) {
   return {
     summary:topAction
       ? `Start ${topAction.start}${topAction.sit?` over ${topAction.sit}`:""}.`
+      : (data.unfilledSlots||[]).length
+        ? `Unfilled ${data.unfilledSlots.join(" / ")} slot. Find an available starter.`
       : topLean
         ? `Hold the lineup. ${topLean.start} over ${topLean.sit||"the current option"} is only a lean.`
         : "Keep the lineup as it is.",
@@ -160,8 +162,8 @@ export default async req => {
       name:p.name,actual:p.actual,team:p.team,kickoffAt:p.kickoffAt
     }));
     const unavailable=(data.players||[])
-      .filter(p=>p.availability==="UNAVAILABLE")
-      .map(p=>({name:p.name,status:p.injury,injury:p.injuryDetail,practice:p.practiceStatus}));
+      .filter(p=>p.availability==="UNAVAILABLE"||p.availability==="BYE")
+      .map(p=>({name:p.name,status:p.bye?"BYE WEEK":p.injury,injury:p.injuryDetail,practice:p.practiceStatus}));
     const learnedDrivers=reasoningModel?.drivers||{};
 
     const prompt=`You are the final sit/start editor for one fantasy football roster. The projection engine below is deterministic and is the default answer. Your job is NOT to make a second projection model or invent a different number. Use web search for current, dated information from this week: injury/practice reports, confirmed role or depth-chart changes, coach statements, expected limitations, inactives, major scheme changes, and game-day weather when wind/precipitation/temperature is material enough to change passing, kicking, or ball-security expectations.
@@ -181,6 +183,9 @@ ${JSON.stringify(bench,null,2)}
 
 PLAYERS ALREADY LOCKED ON THE BENCH:
 ${JSON.stringify(lockedBench,null,2)}
+
+UNFILLED STARTER SLOTS (MUST FIND A REPLACEMENT):
+${JSON.stringify(data.unfilledSlots||[],null,2)}
 
 PLAYERS UNAVAILABLE THIS WEEK:
 ${JSON.stringify(unavailable,null,2)}
@@ -212,7 +217,8 @@ Rules:
 15. VACATED OPPORTUNITY is a conservative redistribution of historical targets/carries from teammates who are currently unavailable. It is already applied when marked APPLIED. Do not add another injury bump on top unless current reporting provides specific new role information.
 16. Never claim a defender will shadow a receiver unless current reporting actually says so.
 17. Never claim you found news you did not actually find.
-18. Keep this brutally scannable.
+18. If any starting slot is unfilled, explicitly warn about the missing starter rather than saying to hold the lineup.
+19. Keep this brutally scannable.
 
 Return ONLY valid JSON:
 {

@@ -179,7 +179,8 @@ export default async req=>{
     const win=matchupProbability(mine,opponent);
     const posture=win>=.65?"protect_floor":win<=.35?"chase_ceiling":"neutral";
     const decisions=callRows(myCurrent,myOptimal,myPlayers,posture);
-    const flexMoves=lateSwapFlexMoves(myOptimal.picked);
+    // Advise swaps from live Sleeper occupancy, not from an equivalent solved slot order.
+    const flexMoves=lateSwapFlexMoves(myCurrent);
 
     const allPlayers=[...myPlayers,...oppPlayers];
     const anyLive=allPlayers.some(p=>p.locked&&!p.complete);
