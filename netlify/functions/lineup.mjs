@@ -411,6 +411,24 @@ async function matchupPointHistory(stateStore, league, week, season) {
   return {current:current.points||{},prior:prior?.points||{}};
 }
 
+// Derive team byes from a complete season schedule, never from missing
+// projections or a transient failed feed. NFL bye weeks have no matchup.
+function byeTeamsFromGames(gameRows, season, week) {
+  const seasonTeams=new Set(),playingTeams=new Set();
+  let thisWeekGames=0;
+  for(const game of gameRows||[]){
+    if(num(game.season)!==season || (game.game_type && game.game_type!=="REG"))continue;
+    const home=normTeam(game.home_team),away=normTeam(game.away_team);
+    if(!home||!away)continue;
+    seasonTeams.add(home);seasonTeams.add(away);
+    if(num(game.week)===week){
+      playingTeams.add(home);playingTeams.add(away);thisWeekGames++;
+    }
+  }
+  if(seasonTeams.size<30 || thisWeekGames<10)return new Set();
+  return new Set([...seasonTeams].filter(team=>!playingTeams.has(team)));
+}
+
 function eligibility(slot, player) {
   if (!player) return false;
   const eligible = new Set([player.slot, ...(player.eligibleSlots || [])].filter(Boolean));
@@ -612,40 +630,38 @@ function playerKickoffMs(player) {
 
 function lateSwapFlexMoves(picked=[]) {
   const flexible=new Set(["FLEX","REC_FLEX","SUPER_FLEX"]);
-  const moves=[];
   const rows=picked.map((x,i)=>({...x,index:i}));
+  const candidates=[];
 
+  // Only propose swaps between actual, unlocked occupied slots. With three
+  // FLEX positions, each player/slot can appear in at most one instruction.
   for(const flexRow of rows){
-    if(!flexible.has(flexRow.slot) || !flexRow.player || flexRow.player.locked)continue;
+    if(!flexible.has(flexRow.slot) || !flexRow.player || flexRow.player.locked || flexRow.player.out || flexRow.player.bye)continue;
     const flexKick=playerKickoffMs(flexRow.player);
     if(flexKick==null)continue;
-
-    let best=null;
     for(const posRow of rows){
-      if(posRow.index===flexRow.index || flexible.has(posRow.slot) || !posRow.player || posRow.player.locked)continue;
+      if(posRow.index===flexRow.index || flexible.has(posRow.slot) || !posRow.player || posRow.player.locked || posRow.player.out || posRow.player.bye)continue;
       const posKick=playerKickoffMs(posRow.player);
       if(posKick==null || posKick-flexKick<30*60*1000)continue;
-      if(!eligibility(flexRow.slot,posRow.player))continue;
-      if(!eligibility(posRow.slot,flexRow.player))continue;
-
+      if(!eligibility(flexRow.slot,posRow.player) || !eligibility(posRow.slot,flexRow.player))continue;
       const gainMinutes=Math.round((posKick-flexKick)/60000);
-      if(!best || gainMinutes>best.gainMinutes){
-        best={
-          type:"FLEX_SWAP",
-          flexSlot:flexRow.slot,
-          positionalSlot:posRow.slot,
-          moveToFlex:posRow.player.name,
-          moveToPosition:flexRow.player.name,
-          flexPlayerPid:flexRow.player.pid,
-          positionPlayerPid:posRow.player.pid,
-          currentFlexKickoff:flexRow.player.kickoffAt,
-          laterKickoff:posRow.player.kickoffAt,
-          gainMinutes,
-          message:`Put ${posRow.player.name} in ${flexRow.slot} and ${flexRow.player.name} in ${posRow.slot} to preserve ${gainMinutes} more minutes of late-swap flexibility.`,
-        };
-      }
+      candidates.push({
+        type:"FLEX_SWAP",flexSlot:flexRow.slot,positionalSlot:posRow.slot,
+        moveToFlex:posRow.player.name,moveToPosition:flexRow.player.name,
+        flexPlayerPid:flexRow.player.pid,positionPlayerPid:posRow.player.pid,
+        currentFlexKickoff:flexRow.player.kickoffAt,laterKickoff:posRow.player.kickoffAt,
+        gainMinutes,flexIndex:flexRow.index,posIndex:posRow.index,
+        message:"Put "+posRow.player.name+" in "+flexRow.slot+" and "+flexRow.player.name+" in "+posRow.slot+" to preserve "+gainMinutes+" more minutes of late-swap flexibility."
+      });
     }
-    if(best)moves.push(best);
+  }
+  candidates.sort((a,b)=>b.gainMinutes-a.gainMinutes);
+  const usedSlots=new Set(),moves=[];
+  for(const candidate of candidates){
+    if(usedSlots.has(candidate.flexIndex)||usedSlots.has(candidate.posIndex))continue;
+    usedSlots.add(candidate.flexIndex);usedSlots.add(candidate.posIndex);
+    const {flexIndex,posIndex,...move}=candidate;
+    moves.push(move);
   }
   return moves;
 }
@@ -917,6 +933,7 @@ export default async req => {
     // NFL game context.
     const gameRows=parseCsv(gamesCsv,["season","week","game_type","home_team","away_team","gameday","gametime","spread_line","total_line"]);
     const gameByTeam={};
+    const byeTeams=byeTeamsFromGames(gameRows,season,week);
     const nowMs=Date.now();
     for(const g of gameRows){
       if(num(g.season)!==season || num(g.week)!==week || (g.game_type && g.game_type!=="REG")) continue;
@@ -980,7 +997,8 @@ export default async req => {
         reasons.push(`${round((learnedPosScale-1)*100)}% learned ${slot} baseline calibration`);
       }
       const game=gameByTeam[normTeam(info.team)];
-      const opp=game?.opp || c.at(-1)?.opponent_team || sp?.opponent || null;
+      const bye=byeTeams.has(normTeam(info.team));
+      const opp=bye?null:(game?.opp||sp?.opponent||null);
       const locked=!!game?.locked;
       const matchupActual=matchRow?.players_points && typeof matchRow.players_points[pid] === "number"
         ? matchRow.players_points[pid] : null;
@@ -1312,8 +1330,11 @@ export default async req => {
       // "Doubtful" is functionally unavailable for lineup optimization. If a
       // player is upgraded later, the hourly Sleeper refresh / live injury
       // report will put him back into the candidate pool automatically.
-      const out=hardUnavailable(sleeperInj,officialStatus);
-      if(out){
+      const out=bye||hardUnavailable(sleeperInj,officialStatus);
+      if(bye){
+        projection=0;
+        reasons.push("BYE WEEK: no NFL game scheduled");
+      }else if(out){
         projection=0;
         reasons.push(`UNAVAILABLE: ${official?.status||info.inj||"injury designation"}`);
       }else if(/question/.test(combinedStatus) && projection!=null){
@@ -1336,7 +1357,7 @@ export default async req => {
       return {
         pid,name:info.name,slot,eligibleSlots:info.fps||[],team:info.team,
         injury:official?.status||info.inj||null,injuryDetail:official?.injury||null,
-        practiceStatus:official?.practice||null,availability:out?"UNAVAILABLE":"ACTIVE_CANDIDATE",
+        practiceStatus:official?.practice||null,availability:bye?"BYE":out?"UNAVAILABLE":"ACTIVE_CANDIDATE",bye,
         opp:opp?normTeam(opp):null,
         rawBase:rawBase==null?null:round(Math.max(0,rawBase)),
         base:base==null?null:round(Math.max(0,base)),signals,
@@ -1354,7 +1375,9 @@ export default async req => {
     const slots=(league.roster_positions||[]).filter(s=>s!=="BN" && s!=="IR" && s!=="TAXI");
     const current=currentStarters(myMatch,rosterPlayers,slots);
     const optimal=optimize(rosterPlayers,slots,current);
-    const flexMoves=lateSwapFlexMoves(optimal.picked);
+    // Late-swap advice must describe the actual Sleeper slot occupancy, not
+    // arbitrary equivalent FLEX assignments in the optimized lineup.
+    const flexMoves=lateSwapFlexMoves(current);
     const contingencies=buildLateSwapContingencies(optimal.picked,rosterPlayers,slots);
     const decision=lineupChanges(current,optimal);
     const changes=decision.calls.map(call=>{
@@ -1486,6 +1509,7 @@ export default async req => {
       decision,
       contingencies,flexMoves,
       lockedBench,lockedStarters,
+      unfilledSlots:optimal.picked.filter(x=>!x.player).map(x=>x.slot),
       current,optimal:optimal.picked,players:rosterPlayers,
     }), { headers:{"content-type":"application/json","cache-control":"no-store"} });
   } catch(e) {
@@ -1493,4 +1517,4 @@ export default async req => {
   }
 };
 
-export { eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall, buildStrategicTiebreaks, lineupChanges, confidenceGrade, lineupCallDrivers };
+export { byeTeamsFromGames, eligibility, easternKickoffMs, scoreSleeperProjection, playerValue, optimize, confidence, projectionRange, probabilityBetter, normalCdf, playerConfidenceScore, hardUnavailable, fantasyPoints, parseCsv, usage, weightedMean, matchupExposureFor, playerKickoffMs, lateSwapFlexMoves, buildLateSwapContingencies, classifyLineupCall, buildStrategicTiebreaks, lineupChanges, confidenceGrade, lineupCallDrivers };
