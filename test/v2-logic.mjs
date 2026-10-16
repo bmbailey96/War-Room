@@ -199,7 +199,18 @@ assert.equal(offlineLineup.calls[0].start,"Healthy Starter");
 assert.equal(offlineLineup.calls[0].drivers[0],"projection_only");
 assert.ok(offlineLineup.watch[0].includes("Questionable Player"));
 
-const { deterministicRosterFallback,waiverMoveActionable } = await import("../netlify/functions/roster-actions-background.mjs");
+const { deterministicRosterFallback,waiverMoveActionable,applyByeWeeksToProjections } = await import("../netlify/functions/roster-actions-background.mjs");
+const scheduleCsv="season,week,game_type,home_team,away_team\n"+fullSchedule.map(g=>[g.season,g.week,g.game_type,g.home_team,g.away_team].join(",")).join("\n");
+const projectionWithBye={P1:{weeks:{6:10,7:14,8:12},avg:12,tradeAvg:12,tradeTotal:36,tradeWeeks:3}};
+applyByeWeeksToProjections(projectionWithBye,{P1:{n:"Example WR",p:"WR",fp:["WR"],t:"TEN"}},scheduleCsv,2026,6);
+assert.equal(projectionWithBye.P1.weeks[6],0);
+assert.equal(projectionWithBye.P1.avg,8.7);
+assert.equal(projectionWithBye.P1.tradeTotal,26);
+const incompleteBye={P1:{weeks:{6:10,7:14,8:12},avg:12,tradeAvg:12,tradeTotal:36,tradeWeeks:3}};
+applyByeWeeksToProjections(incompleteBye,{P1:{n:"Example WR",p:"WR",fp:["WR"],t:"TEN"}},scheduleCsv.split("\n").slice(0,6).join("\n"),2026,6);
+assert.equal(incompleteBye.P1.weeks[6],10);
+console.log("Bye-aware roster valuation checks passed");
+
 const priorityFallback = deterministicRosterFallback({
   mode:"REDRAFT",usesFaab:false,
   waivers:[{add:"Free Agent",drop:"Bench Guy",weeklyDelta:1.8,marketDelta:null,trending:250}],
