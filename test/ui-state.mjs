@@ -9,7 +9,7 @@ const nodes=new Map();
 const node=id=>{if(!nodes.has(id))nodes.set(id,{textContent:'',innerHTML:'',style:{},className:'',disabled:false});return nodes.get(id)};
 let requests=[],timers=new Map(),timerId=0;
 const document={hidden:false,getElementById:node,addEventListener(){},createElement(){return {textContent:'',get innerHTML(){return this.textContent.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;')}}}};
-const ctx=vm.createContext({document,AbortController,Date,console,
+const ctx=vm.createContext({document,AbortController,Date,URL,console,
   fetch:(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})),
   setTimeout:(fn,ms)=>{timers.set(++timerId,{fn,ms});return timerId},clearTimeout:id=>timers.delete(id)});
 vm.runInContext(script,ctx);
@@ -78,3 +78,14 @@ run(`renderLive({phase:'LIVE',at:Date.now(),actionableCalls:[],mine:{optimal:[{p
 assert.doesNotMatch(node('moves').innerHTML,/LINEUP CONFLICT/);
 assert.match(node('actionqueue').innerHTML,/Stash a tight end/);
 console.log('Roster/lineup conflict checks passed.');
+
+run(`liveState=null;renderAnalysis({reasoningMode:'public_news',reasoningAvailable:false,analysis:{summary:'Keep the lineup',calls:[],watch:['Watch injury status']},news:{available:true,checkedAt:Date.now(),sources:[{name:'CBS',ok:true}],items:[{title:'Player <script> news',url:'https://example.com/story',source:'CBS',publishedAt:Date.now(),players:['Player One']},{title:'Unsafe link',url:'javascript:alert(1)',players:[]}]}})`);
+assert.equal(node('brain').textContent,'PUBLIC NEWS ON');
+assert.match(node('watch').innerHTML,/https:\/\/example.com\/story/);
+assert.match(node('watch').innerHTML,/&lt;script&gt;/);
+assert.doesNotMatch(node('watch').innerHTML,/javascript:|interpretation is offline/);
+assert.match(node('watch').innerHTML,/Watch injury status/);
+run(`renderAnalysis({reasoningMode:'public_news',reasoningAvailable:false,analysis:{calls:[],watch:[]},news:{available:false,checkedAt:Date.now(),sources:[{name:'CBS',ok:false}],items:[]}})`);
+assert.equal(node('brain').textContent,'NEWS FEEDS UNAVAILABLE');
+assert.match(node('watch').innerHTML,/No current reports available/);
+console.log('Public-news display and unsafe-link checks passed.');
