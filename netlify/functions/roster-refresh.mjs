@@ -1,5 +1,5 @@
 // Precompute deterministic roster moves for both leagues without spending AI credits.
-// The interactive page can still request the live-news reasoning layer separately.
+// The interactive page uses public news feeds; neither path requires AI credits.
 
 import { getMyLeagues } from "./leagues.mjs";
 import buildRosterActions from "./roster-actions-background.mjs";

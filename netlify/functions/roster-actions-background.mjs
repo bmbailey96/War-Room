@@ -2,7 +2,7 @@ import {
   MY_USER_ID,fetchLeagueCore,computeSnapshot,normName,normTeam,ownerHistory
 } from "./lib/ocho.mjs";
 import {
-  getPlayersTrim,pInfo,slotPos,store,callClaude
+  getPlayersTrim,pInfo,slotPos,store
 } from "./lib/war-v2.mjs";
 import { getMyLeagues } from "./leagues.mjs";
 import {
@@ -1308,7 +1308,7 @@ export function deterministicRosterFallback({
 
 export default async req=>{
   try{
-    const url=new URL(req.url),force=url.searchParams.get("refresh")==="1",coreOnly=url.searchParams.get("core")==="1";
+    const url=new URL(req.url),force=url.searchParams.get("refresh")==="1",coreOnly=true;
     const leagues=await getMyLeagues();
     const requested=url.searchParams.get("league");
     const chosen=leagues.find(l=>l.id===requested)||leagues[0];
@@ -2034,124 +2034,8 @@ export default async req=>{
     }
     deterministicTrades.sort((a,b)=>b.score-a.score);
 
-    const lineupSummary=(lineupData?.optimal||[]).filter(x=>x.player).map(x=>({
-      slot:x.slot,name:x.player.name,projection:x.player.projection,
-      floor:x.player.floor,ceiling:x.player.ceiling,injury:x.player.injury
-    }));
-
-    const modeRules=mode==="DYNASTY"
-      ? `This is DYNASTY. Balance title odds with franchise value. The market values attached below are a deterministic current anchor dated ${market.scrapeDate||"recently"}; live reporting may justify modest deviation but not invented value. Age and future picks matter. Protect projected-early 1sts and do not spend a first for a marginal weekly gain. Trades must make sense for the other manager too.`
-      : `This is REDRAFT / the fun league. Ignore future asset value and draft picks. Maximize this season: near-term points, injury insurance, role growth, and consolidating bench depth into better starters.`;
-
-    const prompt=`You are War Room's roster-management engine. The lineup engine is separate. Recommend only moves that can materially improve my team.
-
-LEAGUE: ${league.name}
-MODE: ${mode}
-ACQUISITION POLICY: ${acquisition.label} (${acquisition.source})
-NFL WEEK: ${week}
-MY MATCHUP WIN CHANCE: ${lineupData?.matchup?.winProbability??"unknown"}%
-MY WAIVER POSITION: ${me.waiverPosition??"unknown"}
-WAIVER SCHEDULE SETTINGS: ${JSON.stringify(waiverSchedule)}
-TEAM STATE DIAGNOSIS:
-${JSON.stringify(teamState,null,2)}
-
-RECENT COMPLETED-WEEK REVIEWS:
-${JSON.stringify(weekReviews,null,2)}
-
-MY TRADE BEHAVIOR:
-${JSON.stringify(myTradeBehavior,null,2)}
-${modeRules}
-
-CURRENT BEST LINEUP:
-${JSON.stringify(lineupSummary,null,2)}
-
-MY ROSTER:
-${JSON.stringify(myRoster,null,2)}
-
-MY MOST PLAUSIBLE DROPS:
-${JSON.stringify(drops,null,2)}
-
-WAIVER CLAIM PLAN, ordered and deduplicated by target:
-${JSON.stringify(waiverPlan,null,2)}
-
-DETERMINISTIC ADD/DROP PAIRS, ordered by real best-lineup impact:
-${JSON.stringify(bestWaiverPairs,null,2)}
-
-ACTUALLY UNROSTERED CANDIDATES:
-${JSON.stringify(free,null,2)}
-
-DETERMINISTIC TRADE TARGET SCREEN (weeklyCeiling = max three-week lineup gain before acquisition cost):
-${JSON.stringify(bestTradeTargets,null,2)}
-
-DETERMINISTIC EXACT TRADE PACKAGES (already re-solved for both teams):
-${JSON.stringify(deterministicTrades.slice(0,10),null,2)}
-
-${mode==="DYNASTY"?`MY ACTUAL PICKS (only these may be spent):
-${JSON.stringify(myPicks,null,2)}`:""}
-
-OTHER TEAMS, THEIR ROSTERS, NEEDS AND PICKS:
-${JSON.stringify(otherTeams,null,2)}
-
-Use web search for current injury/practice news, depth-chart movement, snap/route/target role, coaching comments, scheme changes, and current trade-market sentiment. Be selective. HOLD is valid.
-
-Hard rules:
-- A pickup must be from ACTUALLY UNROSTERED CANDIDATES.
-- If a candidate has waiverOnly=true, that player's game has already started and this league locks him. It is a NEXT WAIVER RUN claim only.
-- If a candidate has immediateFreeAgent=true, this league uses open free agency and the player is addable NOW. In The Ocho this remains true even after that player's game starts. Treat a strong live role change as time-sensitive, but never chase box-score points without role evidence.
-- Fast 2-hour add heat is a market signal, not proof of a breakout. Require corroborating role, injury-opportunity, or future-value evidence before making it a strong recommendation.
-- Prefer the deterministic ADD/DROP PAIRS. Do not recommend waiver churn with no measurable lineup/value gain.
-- For every pickup, compare the add directly with the proposed drop: role trend, targets/carries/share, short-horizon value, dynasty market value, and roster construction. Before cutting someone, check whether current injuries, depth-chart changes, or coaching comments have just expanded that player's role; a newly opened role should make him harder to drop, not easier. Do not recommend a fourth/fifth QB or TE just because the isolated player looks interesting unless the deterministic roster-fit gate says the value is exceptional.
-- If an add needs a roster spot, give an exact drop from MY ROSTER.
-- A trade target must be on the named partner's roster.
-- I can only send assets I actually own.
-- In dynasty, only use the exact pick labels listed under MY ACTUAL PICKS. Use picks to bridge or shape a trade when that creates a fairer, more manager-plausible package; do not force a pick into every deal.
-- In redraft, never use draft picks.
-- Give at most 5 actions, ordered by importance.
-- Prefer exact packages from DETERMINISTIC EXACT TRADE PACKAGES when one exists. Otherwise use the deterministic target screen.
-- For a trade, explain briefly why the other manager might accept. Use the named owner's observed trade activity and acquired-position history as a soft plausibility signal.
-- A multi-player offer must survive roster-space reality. If the other manager would need to cut a useful bench player, that hidden cost counts against the offer.
-- If no exact trade package clearly helps me and remains plausible for the other manager, recommend no trade. Creating trade activity is not a goal.
-- In dynasty, keep total market value reasonably defensible for BOTH sides. Weekly fit can justify a modest overpay, not fantasy-land offers.
-- In redraft, the other manager also needs a credible weekly roster reason to accept.
-- In dynasty, a move with little immediate lineup gain can still be strong if it creates a clear market-value gain. Label that as an asset-value move rather than pretending it is a weekly-points upgrade.
-- Do not recommend lateral churn.
-- Role-vs-box-score trade timing is a SOFT factor only. BUY_LOW means underlying role is ahead of recent fantasy scoring; BUY_ROLE means usage is rising before scoring/market fully catches up; SELL_HIGH means recent scoring is ahead of role with touchdown/mirage support. Never let timing make an unfair trade fair.
-- Avoid selling my BUY_LOW or BUY_ROLE players merely because the recent box score is weak. Prefer SELL_HIGH outgoing assets only when the trade already improves my roster.
-- Do not treat a losing record by itself as evidence the roster is bad. Respect TEAM STATE DIAGNOSIS.
-- If TEAM STATE says BAD-LUCK SCHEDULE or RESULTS LAGGING, suppress panic sells and marginal trades.
-- If TEAM STATE says LINEUP EXECUTION, do not try to solve a start/sit problem with unnecessary roster churn.
-- If TEAM STATE says NEEDS STARTER UPSIDE or DEPTH STRESS + STARTER UPSIDE, prioritize real starter upgrades and consolidation over tiny depth moves. Injuries are context, not an excuse to treat a bottom-half underlying roster as healthy.
-- Do not recommend a player who is Out, IR, PUP, Suspended or Doubtful.
-
-Return ONLY valid JSON:
-{
-  "summary":"single most important roster priority",
-  "actions":[{
-    "type":"ADD|WAIVER|ADD_DROP|TRADE_FOR|SELL|HOLD",
-    "priority":1,
-    "confidence":"HIGH|MEDIUM|LOW",
-    "headline":"exact action",
-    "why":"2 concise sentences",
-    "window":"NOW|BEFORE WAIVERS|NEXT WAIVER RUN|THIS WEEK|WATCH",
-    "add":{"name":"exact player"} or null,
-    "drop":{"name":"exact player"} or null,
-    "partner":"exact team name" or null,
-    "send":[{"type":"player|pick","name":"exact asset"}],
-    "receive":[{"type":"player|pick","name":"exact asset"}],
-    "faabPct":number or null,
-    "drivers":["role","injury","market","schedule","depth","consolidation","pick_value"]
-  }],
-  "watch":["up to 3 short trigger conditions"]
-}`;
-
     let parsed=null,error=null;
-    if(!coreOnly){
-      try{
-        const raw=await callClaude(prompt,{maxTokens:3000,useSearch:true});
-        parsed=parseJson(raw);
-        if(!parsed)throw new Error("invalid roster-actions JSON");
-      }catch(e){error=e.message;}
-    }
+    // Public-news mode never invokes a paid inference provider.
     if(!parsed)parsed=deterministicRosterFallback({
       waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct,teamState
     });

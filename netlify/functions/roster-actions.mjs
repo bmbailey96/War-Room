@@ -20,7 +20,7 @@ export default async req=>{
       s.get(lockKey,{type:"json"}).catch(()=>null),
     ]);
     const force=url.searchParams.get("refresh")==="1";
-    const coreOnly=url.searchParams.get("core")==="1";
+    const coreOnly=true; // Current board requires no paid inference.
     const now=Date.now();
     const freshnessMs=rosterActionsFreshnessMs(now);
     const ageMs=cached?Math.max(0,now-(cached.at||0)):null;

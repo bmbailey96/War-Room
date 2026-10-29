@@ -78,3 +78,19 @@ The root page is deliberately small:
 - a compact view of what the engine has learned
 
 The old multi-tab interface remains at `/legacy.html`.
+
+## Public news (no API keys or paid AI)
+
+The current board uses CBS Sports, Yahoo Sports, and RotoWire public RSS feeds.
+`news-refresh` refreshes the shared feed cache every 30 minutes; opening the board
+also refreshes a cache older than 15 minutes. Failed sources retry after two minutes.
+Each source has a seven-second timeout. Cached reports from failed sources are
+marked, and articles without valid dates or older than 72 hours are excluded.
+Full-name matches are filtered against the selected league's roster and shown with
+publisher, publication date, and a source link. Coverage is limited to those feeds;
+no matching headlines is not an all-clear on player health.
+
+The lineup and roster workflows make no paid AI calls. Public headlines never
+create lineup overrides or reasoning-training samples. Existing structured injury
+and game-lock data still govern lineup legality. The older legacy cockpit remains
+separate and can contain Anthropic-dependent tools.
