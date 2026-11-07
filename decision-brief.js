@@ -201,5 +201,5 @@
     return lines.join("\n").slice(0, 24000);
   }
 
-  root.WarRoomDecisionBrief = {build, packet, conflicts, freshness};
+  root.WarRoomDecisionBrief = {build, packet, conflicts, freshness, eligibleMarketAction};
 })(typeof globalThis !== "undefined" ? globalThis : this);
