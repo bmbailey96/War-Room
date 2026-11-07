@@ -50,7 +50,7 @@ const weeks=[
    {roster_id:4,points:110,players_points:{"D RB":13}},
  ]},
 ];
-const transactions=[{week:1,rows:[{transaction_id:"X",type:"trade",status:"complete",consenter_ids:[1,2],adds:{},drops:{}}]}];
+const transactions=[{week:1,rows:[{transaction_id:"X",type:"trade",status:"complete",consenter_ids:[1,2],adds:{"My TE 1":1,"Partner RB 1":2},drops:{}}]}];
 const tradedPicks=[{season:"2027",round:1,roster_id:3,owner_id:1,previous_owner_id:3}];
 const scan={at:now-5*60000,actions:[
   {type:"ADD_DROP",headline:"Add Free RB",add:{name:"Free RB",pid:"Free RB"},drop:{name:"My TE 4"},weeklyDelta:1.5,immediateFreeAgent:true},
@@ -75,6 +75,8 @@ assert.equal(audit.me.pfRank,3);
 assert.equal(audit.me.potentialRank,2);
 assert.equal(audit.me.potentialGap,45);
 assert.equal(audit.teams.find(t=>t.name==="Good Partner").tradeCount,1);
+assert.equal(audit.tradeInventory.teams.find(t=>t.name==="Good Partner").tradeHistory.positionsAcquired.RB,1);
+assert.ok(audit.tradeSimulations[0].twoSidedFit.why.some(x=>/historical acquisition evidence/.test(x)));
 assert.ok(audit.tradePartners.some(p=>
   p.name==="Good Partner"&&p.offerPositions.includes("TE")&&p.targetPositions.includes("RB")));
 const partner=audit.tradePartners.find(p=>p.name==="Good Partner");
