@@ -298,7 +298,7 @@ function freeAgentCandidates(scan, rosteredIds, playersDB, now, mine) {
 }
 
 export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPicks=[],weeks=[],transactions=[],
-  ownerId,now=Date.now(),scan=null}) {
+  ownerId,now=Date.now(),scan=null,market=null}) {
   if(!league?.league_id)throw new Error("Missing league ID");
   if(rosters.length<2)throw new Error("Not enough league rosters");
   const mine=rosters.find(r=>asId(r.owner_id)===asId(ownerId));
@@ -367,6 +367,36 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
       :"Do not force win-now trades. Review draft capital and playoff odds before buying veterans.")
     : "Redraft: optimize the remaining season and starting lineup; long-term dynasty value does not apply.";
 
+  const inventory=teams.map(t=>({
+    rosterId:String(t.rosterId),name:t.name,isMe:t.isMe,
+    players:t.depth.players.map(p=>{
+      const past=recent.get(String(p.id));
+      const marketKey=String(p.name||"").toLowerCase().replace(/[^a-z ]/g,"")
+        .replace(/\b(jr|sr|ii|iii|iv|v)\b/g,"").replace(/\s+/g," ").trim();
+      const record=market?.players?.[marketKey];
+      return {...p,
+        fantasyPositions:playersDB?.[p.id]?.fp||[p.pos],
+        recentMean:past?.n>=2?round(past.sum/past.n):null,
+        observedWeeks:past?.n||0,
+        marketValue:record?.value??null,
+      };
+    }),
+    picks:(t.picks||[]).map(p=>({
+      ...p,
+      key:String(p.season)+"|"+String(p.round)+"|"+String(p.originalRosterId),
+      marketValue:market?.picks?.[String(p.season)+"|"+String(p.round)]??null,
+    })),
+  }));
+  const tradeInventory={
+    at:now,
+    marketSource:pickBook.mode==="DYNASTY"?"DynastyProcess 1QB published values":"Not used in redraft",
+    marketSourceDate:market?.scrapeDate||null,
+    marketRetrievedAt:market?.at||null,
+    valuationScope:pickBook.mode==="DYNASTY"?
+      "Cross-player/pick reference values (1QB), not verified league prices":
+      "Only observed recent league-scored games; no rest-of-season forecast.",
+    teams:inventory,
+  };
   return {
     at:now,league:{id:league.league_id,name:league.name,season:league.season,week:history.length+1,
       mode:pickBook.mode,teamCount,playoffTeams:Number(league.settings?.playoff_teams||0),
@@ -388,6 +418,7 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
       depth:t.depth.total,availableDepth:t.depth.active,tradeCount:t.tradeCount,
     })),
     tradePartners,
+    tradeInventory,
     tradeSimulations,
     freeAgents,
     limitations:[
