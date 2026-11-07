@@ -37,7 +37,7 @@ export default async function gmReview(req) {
   if(!selected)return json({error:"League does not belong to the configured Sleeper owner"},403);
 
   const s=store(),now=Date.now();
-  const audit=await s.get("gm_audit_v1_"+id,{type:"json"}).catch(()=>null);
+  const audit=await s.get("gm_audit_v2_"+id,{type:"json"}).catch(()=>null);
   if(!audit||!audit.tradeInventory||audit.league?.id!==id)
     return json({error:"Update the league GM Audit before requesting AI review"},409);
   if(now-Number(audit.at||0)>60*60*1000)
