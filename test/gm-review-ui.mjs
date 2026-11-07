@@ -24,7 +24,7 @@ assert.equal(typeof node.listeners.click,"function");
 const text=ui.makeResearchPrompt(data);
 assert.match(text,/Player A/);
 assert.match(text,/No verified injury report/);
-assert.match(text,/current.*league/i);
+assert.match(text,/CURRENT AUDIT PACKET/);
 assert.doesNotMatch(text,/ANTHROPIC_API_KEY|WARROOM_GM_OWNER_CODE/);
 ui.setData(null);
 assert.match(node.innerHTML,/Load a current league GM Audit/);
