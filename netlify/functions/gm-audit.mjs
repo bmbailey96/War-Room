@@ -77,7 +77,8 @@ export default async function gmAudit(request){
     audit.coverage.pickLedgerVerified=tradedPicks!=null;
     if(!tradedPicks&&audit.league.mode==="DYNASTY"){
       audit.me.picks=[];
-      audit.limitations.unshift("Traded-picks endpoint unavailable. Draft-pick holdings are omitted; do not infer ownership.");
+      for(const team of audit.tradeInventory?.teams||[])team.picks=[];
+      audit.limitations.unshift("Traded-picks endpoint unavailable. All owned-pick records are withheld from the audit AND trade laboratory. Reconstructed pick ownership cannot be verified.");
     }
     await s.setJSON(key,audit).catch(()=>{});
     return response({...audit,cache:{fresh:true,ageMinutes:0}});
