@@ -91,12 +91,13 @@ footer{color:var(--muted);font-size:9px;margin-top:25px}footer a{color:var(--mut
 .brief-actions{display:flex;gap:7px;align-items:center}
 @media(max-width:760px){.brief-cols{grid-template-columns:1fr}.brief-panel{padding:13px}.brief-entry p{font-size:13px}.brief-head h2{font-size:18px}}
 </style>
+<link rel="stylesheet" href="/gm-audit.css">
 </head>
 <body><div class="wrap">
 <div class="title"><div><div class="stamp">GAME WEEK</div><h1>WAR ROOM</h1><div class="sub">LIVE LINEUP + ROSTER DECISION DESK</div></div><div class="controls"><select id="league" aria-label="Fantasy league"></select><button id="refresh">UPDATE NOW</button></div></div>
 <div class="status"><span id="week">CONNECTING TO SLEEPER</span><span class="status-right"><span class="modepill core">LINEUP MODEL</span><span id="live" class="modepill offline">LIVE UPDATES IDLE</span><span id="brain" class="modepill offline">CHECKING NEWS…</span><span id="learned"></span></span></div>
 <div class="guide"><span class="go">GREEN = ACT</span> · <span class="watchtone">AMBER = WATCH OR DECIDE</span> · <span class="stop">RED = BLOCKED OR RISKY</span></div>
-<nav class="board-nav" aria-label="Board sections"><a href="#brief-section">Front office</a><a href="#lineup-section">Lineup changes</a><a href="#roster-section">Pickups &amp; trades</a><a href="#best-section">Best lineup</a><a href="#watch-section">Watch list</a></nav>
+<nav class="board-nav" aria-label="Board sections"><a href="#brief-section">Front office</a><a href="#gm-audit-section">GM audit</a><a href="#lineup-section">Lineup changes</a><a href="#roster-section">Pickups &amp; trades</a><a href="#best-section">Best lineup</a><a href="#watch-section">Watch list</a></nav>
 <div id="board-status" class="board-status" role="status" aria-live="polite">Connecting to your league…</div>
 
 <section class="brief-panel" id="brief-section" aria-labelledby="brief-title">
@@ -108,6 +109,7 @@ footer{color:var(--muted);font-size:9px;margin-top:25px}footer a{color:var(--mut
 <div class="call"><div class="label">WHAT TO DO</div><h2 id="headline">Building your board…</h2><div class="call-meta" id="opponent"></div><div class="winbar"><i id="winbar" style="width:50%"></i></div><div class="numbers"><div class="num"><b id="current">—</b><span id="current-label">YOUR LINEUP NOW</span></div><div class="num"><b id="best">—</b><span id="best-label">BEST LINEUP</span></div><div class="num"><b id="gain">—</b><span id="gain-label">PROJECTED POINTS TO GAIN</span></div></div></div>
 <div class="panel primary-queue"><div class="panel-head"><h3>NEXT MOVES</h3><span>IN ORDER OF IMPORTANCE</span></div><div class="actionqueue" id="actionqueue"><div class="empty">Building priorities…</div></div></div>
 </div>
+<details class="panel gm-audit-panel" id="gm-audit-section" open><summary class="panel-head"><h3>LEAGUE-WIDE GM AUDIT</h3><span>STANDINGS, OWNER DEPTH, REAL WAIVERS, PICKS AND TRADE FIT</span></summary><div id="gm-audit"><div class="empty">Fetching complete Sleeper league data…</div></div></details>
 <div class="panel review-panel" id="review-panel" style="display:none"><div class="panel-head"><h3 id="review-title">LAST WEEK REVIEW</h3><span>WHAT ACTUALLY DECIDED THE RESULT</span></div><div id="week-review"></div></div>
 <div class="panel" id="lineup-section"><div class="panel-head"><h3>LINEUP CHANGES</h3><span>ONLY CHANGES WORTH MAKING</span></div><div id="calls"><div class="empty">Calculating…</div></div></div>
 <details class="panel disclosure"><summary class="panel-head"><h3>MODEL MATCHUP DETAILS</h3><span>COVERAGE, ROLE, PROTECTION, AND RUN GAME</span></summary><div><div class="edgegrid" id="microedges"><div class="empty">Checking player-specific matchup edges…</div></div></div></details>
@@ -119,14 +121,16 @@ footer{color:var(--muted);font-size:9px;margin-top:25px}footer a{color:var(--mut
 <footer><a href="/legacy.html">OPEN LEGACY WAR ROOM</a></footer>
 </div>
 <script src="/decision-brief.js"></script>
+<script src="/gm-audit-ui.js"></script>
 <script>
 const $=id=>document.getElementById(id);let league=null,base=null,movesState=null,analysisState=null,liveState=null,liveTimer=null,marketPulseTimer=null,marketPulseSignature=null,lastMarketRefresh=0,liveBusy=false,marketPulseBusy=false;
-let boardEpoch=0,boardController=null,movesTimer=null;
+let boardEpoch=0,boardController=null,movesTimer=null,gmAuditState=null;
 function currentBoard(epoch){return epoch===boardEpoch}
 function boardStatus(message,error=false){$("board-status").textContent=message;$("board-status").className="board-status"+(error?" error":"")}
 function liveBoard(){return liveState&&liveState.phase!=="PREGAME"}
 function resetBoard(){
-  base=null;movesState=null;analysisState=null;liveState=null;
+  base=null;movesState=null;analysisState=null;liveState=null;gmAuditState=null;
+  $("gm-audit").innerHTML="<div class=\"empty\">Fetching complete Sleeper league data…</div>";
   for(const id of ["calls","moves","lineup","watch","microedges","actionqueue"])$(id).innerHTML='<div class="empty">Loading selected league…</div>';
   for(const id of ["current","best","gain"])$(id).textContent="—";
   $("headline").textContent="Building your board…";$("opponent").textContent="";$("model").innerHTML="";$("learned").textContent="";$("source").textContent="";
@@ -316,6 +320,26 @@ async function loadMoves(force=false,poll=0,coreOnly=false,epoch=boardEpoch){
     }
   }catch(e){if(currentBoard(epoch)&&e.name!=="AbortError")renderMoves({error:e.message})}
 }
+
+function renderGmAudit(d){
+  gmAuditState=d;
+  if(typeof WarRoomGmAudit==="undefined")return;
+  $("gm-audit").innerHTML=WarRoomGmAudit.renderAudit(d);
+}
+async function loadGmAudit(force=false,epoch=boardEpoch){
+  if(typeof WarRoomGmAudit==="undefined"||!currentBoard(epoch)||!league)return;
+  try{
+    const q="?league="+encodeURIComponent(league)+(force?"&refresh=1":"");
+    const r=await fetch("/.netlify/functions/gm-audit"+q,{cache:"no-store",signal:boardController.signal});
+    const data=await r.json();
+    if(!currentBoard(epoch))return;
+    renderGmAudit(r.ok?data:{error:data.error||"GM audit endpoint unavailable"});
+  }catch(e){
+    if(currentBoard(epoch)&&e.name!=="AbortError")
+      renderGmAudit({error:"League-wide audit could not load. Try Update now. " + e.message});
+  }
+}
+
 async function load(force=false){
   const epoch=++boardEpoch;boardController?.abort();boardController=new AbortController();
   clearTimeout(liveTimer);clearTimeout(marketPulseTimer);clearTimeout(movesTimer);
@@ -329,7 +353,7 @@ async function load(force=false){
     if(!r.ok||d.error)throw new Error(d.error||"Lineup unavailable");
     $("league").innerHTML=d.leagues.map(l=>'<option value="'+esc(l.id)+'"'+(l.id===d.league.id?' selected':'')+'>'+esc(l.name)+'</option>').join("");
     renderBase(d);boardStatus("Lineup checked "+clock(Date.now())+" · Checking news and roster moves…");
-    loadMoves(force,0,false,epoch);liveTimer=setTimeout(()=>loadLive(epoch),1200);
+    loadMoves(force,0,false,epoch);loadGmAudit(force,epoch);liveTimer=setTimeout(()=>loadLive(epoch),1200);
     fetch('/.netlify/functions/lineup-analysis?league='+encodeURIComponent(league)+'&refresh='+(force?'1':'0'),{cache:"no-store",signal:boardController.signal})
       .then(async r=>{const a=await r.json();if(!r.ok||a.error)throw new Error(a.error||"News unavailable");return a})
       .then(a=>{if(!currentBoard(epoch))return;if(a?.analysis)renderAnalysis(a);else throw new Error("News unavailable")})
@@ -345,7 +369,18 @@ $("copy-packet").onclick=async()=>{
   if(!base||typeof WarRoomDecisionBrief==="undefined")return;
   const btn=$("copy-packet");
   try{
-    await navigator.clipboard.writeText(WarRoomDecisionBrief.packet(base,movesState));
+    const dossier=WarRoomDecisionBrief.packet(base,movesState);
+    const audit=gmAuditState&&!gmAuditState.error?
+      "\n\nLEAGUE-WIDE AUDIT (SLEEPER)\n"+JSON.stringify({
+        at:gmAuditState.at,cache:gmAuditState.cache,coverage:gmAuditState.coverage,
+        diagnosis:gmAuditState.diagnosis,stance:gmAuditState.stance,
+        me:gmAuditState.me,teams:gmAuditState.teams,
+        tradePartners:gmAuditState.tradePartners,
+        freeAgents:gmAuditState.freeAgents,
+        limitations:gmAuditState.limitations
+      },null,2).slice(0,20000):
+      "\n\nLEAGUE-WIDE AUDIT: Not loaded or unavailable.";
+    await navigator.clipboard.writeText(dossier+audit);
     btn.textContent="DOSSIER COPIED";
     setTimeout(()=>btn.textContent="COPY GM DOSSIER",2500);
   }catch(e){btn.textContent="COPY BLOCKED";setTimeout(()=>btn.textContent="COPY GM DOSSIER",2500)}
