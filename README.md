@@ -7,7 +7,7 @@ The old full War Room remains at `/legacy.html` for reference. It is not the sou
 ## V2 architecture
 
 - `netlify/functions/lineup.mjs` builds league-specific projections and the mathematically best legal lineup.
-- `lineup-analysis.mjs` is the live-news judgment layer. It may override a close numerical call only for concrete current evidence.
+- `lineup-analysis.mjs` currently returns deterministic lineup explanations plus dated public RSS headlines. It does **not** independently verify stories or override lineup/roster calls.
 - `lineup-refresh.mjs` snapshots both leagues before games so learning happens even if the site is never opened.
 - `learn.mjs` grades completed weeks every Tuesday and updates each league independently.
 - V2 state lives only in the Netlify Blob store `war-room-v2`.
@@ -95,7 +95,7 @@ create lineup overrides or reasoning-training samples. Existing structured injur
 and game-lock data still govern lineup legality. The older legacy cockpit remains
 separate and can contain Anthropic-dependent tools.
 
-## Front-office decision brief (proposed)
+## Front-office decision brief (draft branch)
 
 A first screen above the original lineups now separates:
 
@@ -109,11 +109,56 @@ The original lineup model, micro-matchup details, lineup history, pickups/trades
 
 **Copy GM Dossier** exports a bounded, fact-labeled plaintext digest of the current selected league: starters, full roster, model and provider projections, actionable candidate data, current waiver/pick/team-state context, and caveats. It does not transmit data automatically or run a paid AI service. Paste it into your chosen research tool for further analysis.
 
-### Still needed for a truly deep audit
+## League-wide GM audit (draft branch)
 
-- A dedicated league-wide review of opposing rosters, manager willingness to trade, draft-pick ledger, and free-agent replacement value across the next several weeks.
-- Validated external injury/role reporting linked to each proposed transaction, with article date and source, not merely RSS headline matching.
-- Calibration against hold/consensus/provider baselines (MAE/Brier by league and position), with explicit sample sizes and rollback when a feature underperforms.
-- Trade simulations showing *both* teams' starter deltas, dynasty asset deltas and remaining pick value. Do not manufacture a trade recommendation just because the model lists a trade target.
+`gm-audit.mjs` validates the selected Sleeper league and fetches all league
+rosters, users, traded picks, completed matchups and trade transactions. It
+also reads a cached roster-action scan when fresh. Each league is stored
+independently in Netlify Blobs under `gm_audit_v1_<leagueId>`.
 
-This first PR focuses on avoiding confident bad actions and putting the useful facts first. The larger scouting system is separate work, not something this change pretends to solve.
+`lib/gm-audit-core.mjs` is pure and independently tested. It produces:
+
+- PF and optimistic potential-points rankings; estimated standings, roster
+  depth, active-player counts and injury designation flags
+- All-play expected wins, all-play ranking, and schedule luck. Record
+  comparison is omitted when completed weeks do not match actual games played
+- All opponents' depth, scoring and observed completed trade participation
+- Possible two-sided positional trade fits, clearly marked NOT OFFERS
+- Only player-only packages already simulated by the existing trade model:
+  player ownership and partner team are rechecked against current Sleeper
+  rosters. Pick-inclusive trade packages are withheld pending verification
+- Future rookie-pick holdings for dynasty, including traded origin
+- Free-agent candidates cross-checked against current ownership and injury
+  status. Stale scans are not represented as live opportunities
+
+`gm-audit-ui.js` renders a mobile-friendly section beneath the main weekly
+brief. The Copy GM Dossier button also includes league-wide audit findings.
+
+### Forecast validation
+
+`lib/gm-calibration.mjs` grades saved player projections **only when the saved
+forecast timestamp predates that player's kickoff**. It uses actual Sleeper
+league-scored player points. For player-weeks with at least two prior observed
+results it calculates a preceding two-to-three-week mean baseline. Error
+comparisons always use the **same player-weeks**. Displayed results include
+MAE, bias, sample size, the most recent misses and an explicit
+insufficient-evidence condition. **The scorecard does not silently alter
+model weights or imply predictive superiority.**
+
+### Still required
+
+- Official date-specific injury and role reporting connected to individual
+  moves. RSS headlines alone are not a medical source of truth.
+- Independent provider/consensus benchmarks, matchup Brier scoring, and
+  rolling out-of-sample validation beyond the trailing-average comparison.
+- Independently defensible player and pick prices for true offer construction,
+  and confirmed partner incentives. Positional fits are not valuations.
+- A complete remaining-season schedule and playoff model, accurate future
+  lock/waiver timing, and deeper contingency planning.
+- More frequent revalidation of ownership and player statuses during games.
+
+No Sleeper transactions are performed, no paid AI is invoked and old detailed
+matchup and roster components remain. They are collapsed or reordered, not
+deleted. The old README claim that public RSS could override V2 lineup
+judgment was changed because the currently shipped module is deterministic.
+
