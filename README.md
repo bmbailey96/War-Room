@@ -94,3 +94,26 @@ The lineup and roster workflows make no paid AI calls. Public headlines never
 create lineup overrides or reasoning-training samples. Existing structured injury
 and game-lock data still govern lineup legality. The older legacy cockpit remains
 separate and can contain Anthropic-dependent tools.
+
+## Front-office decision brief (proposed)
+
+A first screen above the original lineups now separates:
+
+- **This week:** legal lineup changes with meaningful model edges, urgent injury deadlines, FLEX flexibility, and fresh league-verified acquisitions.
+- **Roster and long game:** available RB depth and redundant kicker slots in redraft; potential TE trade capital in dynasty; current team state.
+- **Evidence limits:** age of the free-agent scan, lineup/drop conflicts, ungraded reasoning claims, large disagreements with Sleeper, and the fact that RSS headlines are not automatically incorporated into moves.
+
+The original lineup model, micro-matchup details, lineup history, pickups/trades, and news remain accessible. Micro-matchup details are collapsed by default, not removed.
+
+**Hard gates:** never elevate a roster move above the fold when its free-agent scan is missing, refreshing, or stale; don't elevate drops of optimal starters; don't promote a zero-benefit stash as an urgent pickup; don't treat ungraded model confidence as measured success. Live-game mode suppresses stale pregame suggestions.
+
+**Copy GM Dossier** exports a bounded, fact-labeled plaintext digest of the current selected league: starters, full roster, model and provider projections, actionable candidate data, current waiver/pick/team-state context, and caveats. It does not transmit data automatically or run a paid AI service. Paste it into your chosen research tool for further analysis.
+
+### Still needed for a truly deep audit
+
+- A dedicated league-wide review of opposing rosters, manager willingness to trade, draft-pick ledger, and free-agent replacement value across the next several weeks.
+- Validated external injury/role reporting linked to each proposed transaction, with article date and source, not merely RSS headline matching.
+- Calibration against hold/consensus/provider baselines (MAE/Brier by league and position), with explicit sample sizes and rollback when a feature underperforms.
+- Trade simulations showing *both* teams' starter deltas, dynasty asset deltas and remaining pick value. Do not manufacture a trade recommendation just because the model lists a trade target.
+
+This first PR focuses on avoiding confident bad actions and putting the useful facts first. The larger scouting system is separate work, not something this change pretends to solve.
