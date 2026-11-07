@@ -141,7 +141,7 @@ function conf(v){const c=String(v||"").toUpperCase();return '<span class="'+(c==
 function dayName(v){return({SUN:"Sunday",MON:"Monday",TUE:"Tuesday",WED:"Wednesday",THU:"Thursday",FRI:"Friday",SAT:"Saturday"})[String(v||"").toUpperCase()]||String(v||"")}
 function clock(iso){if(!iso)return"";const d=new Date(iso);if(Number.isNaN(d.getTime()))return"";return d.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}
 function rosterLineupConflict(action){
-  if(!action?.stash||!action.drop)return false;
+  if(!action?.drop)return false;
   const lineup=liveBoard()?liveState.mine?.optimal:base?.optimal;
   const same=p=>p&&((p.pid&&action.drop.pid&&String(p.pid)===String(action.drop.pid))||(p.name&&p.name===action.drop.name));
   return (lineup||[]).some(row=>same(row.player))||(!liveBoard()&&(analysisState?.analysis?.calls||[]).some(c=>c.verdict==="OVERRIDE"&&c.start===action.drop.name));
@@ -180,7 +180,7 @@ if(base){
   if(safe&&!urgent)push("WATCH",safe.starter+" status",safe.message,65,"watch");
 }
 if(movesState?.error){push("SCAN OFFLINE","Pickup scan unavailable","Use Update now to retry before making a roster move.",50,"watch")}else if(movesState&&movesState.status!=="building"){
-  const move=(movesState.actions||[]).find(a=>a.type!=="HOLD"&&a.planRole!=="ALTERNATIVE"&&!a.deferred&&!rosterLineupConflict(a));
+  const marketFresh=typeof WarRoomDecisionBrief!=="undefined"&&WarRoomDecisionBrief.freshness(movesState,Date.now()).ready;const move=marketFresh?(movesState.actions||[]).find(a=>WarRoomDecisionBrief.eligibleMarketAction(a)&&!WarRoomDecisionBrief.conflicts(a,base)):null;
   if(move){const trade=/TRADE|SELL/.test(String(move.type||""));const waiver=/ADD|WAIVER/.test(String(move.type||""));let detail=[];if(move.liveRole?.reasons?.length)detail.push("LIVE ROLE: "+move.liveRole.reasons.slice(0,2).join(" / "));if(move.specialistMode==="STREAM_SWAP")detail.push("STREAM SWAP");if(move.specialistMode==="BYE_HOLD")detail.push("BYE HOLD");if(move.streamWeekEdge!=null)detail.push("THIS WEEK "+(move.streamWeekEdge>=0?"+":"")+Number(move.streamWeekEdge).toFixed(1));if(move.weeklyDelta!=null)detail.push((move.weeklyDelta>=0?"+":"")+Number(move.weeklyDelta).toFixed(1)+" points per week");if(move.faabPct!=null)detail.push(Number(move.faabPct).toFixed(0)+"% OF WAIVER BUDGET");if(move.partner)detail.push("with "+move.partner);push(move.immediateFreeAgent?"ADD NOW":trade?"TRADE":(waiver?"WAIVER CLAIM":"ROSTER MOVE"),move.headline||String(move.type||"Roster move").replaceAll("_"," "),detail.join(" · ")||move.why||"",move.immediateFreeAgent?105:trade?55:80,trade?"watch":"do")}
 }else if(base&&(!movesState||movesState.status==="building")){push("ROSTER MOVE","Scanning pickups and trades","The roster model is still building your move board.",20,"watch")}
 items.sort((a,b)=>b.priority-a.priority);const shown=items.slice(0,3);box.innerHTML=shown.length?shown.map(x=>'<div class="actionrow '+x.cls+'"><div class="actionkind">'+esc(x.kind)+'</div><div class="actionbody"><strong>'+esc(x.title)+'</strong><span>'+esc(x.detail||"")+'</span></div></div>').join(""):'<div class="empty">No action needed right now.</div>'}
