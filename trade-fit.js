@@ -50,13 +50,13 @@ function depth(players=[],slots=[]){
     have:combined,required:flex.required});
   return {count,coverage,needs,surplus,flex};
 }
-function postTrade(a,b,send=[],receive=[]){
-  const sent=asSet(send),received=asSet(receive);
+function postTrade(a,b,send=[],receive=[],partnerCuts=[],myCuts=[]){
+  const sent=asSet(send),received=asSet(receive),cutPartner=asSet(partnerCuts),cutMe=asSet(myCuts);
   const incoming=receive.filter(x=>x.type==="player").map(x=>x.player||x);
   const outgoing=send.filter(x=>x.type==="player").map(x=>x.player||x);
   return {
-    mine:(a||[]).filter(x=>!sent.has(String(x.id))).concat(incoming),
-    theirs:(b||[]).filter(x=>!received.has(String(x.id))).concat(outgoing),
+    mine:(a||[]).filter(x=>!sent.has(String(x.id))&&!cutMe.has(String(x.id))).concat(incoming),
+    theirs:(b||[]).filter(x=>!received.has(String(x.id))&&!cutPartner.has(String(x.id))).concat(outgoing),
     myNet:incoming.length-outgoing.length,
     theirNet:outgoing.length-incoming.length
   };
@@ -114,16 +114,18 @@ function needsImpact(before,after,assetsReceived=[],mode="REDRAFT"){
   if(interesting.length)notes.push("Incoming "+interesting.map(p=>p.name+" ("+Number(p.recentMean).toFixed(1)+" historical pts/g)").join(", ")+" may upgrade starter quality, but their next-week roles are unverified");
   return {...result,notes};
 }
-function assess({audit,me,partner,send=[],receive=[]}){
+function assess({audit,me,partner,send=[],receive=[],partnerCuts=[],myCuts=[]}){
   if(!audit?.league||!me||!partner)return {status:"UNKNOWN",why:["Missing league or manager evidence"],risks:[],confidence:"insufficient"};
   const mode=audit.league.mode||"UNKNOWN";
   const slots=audit.league.activeSlots||[];
   const preMe=depth(me.players||[],slots),prePartner=depth(partner.players||[],slots);
-  const changed=postTrade(me.players||[],partner.players||[],send,receive);
+  const changed=postTrade(me.players||[],partner.players||[],send,receive,partnerCuts,myCuts);
   const postMe=depth(changed.mine,slots),postPartner=depth(changed.theirs,slots);
   const mine=needsImpact(preMe,postMe,receive,mode),theirs=needsImpact(prePartner,postPartner,send,mode);
   const meProfile=contextFor(audit,me),otherProfile=contextFor(audit,partner);
   const allRisks=[...mine.risks.map(x=>"Your team: "+x),...theirs.risks.map(x=>otherProfile.name+": "+x)];
+  if(partnerCuts.length)allRisks.push("Other manager must release "+partnerCuts.length+" additional player(s) to execute this package; their lost depth is included.");
+  if(myCuts.length)allRisks.push("You must release "+myCuts.length+" additional player(s) to execute this package; lost depth is included.");
   if(changed.myNet<0)allRisks.push("You would have "+Math.abs(changed.myNet)+" empty roster spot"+(changed.myNet===-1?"":"s")+", not automatically valuable");
   if(changed.theirNet<0)allRisks.push("Other manager would have "+Math.abs(changed.theirNet)+" empty roster spot"+(changed.theirNet===-1?"":"s"));
   if(changed.myNet>0)allRisks.push("You receive "+changed.myNet+" net player"+(changed.myNet===1?"":"s")+" and may need cuts to fit roster limits");
