@@ -54,6 +54,16 @@
         :'<div class="empty">No two-sided positional-surplus match cleared the screen. That is not proof there are no good trades. A player-value review is still required.</div>')
       +'</div>';
 
+    const sims=data.tradeSimulations||[];
+    const tradeModels=sims.length?'<div class="audit-box"><h4>MODELLED TRADE PACKAGES / RESEARCH ONLY</h4>'
+      +sims.slice(0,5).map(p=>'<div class="audit-item"><div class="audit-item-title">'+esc(p.partner)
+        +' <span class="audit-tag">NOT AN OFFER</span></div>'
+        +'<div>Send <b>'+p.send.map(x=>esc(x.name)).join(" + ")+'</b> · Receive <b>'+esc(p.get.name)+'</b></div>'
+        +'<small>My modelled lineup: '+esc((p.myWeeklyModelDelta>=0?"+":"")+fixed(p.myWeeklyModelDelta))
+        +' /week · Their modelled lineup: '+esc((p.theirWeeklyModelDelta>=0?"+":"")+fixed(p.theirWeeklyModelDelta))
+        +'/week'+(p.dynastyModelValueDelta!=null?' · Dynasty-model value: '+esc((p.dynastyModelValueDelta>=0?"+":"")+fixed(p.dynastyModelValueDelta)):"")
+        +'</small><small>'+esc(p.caveat)+'</small></div>').join("")
+      +'</div>':"";
     const freeHtml='<div class="audit-box"><h4>VERIFIED UNROSTERED CANDIDATES</h4>'+
       (!free.verified?'<div class="empty">No fresh roster-action scan. '+esc(free.reason||"")+'. No specific free agent is being recommended.</div>'
         :!free.candidates?.length?'<div class="empty">No usable adds survived the live ownership cross-check.</div>'
@@ -85,7 +95,7 @@
       +'<ul>'+(data.limitations||[]).map(x=>'<li>'+esc(x)+'</li>').join("")+'</ul></details>';
 
     return status+intro+stats+
-      '<div class="audit-columns"><div>'+actualStandings+trade+'</div><div>'+holdings+freeHtml+'</div></div>'+quality;
+      '<div class="audit-columns"><div>'+actualStandings+trade+tradeModels+'</div><div>'+holdings+freeHtml+'</div></div>'+quality;
   }
   root.WarRoomGmAudit={renderAudit};
 })(typeof globalThis!=="undefined"?globalThis:this);
