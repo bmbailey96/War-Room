@@ -30,3 +30,17 @@
 .tl-footer{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
 .tl-footer small{color:var(--muted)}
 @media(max-width:720px){.tl-grid,.tl-summary{grid-template-columns:1fr}.tl-side{padding:9px}.tl-side h4{font-size:16px}}
+
+/* Two-sided fit is deliberately as prominent as the point estimate. */
+.tl-fit{border:1px solid rgba(127,196,224,.28);background:rgba(4,25,36,.5);padding:13px;margin:14px 0}
+.tl-fit h4{font:500 14px var(--display);color:var(--bright);letter-spacing:.06em;margin:0 0 7px}
+.tl-fit-status{font:600 11px var(--mono);color:var(--amber);margin-bottom:10px}
+.tl-fit-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tl-fit-side{background:rgba(10,29,42,.5);border:1px solid rgba(127,196,224,.15);padding:10px}
+.tl-fit-side b{font:500 14px var(--display);display:block}
+.tl-fit-side small{color:var(--muted);font:10px/1.5 var(--mono);display:block;margin:5px 0 9px}
+.tl-fit-side p,.tl-fit-unknown p,.tl-fit-risk p{font:11px/1.5 system-ui,sans-serif;margin:5px 0}
+.tl-fit-good{color:var(--green)}
+.tl-fit-risk{color:var(--amber);padding:5px 0}
+.tl-fit-unknown{color:var(--muted);padding:9px 0;border-top:1px dashed var(--line);margin-top:11px}
+@media(max-width:720px){.tl-fit-grid{grid-template-columns:1fr}}
