@@ -10,7 +10,7 @@ const asNum=x=>x!=null&&Number.isFinite(Number(x))?Number(x):null;
 const unavailable=p=>Boolean(p?.onReserve)||/^(OUT|IR|PUP|NFI|SUS|SUSPENDED|INACTIVE)$/i.test(String(p?.injury||"").trim());
 const visible=p=>!unavailable(p);
 const position=p=>String(p?.pos||"OTHER").toUpperCase();
-const asSet=arr=>new Set((arr||[]).map(p=>String(p?.id||p)));
+const asSet=arr=>new Set((arr||[]).map(p=>String(p?.player?.id||p?.id||p).replace(/^P:/,"")));
 const fmt=(n)=>n<0?String(n):"+"+String(n);
 function requirements(slots=[]){
   const dedicated=Object.fromEntries(POS.map(p=>[p,0]));
