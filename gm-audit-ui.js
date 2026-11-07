@@ -63,7 +63,13 @@
         +'<small>My modelled lineup: '+esc((p.myWeeklyModelDelta>=0?"+":"")+fixed(p.myWeeklyModelDelta))
         +' /week · Their modelled lineup: '+esc((p.theirWeeklyModelDelta>=0?"+":"")+fixed(p.theirWeeklyModelDelta))
         +'/week'+(p.dynastyModelValueDelta!=null?' · Dynasty-model value: '+esc((p.dynastyModelValueDelta>=0?"+":"")+fixed(p.dynastyModelValueDelta)):"")
-        +'</small><small>'+esc(p.caveat)+'</small></div>').join("")
+        +'</small>'
+        +(p.twoSidedFit?'<div class="audit-trade-fit"><b>'+esc(p.twoSidedFit.status)+'</b>'
+          +'<p><strong>Your roster:</strong> '+esc(p.twoSidedFit.yourReasons?.join("; ")||"No verified shortage addressed")+'</p>'
+          +'<p><strong>Their roster:</strong> '+esc(p.twoSidedFit.theirReasons?.join("; ")||"No verified shortage addressed")+'</p>'
+          +(p.twoSidedFit.theirRisks?.length?'<p class="audit-trade-caution"><strong>Their downside:</strong> '+esc(p.twoSidedFit.theirRisks.join("; "))+'</p>':"")
+          +'<small>'+esc(p.twoSidedFit.inferredOtherDirection||"Manager timing unknown")+'; stated preferences unknown.</small></div>':"")
+        +'<small>'+esc(p.caveat)+'</small></div>').join("")
       +'</div>':"";
     const freeHtml='<div class="audit-box"><h4>VERIFIED UNROSTERED CANDIDATES</h4>'+
       (!free.verified?'<div class="empty">No fresh roster-action scan. '+esc(free.reason||"")+'. No specific free agent is being recommended.</div>'
