@@ -221,3 +221,44 @@ verifies roster IDs, inventory ownership, counts, and conservative handling of
 missing market scans. GitHub Actions runs it with `continue-on-error` since
 third-party uptime is not under our control. Ordinary unit/UI tests remain
 mandatory.
+
+
+## Trade offers: two separate managers, not two point deltas
+
+The shared `trade-fit.js` engine now evaluates a proposed exchange from both
+owners' actual rosters. It checks:
+
+- Each roster's dedicated starter gaps, available players, and FLEX pool
+- Positional shortages that a trade would fix or newly create
+- Players the other owner would have to cut to fit a multi-player return
+- Dynasty age/pick context and differences between contending/retooling
+- Observed completed trades, with a count of RB/WR/TE/QB etc. acquired and
+  picks received (when Sleeper's transaction data includes them)
+- Whether a suggested deal offers anything compelling to the other owner
+  besides the projection model's numerical score
+
+The ranking of automated trade candidates now places less weight on our own
+projection delta and more weight on both teams' positional coverage,
+manager-specific historical acquisitions and roster-space costs. An offer is
+not promoted merely because the model finds two small positive point deltas.
+If a trade creates a new shortage, that risk takes precedence in the
+front-office display. The independent AI GM must articulate why the other
+owner might want the assets, or choose HOLD.
+
+**Observed acquisition patterns are not stated wants.** The app has no
+private knowledge of a manager's conversations, plans, negotiations or
+willingness to trade. An inferred preference must be explicitly labeled
+as uncertain. Real offers still require checking injuries, values and the
+manager's stated needs.
+
+**What was suppressed and why:** Low-utility waiver stashes and one-sided
+or structurally damaging trade candidates can be withheld from the main
+action queue. When every candidate fails those checks, it now displays a
+specific HOLD action rather than recycling a failed fallback claim.
+Raw matchup detail, the roster market and researched trade ideas are not
+deleted; users can still inspect them separately. These safety gates are
+intended to prevent bad actions, not to conceal data.
+
+Automated tests cover mutual shortages, a required-starter gap created by a
+trade, no completed trades, past positional acquisitions, dynasty pick
+uncertainty and bench-FAAB churn. No transactions are executed.
