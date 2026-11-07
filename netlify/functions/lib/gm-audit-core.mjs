@@ -1,3 +1,5 @@
+import "../../../trade-fit.js";
+
 // Pure league-wide audit. No provider projections or invented player values.
 // Inputs are the observed Sleeper league, rosters, matchup scores, transactions,
 // traded picks and player metadata. Keep all calculations testable without network.
@@ -401,6 +403,40 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
       "Only observed recent league-scored games; no rest-of-season forecast.",
     teams:inventory,
   };
+  // Existing trade suggestions are not declared realistic just because both
+  // projected lineup deltas are positive. Evaluate actual coverage and the
+  // other owner's context from the current roster inventory.
+  const meAssetTeam=inventory.find(t=>t.isMe);
+  const fitAudit={
+    league:{mode:pickBook.mode,activeSlots:(league.roster_positions||[]).filter(x=>!["BN","IR","TAXI"].includes(x)),
+      playoffTeams:Number(league.settings?.playoff_teams||0),teamCount},
+    teams:teams.map(t=>({
+      rosterId:t.rosterId,name:t.name,standing:t.standing,pfRank:t.pfRank,tradeCount:t.tradeCount
+    }))
+  };
+  const normalize=x=>String(x||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+  for(const idea of tradeSimulations){
+    const other=inventory.find(t=>normalize(t.name)===normalize(idea.partner));
+    if(!meAssetTeam||!other)continue;
+    const outgoing=idea.send.map(p=>meAssetTeam.players.find(x=>normalize(x.name)===normalize(p.name)));
+    const incoming=other.players.find(x=>normalize(x.name)===normalize(idea.get?.name));
+    if(outgoing.some(x=>!x)||!incoming)continue;
+    const fit=globalThis.WarRoomTradeFit.assess({
+      audit:fitAudit,me:meAssetTeam,partner:other,
+      send:outgoing.map(p=>({type:"player",id:"P:"+p.id,player:p})),
+      receive:[{type:"player",id:"P:"+incoming.id,player:incoming}]
+    });
+    idea.twoSidedFit={
+      status:fit.status,hasMutualDepthFit:fit.hasMutualDepthFit,
+      yourReasons:fit.mine.reasons,theirReasons:fit.partner.reasons,
+      yourRisks:fit.mine.risks,theirRisks:fit.partner.risks,
+      why:fit.why,
+      inferredOtherDirection:fit.partner.context.inferredDirection
+    };
+    idea.caveat+=" "+(fit.hasMutualDepthFit?
+      "Both sides' positional coverage improves under current roster counts.":
+      "At least one side has no verified positional-needs benefit; investigate starter quality and preferences.");
+  }
   return {
     at:now,league:{id:league.league_id,name:league.name,season:league.season,week:history.length+1,
       mode:pickBook.mode,teamCount,playoffTeams:Number(league.settings?.playoff_teams||0),
