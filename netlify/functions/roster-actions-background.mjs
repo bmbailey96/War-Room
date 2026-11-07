@@ -1996,7 +1996,9 @@ export default async req=>{
         });
         const tradeLearned=rosterLearningAdjustment(rosterLearning,tradeLearningTags);
         const fitPartnerId=String(partner.rosterId||partner.ownerId||target.partner);
-        const fitPartner={rosterId:fitPartnerId,name:target.partner,players:partner.players.map(fitPlayer)};
+        const fitPartner={rosterId:fitPartnerId,name:target.partner,players:partner.players.map(fitPlayer),
+          tradeHistory:{positionsAcquired:seasonAcquired,completedTrades:seasonTrades,
+            futurePicksAcquired:Number(profile.seasonPicksReceived||0)}};
         const fitAudit={
           league:{mode,activeSlots,teamCount:Number(league.total_rosters||snapshot.teams.length||12),
             playoffTeams:Number(league.settings?.playoff_teams||0)},
@@ -2041,6 +2043,8 @@ export default async req=>{
               theirReasons:structuralFit.partner.reasons,
               yourRisks:structuralFit.mine.risks,
               theirRisks:structuralFit.partner.risks,
+              managerSignals:structuralFit.why,
+              partnerHistoricalAcquisitions:seasonAcquired,
               partnerCuts:partnerCuts.map(p=>p.name),
               observedAcquisitionFit,
               counterpartPreferenceVerified:false
