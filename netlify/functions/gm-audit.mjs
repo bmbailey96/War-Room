@@ -61,7 +61,7 @@ export default async function gmAudit(request){
     });
     const gradeWeeks=matchups.flatMap((rows,i)=>{
       if(!Array.isArray(rows)||rows.length!==rosters.length)return [];
-      const valid=rows.every(r=>r?.roster_id!=null && Number.isFinite(Number(r.points??r.custom_points)));
+      const valid=rows.every(r=>{const pts=r?.points??r?.custom_points;return r?.roster_id!=null&&pts!=null&&Number.isFinite(Number(pts))});
       return valid?[{week:i+1,rows}]:[];
     });
     audit.validation=gradeCapturedProjections(
