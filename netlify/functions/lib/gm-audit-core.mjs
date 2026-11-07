@@ -253,6 +253,8 @@ function opponentTradeIdeas(me, teams, league, recent) {
         name:p.name,pos:p.pos,recentAvg:p.recentAvg,observedWeeks:p.observedWeeks
       })),
       completedTradesThisSeason:involvement,
+      observedPositionsAcquired:t.tradeHistory?.positionsAcquired||{},
+      picksAcquiredInCompletedTrades:t.tradeHistory?.futurePicksAcquired||0,
       fitScore:score,
       caveat:"Positional fit only. No fair offer or willingness to trade has been established."
     });
