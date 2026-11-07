@@ -24,9 +24,10 @@
     const status='<div class="audit-source">'+(stale?'<span class="audit-alert">STALE DATA · '+esc(data.cache.warning||"Recheck before acting")+'</span>':"")
       +'<span>SLEEPER LEAGUE SNAPSHOT · '+esc(humanAge(data.at))+'</span>'
       +'<span>'+esc(cover.completedWeeks||0)+' COMPLETED WEEKS ANALYZED</span>'
-      +'<span>'+esc(cover.missingMatchupWeeks?.length||0)+' MISSING WEEK RESPONSES</span></div>';
+      +'<span>'+esc(cover.missingMatchupWeeks?.length||0)+' MISSING WEEK RESPONSES</span>'+
+      (!cover.completeHistory?'<span class="audit-alert">PARTIAL HISTORY · SCHEDULE LUCK MAY BE UNAVAILABLE</span>':'')+'</div>';
     const stats='<div class="audit-metrics">'+[
-      row("CURRENT STANDING",rank(me.standing,t.length),(me.wins||0)+"-"+(me.losses||0)+" record"),
+      row("EST. STANDING",rank(me.standing,t.length),(me.wins||0)+"-"+(me.losses||0)+" record"),
       row("POINTS FOR RANK",rank(me.pfRank,t.length),fixed(me.pointsPerGame)+" points/game"),
       row("ALL-PLAY RANK",rank(me.allPlayRank,t.length),fixed(all.allPlayPct,0)+"% beats league"),
       row("SCHEDULE LUCK",all.luckWins==null?"Not comparable":(Number(all.luckWins)>=0?"+":"")+fixed(all.luckWins)+" wins",
