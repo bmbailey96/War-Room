@@ -29,7 +29,7 @@ for(const choice of leagues.filter(x=>Number(x.season)===Number(nfl.season)).sli
    get("https://api.sleeper.app/v1/league/"+id+"/users"),
    get("https://api.sleeper.app/v1/league/"+id+"/traded_picks").catch(()=>[])
  ]);
- const count=Math.min(5,Math.max(0,Number(nfl.week)-1));
+ const count=Math.min(18,Math.max(0,Number(nfl.week)-1));
  const weeks=await Promise.all(Array.from({length:count},(_,i)=>get(
    "https://api.sleeper.app/v1/league/"+id+"/matchups/"+(i+1)
  ).then(rows=>({week:i+1,rows})).catch(()=>({week:i+1,rows:[]}))));
@@ -48,8 +48,12 @@ for(const choice of leagues.filter(x=>Number(x.season)===Number(nfl.season)).sli
    name:league.name,id,season:league.season,
    mode:audit.league.mode,teamCount:audit.league.teamCount,
    myRosterId:audit.me.rosterId,myPlayerCount:audit.me.depth.players.length,
+   record:String(audit.me.wins)+"-"+String(audit.me.losses),
    completedWeeks:audit.coverage.completedWeeks,
    pfRank:audit.me.pfRank,allPlayPct:audit.me.allPlay.allPlayPct,
+   allPlayExpectedWins:audit.me.allPlay.expectedWins,
+   scheduleLuckWins:audit.me.allPlay.luckWins,
+   fullHistory:audit.coverage.completeHistory,
    picks:audit.me.picks.length
  }));
 }
