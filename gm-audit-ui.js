@@ -51,7 +51,13 @@
           +(p.targetExamples?.length?'<small>Example targets, ranked by observed recent scoring: '
             +p.targetExamples.map(x=>esc(x.name)+' ('+esc(x.pos)+', '+fixed(x.recentAvg)+' over '+esc(x.observedWeeks)+' recorded weeks)').join(" · ")+'</small>':'')
           +'<small>'+esc(p.completedTradesThisSeason)+' completed trades observed this season. '
-          +'This is not a fair-value offer.</small></div>').join("")
+          +'This is not a fair-value offer.</small>'
+          +(Object.keys(p.observedPositionsAcquired||{}).length?
+            '<small>Previously acquired in completed trades: '+
+              Object.entries(p.observedPositionsAcquired).filter(([,n])=>Number(n)>0)
+                .sort((a,b)=>Number(b[1])-Number(a[1])).map(([pos,n])=>esc(n)+' '+esc(pos)).join(', ')+
+              '. Past acquisitions do not establish current preferences.</small>':'')
+          +'</div>').join("")
         :'<div class="empty">No two-sided positional-surplus match cleared the screen. That is not proof there are no good trades. A player-value review is still required.</div>')
       +'</div>';
 
@@ -68,7 +74,9 @@
           +'<p><strong>Your roster:</strong> '+esc(p.twoSidedFit.yourReasons?.join("; ")||"No verified shortage addressed")+'</p>'
           +'<p><strong>Their roster:</strong> '+esc(p.twoSidedFit.theirReasons?.join("; ")||"No verified shortage addressed")+'</p>'
           +(p.twoSidedFit.theirRisks?.length?'<p class="audit-trade-caution"><strong>Their downside:</strong> '+esc(p.twoSidedFit.theirRisks.join("; "))+'</p>':"")
-          +'<small>'+esc(p.twoSidedFit.inferredOtherDirection||"Manager timing unknown")+'; stated preferences unknown.</small></div>':"")
+          +'<small>'+esc(p.twoSidedFit.inferredOtherDirection||"Manager timing unknown")+'; stated preferences unknown.</small>'
+          +(p.twoSidedFit.why?.length?'<small>'+esc(p.twoSidedFit.why.slice(0,3).join(" · "))+'</small>':"")
+          +'</div>':"")
         +'<small>'+esc(p.caveat)+'</small></div>').join("")
       +'</div>':"";
     const freeHtml='<div class="audit-box"><h4>VERIFIED UNROSTERED CANDIDATES</h4>'+
