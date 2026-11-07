@@ -9,6 +9,8 @@ const metrics = {
   positionalDepth:"Observed available roster positions",
   availablePlayers:"Ownership-checked waiver candidates, possibly stale",
   candidateTrades:"Ownership-checked player trade simulations",
+  managerNeeds:"Current coverage shortages and active depth before/after trades for each roster",
+  managerBehavior:"Actual completed trades and inferred competitive direction; no claim of stated preferences",
   pickHoldings:"Reconstructed dynasty picks, when pick endpoint was available",
   forecastAccuracy:"Pre-kickoff model error and comparable baseline",
   informationGaps:"Audit limitations, freshness, and missing source data"
@@ -33,7 +35,16 @@ export function buildReviewRequest(audit) {
       candidate:{partner:x.partner,send:x.send.map(p=>p.name),get:x.get.name,
         myWeeklyModelDelta:x.myWeeklyModelDelta,
         theirWeeklyModelDelta:x.theirWeeklyModelDelta,
-        marketModelDelta:x.dynastyModelValueDelta}
+        marketModelDelta:x.dynastyModelValueDelta,
+        structuralFit:x.twoSidedFit?{
+          status:x.twoSidedFit.status,
+          myNeedsAddressed:x.twoSidedFit.yourReasons||[],
+          otherOwnerNeedsAddressed:x.twoSidedFit.theirReasons||[],
+          myNewShortages:x.twoSidedFit.yourRisks||[],
+          otherOwnerNewShortages:x.twoSidedFit.theirRisks||[],
+          otherOwnerCurrentDirection:x.twoSidedFit.inferredOtherDirection||"Unknown",
+          wishesVerified:false
+        }:null}
     }))
   ];
   const safe={
@@ -78,6 +89,10 @@ export function makePrompt(data) {
     "Do not claim to have checked live injuries, news or external consensus; NO web search is being performed.",
     "Differentiate historic scoring and modeled projections. All-play is a counterfactual, NOT playoff odds.",
     "Do not recommend automatic trades; these are proposals for a human to investigate.",
+    "Assess BOTH managers' needs and gaps, positional scarcity, change in FLEX/startable depth, draft picks, team timelines, roster cuts and available alternatives.",
+    "A positive point delta for both teams DOES NOT by itself establish that a trade is desirable or that the other owner wants these assets.",
+    "State a plausible reason for the OTHER owner to consider the trade, grounded in observed roster structure or actual transaction history. Past trades are a clue, not proof of preferences.",
+    "If no persuasive two-sided incentive is supported by the provided facts, choose HOLD rather than manufacturing a trade rationale.",
     "Choose one single candidate from the provided choices by exact id. HOLD is valid.",
     "Treat uncertain evidence as unresolved. Explain the strongest opposing argument.",
     "Use cited evidence keys from this whitelist ONLY: "+JSON.stringify(evidenceFields)+".",
