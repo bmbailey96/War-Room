@@ -14,6 +14,8 @@ import lineup, {
 import { detectLeagueMode,validateActions,acquisitionPolicy,waiverScheduleFromSettings } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 import { diagnoseTeamState,buildAllPlayMetrics } from "./lib/team-state.mjs";
+import { waiverEvidenceGuard } from "./lib/waiver-evidence-guard.mjs";
+import "../../trade-fit.js";
 import {
   buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge,roleExpansionSafety
 } from "./lib/opportunity-v2.mjs";
@@ -1857,6 +1859,15 @@ export default async req=>{
     // generated from prose: both teams are re-optimized and dynasty packages
     // must land inside a reasonable market-value band.
     const deterministicTrades=[];
+    // Start with observed roster constraints, not only projected point deltas.
+    const fitPlayer=p=>({
+      id:String(p.pid||p.id||normName(p.name)),
+      name:p.name,pos:p.pos,age:p.age??null,
+      injury:p.injury||p.inj||null,onReserve:!!(p.onIR||p.onReserve),
+      recentMean:p.recentPts??null,observedWeeks:p.currentGames??0
+    });
+    const fitMine={rosterId:"mine",name:"My roster",players:myRoster.map(fitPlayer)};
+
     const myBench=myRoster
       .filter(p=>!starterSet.has(p.name)&&!p.onIR&&!hardInjured(p.injury))
       .sort((a,b)=>(mode==="DYNASTY"?(a.market??0)-(b.market??0):(a.next3||0)-(b.next3||0)));
@@ -1984,8 +1995,35 @@ export default async req=>{
           type:"TRADE_FOR",tradeTiming:targetTiming
         });
         const tradeLearned=rosterLearningAdjustment(rosterLearning,tradeLearningTags);
-        const score=(weeklyDelta*7+partnerWeeklyDelta*1.5-fairnessPenalty)*openness+
-          managerFit+timingScore+tradeLearned.bonus;
+        const fitPartnerId=String(partner.rosterId||partner.ownerId||target.partner);
+        const fitPartner={rosterId:fitPartnerId,name:target.partner,players:partner.players.map(fitPlayer),
+          tradeHistory:{positionsAcquired:seasonAcquired,completedTrades:seasonTrades,
+            futurePicksAcquired:Number(profile.seasonPicksReceived||0)}};
+        const fitAudit={
+          league:{mode,activeSlots,teamCount:Number(league.total_rosters||snapshot.teams.length||12),
+            playoffTeams:Number(league.settings?.playoff_teams||0)},
+          teams:[
+            {rosterId:"mine",name:fitMine.name,tradeCount:Number(myTradeBehavior?.seasonTrades||0)},
+            {rosterId:fitPartnerId,name:target.partner,tradeCount:seasonTrades}
+          ]
+        };
+        const structuralFit=globalThis.WarRoomTradeFit.assess({
+          audit:fitAudit,me:fitMine,partner:fitPartner,
+          send:sentPlayers.map(p=>({type:"player",id:"P:"+fitPlayer(p).id,player:fitPlayer(p)})),
+          receive:[{type:"player",id:"P:"+fitPlayer(targetPlayer).id,player:fitPlayer(targetPlayer)}],
+          partnerCuts:partnerCuts.map(fitPlayer)
+        });
+        // Manager wants are inferred, never verified. A positive lineup delta
+        // alone is not enough to promote an offer.
+        const partnerShortageFilled=structuralFit.partner.reasons.length>0;
+        const partnerStarterImproves=partnerWeeklyDelta>=1.75;
+        const observedAcquisitionFit=positionTaste>=1.1&&partnerWeeklyDelta>=.5;
+        if(!(partnerShortageFilled||partnerStarterImproves||observedAcquisitionFit))continue;
+        if(structuralFit.partner.risks.length&&partnerWeeklyDelta<3)continue;
+        const structuralBonus=structuralFit.hasMutualDepthFit?7:partnerShortageFilled?3:0;
+        const structuralPenalty=structuralFit.partner.risks.length*5+structuralFit.mine.risks.length*3;
+        const score=(weeklyDelta*4+partnerWeeklyDelta*2.5-fairnessPenalty)*openness+
+          managerFit*1.5+structuralBonus-structuralPenalty+timingScore+tradeLearned.bonus;
         if(!best||score>best.score){
           best={
             score,partner:target.partner,target:target.name,
@@ -1998,6 +2036,19 @@ export default async req=>{
             tradeRatio:tradeFit.ratio,
             marketDelta,
             managerFit:round(managerFit),
+            twoSidedFit:{
+              status:structuralFit.status,
+              hasMutualDepthFit:structuralFit.hasMutualDepthFit,
+              yourReasons:structuralFit.mine.reasons,
+              theirReasons:structuralFit.partner.reasons,
+              yourRisks:structuralFit.mine.risks,
+              theirRisks:structuralFit.partner.risks,
+              managerSignals:structuralFit.why,
+              partnerHistoricalAcquisitions:seasonAcquired,
+              partnerCuts:partnerCuts.map(p=>p.name),
+              observedAcquisitionFit,
+              counterpartPreferenceVerified:false
+            },
             tradeTiming:targetTiming,
             sentTradeTiming:sentPlayers.map(p=>({
               name:p.name,...(p.tradeTiming||roleMarketTiming(p))
@@ -2014,7 +2065,7 @@ export default async req=>{
         }
       }
       if(best){
-        best.confidence=best.weeklyDelta>=2&&best.partnerWeeklyDelta>=-1?"HIGH":"MEDIUM";
+        best.confidence=best.twoSidedFit?.hasMutualDepthFit&&best.weeklyDelta>=2&&best.partnerWeeklyDelta>=1.5?"MEDIUM":"LOW";
         const timingNote=best.tradeTiming?.code==="BUY_LOW"
           ? " Role is ahead of recent fantasy scoring, so the target gets a small buy-low timing boost."
           : best.tradeTiming?.code==="BUY_ROLE"
@@ -2027,7 +2078,7 @@ export default async req=>{
         best.why=(mode==="DYNASTY"
           ? `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, market ${best.sendValue} → ${best.receiveValue}; package fit uses this manager's historical behavior and real roster-space cost.`
           : `Deterministic trade math: ${best.weeklyDelta>=0?"+":""}${best.weeklyDelta.toFixed(1)} points/week for my best lineup, ${best.partnerWeeklyDelta>=0?"+":""}${best.partnerWeeklyDelta.toFixed(1)} for theirs, six-week value ${best.horizonSend} → ${best.horizonReceive}; extra roster spots are charged to the partner side.`
-        )+timingNote;
+        )+` My roster need: ${best.twoSidedFit.yourReasons.join("; ")||"starter-quality gain not a demonstrated shortage"}. Their roster need: ${best.twoSidedFit.theirReasons.join("; ")||"no demonstrated shortage"}. Trading history is observed; their actual preferences remain unknown.`+timingNote;
         best.explanation=tradeExplanation(best,{mode,partnerBehavior:best.partnerBehavior});
         deterministicTrades.push(best);
       }
@@ -2061,6 +2112,7 @@ export default async req=>{
         const dropSafety=drop
           ? dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta,informationConfidence})
           : {allowed:true,profile:null};
+        const evidenceGuard=waiverEvidenceGuard({mode,action:a,add,drop,weeklyDelta,activeSlots,roster:myRoster});
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
@@ -2116,10 +2168,11 @@ export default async req=>{
           signalCount:agreement.count,signalAgreement:agreement,
           fastTrending:add?.fastTrending??0,
           trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
-          rosterFitBlocked:!specialist.allowed||!depthFit.allowed||!dropSafety.allowed,
+          rosterFitBlocked:!specialist.allowed||!depthFit.allowed||!dropSafety.allowed||evidenceGuard.block,
           specialistMode:specialist.mode||null,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
-          rosterFitReason:specialist.reason||depthFit.reason||dropSafety.reason||null,
+          rosterFitReason:evidenceGuard.reasons.join(" ")||specialist.reason||depthFit.reason||dropSafety.reason||null,
+          evidenceGuard,
           dropSafety,
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
@@ -2312,9 +2365,7 @@ export default async req=>{
     const result={
       at:Date.now(),league:{id:chosen.id,name:league.name,mode,week,season},
       summary:irPlan?.headline||parsed.summary||actions[0]?.headline||"No urgent roster move.",
-      actions:actions.length?actions:deterministicRosterFallback({
-        waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct,teamState
-      }).actions,
+      actions:actions.length?actions:[{type:"HOLD",headline:"No transaction clears the evidence and roster-safety checks",why:"Review player roles, current ownership and independent market value before spending FAAB or proposing a trade.",confidence:"LOW"}],
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
         teamState,

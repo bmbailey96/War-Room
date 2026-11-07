@@ -12,6 +12,7 @@ const document={hidden:false,getElementById:node,addEventListener(){},createElem
 const ctx=vm.createContext({document,AbortController,Date,URL,console,
   fetch:(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})),
   setTimeout:(fn,ms)=>{timers.set(++timerId,{fn,ms});return timerId},clearTimeout:id=>timers.delete(id)});
+vm.runInContext(fs.readFileSync(new URL('../decision-brief.js',import.meta.url),'utf8'),ctx);
 vm.runInContext(script,ctx);
 const run=code=>vm.runInContext(code,ctx);
 const tick=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
@@ -70,7 +71,7 @@ assert.doesNotMatch(node('headline').textContent,/Old live call/);
 await respond(newReq,base('B'));
 console.log('UI checks passed: stale league responses, canceled polls, live authority, zero odds, and honest error states.');
 
-run(`liveState=null;analysisState=null;base={optimal:[{player:{pid:'1',name:'Recommended starter'}}]};renderMoves({reasoningAvailable:false,actions:[{type:'ADD_DROP',stash:true,headline:'Stash a tight end',drop:{pid:'1',name:'Recommended starter'},add:{name:'Bench TE'}}]})`);
+run(`liveState=null;analysisState=null;base={optimal:[{player:{pid:'1',name:'Recommended starter'}}]};renderMoves({at:Date.now(),freshness:{targetMinutes:60},reasoningAvailable:false,actions:[{type:'ADD_DROP',stash:true,weeklyDelta:2,immediateFreeAgent:true,headline:'Stash a tight end',drop:{pid:'1',name:'Recommended starter'},add:{name:'Bench TE'}}]})`);
 assert.match(node('moves').innerHTML,/LINEUP CONFLICT/);
 assert.match(node('moves').innerHTML,/REVIEW FIRST/);
 assert.doesNotMatch(node('actionqueue').innerHTML,/Stash a tight end/);

@@ -1,0 +1,19 @@
+/* AI GM: opt-in, explicitly gated, recommendation with countercase */
+.ai-panel{border-top:3px solid var(--amber)}
+.ai-intro{font:12px/1.55 system-ui,sans-serif;color:#d4dfe7;background:rgba(229,162,74,.055);padding:11px;border:1px solid rgba(229,162,74,.18)}
+.ai-intro b{color:var(--paper);font-weight:600}
+.ai-controls{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin:13px 0}
+.ai-controls label{color:var(--muted);font:10px var(--mono)}
+.ai-controls input{min-width:180px;flex:1;background:var(--panel3);color:var(--paper);border:1px solid var(--line);padding:11px 12px;border-radius:2px;font:12px var(--mono);min-height:44px}
+.ai-status{color:var(--amber);font:10px/1.5 var(--mono);padding:7px 0}
+.ai-result{border:1px solid rgba(115,198,145,.3);background:rgba(8,24,38,.65);padding:14px}
+.ai-result-header{display:flex;justify-content:space-between;gap:11px;flex-wrap:wrap;font:9px var(--mono);color:var(--muted)}
+.ai-result-header b{color:var(--green)}
+.ai-result h4{color:var(--bright);font:500 20px/1.25 var(--display);margin:9px 0}
+.ai-result p{font:12px/1.6 system-ui,sans-serif;color:#d9e4e9}
+.ai-result p strong{color:var(--amber)}
+.ai-evidence{border-top:1px dashed var(--line);margin-top:12px;padding:11px 0;font:10px/1.7 var(--mono)}
+.ai-evidence summary{color:var(--bright);cursor:pointer}
+.ai-note,.ai-warning{font:10px/1.55 var(--mono);padding:10px 0;color:var(--muted)}
+.ai-warning{color:var(--amber)}
+@media(max-width:620px){.ai-controls{display:grid;grid-template-columns:1fr}.ai-controls input{width:100%}.ai-controls button{width:100%}}

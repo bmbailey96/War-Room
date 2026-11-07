@@ -18,3 +18,7 @@ jobs:
       - name: Live Sleeper smoke
         continue-on-error: true
         run: node scripts/live-sleeper-smoke.mjs
+
+      - name: Live GM audit smoke for both owned leagues
+        continue-on-error: true
+        run: node scripts/live-gm-audit-smoke.mjs

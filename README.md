@@ -7,7 +7,7 @@ The old full War Room remains at `/legacy.html` for reference. It is not the sou
 ## V2 architecture
 
 - `netlify/functions/lineup.mjs` builds league-specific projections and the mathematically best legal lineup.
-- `lineup-analysis.mjs` is the live-news judgment layer. It may override a close numerical call only for concrete current evidence.
+- `lineup-analysis.mjs` currently returns deterministic lineup explanations plus dated public RSS headlines. It does **not** independently verify stories or override lineup/roster calls.
 - `lineup-refresh.mjs` snapshots both leagues before games so learning happens even if the site is never opened.
 - `learn.mjs` grades completed weeks every Tuesday and updates each league independently.
 - V2 state lives only in the Netlify Blob store `war-room-v2`.
@@ -94,3 +94,171 @@ The lineup and roster workflows make no paid AI calls. Public headlines never
 create lineup overrides or reasoning-training samples. Existing structured injury
 and game-lock data still govern lineup legality. The older legacy cockpit remains
 separate and can contain Anthropic-dependent tools.
+
+## Front-office decision brief (draft branch)
+
+A first screen above the original lineups now separates:
+
+- **This week:** legal lineup changes with meaningful model edges, urgent injury deadlines, FLEX flexibility, and fresh league-verified acquisitions.
+- **Roster and long game:** available RB depth and redundant kicker slots in redraft; potential TE trade capital in dynasty; current team state.
+- **Evidence limits:** age of the free-agent scan, lineup/drop conflicts, ungraded reasoning claims, large disagreements with Sleeper, and the fact that RSS headlines are not automatically incorporated into moves.
+
+The original lineup model, micro-matchup details, lineup history, pickups/trades, and news remain accessible. Micro-matchup details are collapsed by default, not removed.
+
+**Hard gates:** never elevate a roster move above the fold when its free-agent scan is missing, refreshing, or stale; don't elevate drops of optimal starters; don't promote a zero-benefit stash as an urgent pickup; don't treat ungraded model confidence as measured success. Live-game mode suppresses stale pregame suggestions.
+
+**Copy GM Dossier** exports a bounded, fact-labeled plaintext digest of the current selected league: starters, full roster, model and provider projections, actionable candidate data, current waiver/pick/team-state context, and caveats. It does not transmit data automatically or run a paid AI service. Paste it into your chosen research tool for further analysis.
+
+## League-wide GM audit (draft branch)
+
+`gm-audit.mjs` validates the selected Sleeper league and fetches all league
+rosters, users, traded picks, completed matchups and trade transactions. It
+also reads a cached roster-action scan when fresh. Each league is stored
+independently in Netlify Blobs under `gm_audit_v1_<leagueId>`.
+
+`lib/gm-audit-core.mjs` is pure and independently tested. It produces:
+
+- PF and optimistic potential-points rankings; estimated standings, roster
+  depth, active-player counts and injury designation flags
+- All-play expected wins, all-play ranking, and schedule luck. Record
+  comparison is omitted when completed weeks do not match actual games played
+- All opponents' depth, scoring and observed completed trade participation
+- Possible two-sided positional trade fits, clearly marked NOT OFFERS
+- Only player-only packages already simulated by the existing trade model:
+  player ownership and partner team are rechecked against current Sleeper
+  rosters. Pick-inclusive trade packages are withheld pending verification
+- Future rookie-pick holdings for dynasty, including traded origin
+- Free-agent candidates cross-checked against current ownership and injury
+  status. Stale scans are not represented as live opportunities
+
+`gm-audit-ui.js` renders a mobile-friendly section beneath the main weekly
+brief. The Copy GM Dossier button also includes league-wide audit findings.
+
+### Forecast validation
+
+`lib/gm-calibration.mjs` grades saved player projections **only when the saved
+forecast timestamp predates that player's kickoff**. It uses actual Sleeper
+league-scored player points. For player-weeks with at least two prior observed
+results it calculates a preceding two-to-three-week mean baseline. Error
+comparisons always use the **same player-weeks**. Displayed results include
+MAE, bias, sample size, the most recent misses and an explicit
+insufficient-evidence condition. **The scorecard does not silently alter
+model weights or imply predictive superiority.**
+
+### Still required
+
+- Official date-specific injury and role reporting connected to individual
+  moves. RSS headlines alone are not a medical source of truth.
+- Independent provider/consensus benchmarks, matchup Brier scoring, and
+  rolling out-of-sample validation beyond the trailing-average comparison.
+- Independently defensible player and pick prices for true offer construction,
+  and confirmed partner incentives. Positional fits are not valuations.
+- A complete remaining-season schedule and playoff model, accurate future
+  lock/waiver timing, and deeper contingency planning.
+- More frequent revalidation of ownership and player statuses during games.
+
+No Sleeper transactions are performed, no paid AI is invoked and old detailed
+matchup and roster components remain. They are collapsed or reordered, not
+deleted. The old README claim that public RSS could override V2 lineup
+judgment was changed because the currently shipped module is deterministic.
+
+
+
+## Two-sided Trade Laboratory (draft branch)
+
+The Trade Laboratory uses the current Sleeper league inventory from GM Audit.
+Select another manager and up to four assets from each side, including owned
+dynasty draft picks. No transaction is made.
+
+It calculates both teams' best legal starting lineup under a recent observed
+four-game baseline *only when there are at least two league-scored appearances*
+for each needed starter. Missing history remains unknown. Dynasty reference
+values come from DynastyProcess 1QB, where published. Missing market values
+remain unknown. Pick origins and value ranges are not precisely priced.
+Roster-space imbalance and potential injury uncertainty are flagged.
+
+The tool is **not a rest-of-season forecast**, not a verified injury report,
+and not proof that an owner would accept a trade.
+
+## Independent GM Review (draft branch, opt-in)
+
+The independent GM section has two workflows:
+
+1. **COPY REVIEW PROMPT FOR CHATGPT** copies a fact-labeled audit and
+   instructions for an independent analysis. No provider key or automatic
+   inference call is needed.
+2. **RUN INDEPENDENT REVIEW** makes one expressly requested server-side AI
+   call, only after private owner authentication. It is disabled by default.
+
+To enable the paid reviewer, privately configure Netlify environment variables:
+
+- `WARROOM_GM_OWNER_CODE`: high-entropy random secret at least 24 characters.
+- `ANTHROPIC_API_KEY`: existing or new Anthropic API key.
+
+Never commit either value or paste it into a public chat. The owner enters
+the access code in the page's password field, which clears after submission.
+The server checks that the league belongs to this Sleeper owner, rejects
+audits older than an hour, attempts a per-league concurrency lock, and
+caches the validated report for 12 hours per league. A lock is not a strict
+distributed billing guarantee; monitor provider usage separately. Reviews
+never trigger on load, refresh, or switching leagues.
+
+The AI uses the GM Audit only, without external web search. It chooses
+among a server whitelist of actual reviewed waiver/trade candidates or HOLD,
+returns its strongest counterargument, and labels source fields. Free-text
+reasoning is still an AI hypothesis, not verified current news. No trade,
+waiver, or other fantasy transaction is performed.
+
+**Pre-merge security concern:** some legacy AI endpoints remain exposed with
+provider credentials server-side. The new owner-protected reviewer does not
+reuse those endpoints; assess the legacy access controls before production
+deployment. Existing legacy views and endpoints were not removed.
+
+## Live Sleeper smoke
+
+`scripts/live-gm-audit-smoke.mjs` fetches both owned current Sleeper leagues and
+verifies roster IDs, inventory ownership, counts, and conservative handling of
+missing market scans. GitHub Actions runs it with `continue-on-error` since
+third-party uptime is not under our control. Ordinary unit/UI tests remain
+mandatory.
+
+
+## Trade offers: two separate managers, not two point deltas
+
+The shared `trade-fit.js` engine now evaluates a proposed exchange from both
+owners' actual rosters. It checks:
+
+- Each roster's dedicated starter gaps, available players, and FLEX pool
+- Positional shortages that a trade would fix or newly create
+- Players the other owner would have to cut to fit a multi-player return
+- Dynasty age/pick context and differences between contending/retooling
+- Observed completed trades, with a count of RB/WR/TE/QB etc. acquired and
+  picks received (when Sleeper's transaction data includes them)
+- Whether a suggested deal offers anything compelling to the other owner
+  besides the projection model's numerical score
+
+The ranking of automated trade candidates now places less weight on our own
+projection delta and more weight on both teams' positional coverage,
+manager-specific historical acquisitions and roster-space costs. An offer is
+not promoted merely because the model finds two small positive point deltas.
+If a trade creates a new shortage, that risk takes precedence in the
+front-office display. The independent AI GM must articulate why the other
+owner might want the assets, or choose HOLD.
+
+**Observed acquisition patterns are not stated wants.** The app has no
+private knowledge of a manager's conversations, plans, negotiations or
+willingness to trade. An inferred preference must be explicitly labeled
+as uncertain. Real offers still require checking injuries, values and the
+manager's stated needs.
+
+**What was suppressed and why:** Low-utility waiver stashes and one-sided
+or structurally damaging trade candidates can be withheld from the main
+action queue. When every candidate fails those checks, it now displays a
+specific HOLD action rather than recycling a failed fallback claim.
+Raw matchup detail, the roster market and researched trade ideas are not
+deleted; users can still inspect them separately. These safety gates are
+intended to prevent bad actions, not to conceal data.
+
+Automated tests cover mutual shortages, a required-starter gap created by a
+trade, no completed trades, past positional acquisitions, dynasty pick
+uncertainty and bench-FAAB churn. No transactions are executed.
