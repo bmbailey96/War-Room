@@ -6,6 +6,7 @@ import { getPlayersTrim, json, store } from "./lib/war-v2.mjs";
 import { rosterActionsCacheKey, rosterActionsFreshnessMs } from "./lib/roster-cache.mjs";
 import { buildGmAudit } from "./lib/gm-audit-core.mjs";
 import { gradeCapturedProjections } from "./lib/gm-calibration.mjs";
+import { getDynastyMarket } from "./lib/market-v2.mjs";
 
 const TTL_NORMAL=45*60*1000;
 const TTL_GAMEDAY=10*60*1000;
@@ -44,11 +45,12 @@ export default async function gmAudit(request){
     ]);
     const week=Math.max(1,Math.min(19,Number(nflState?.week)||Number(cache?.league?.week)||1));
     const priorWeeks=Array.from({length:week-1},(_,i)=>i+1);
-    const [matchups,txns,rosterScan,pregameLogs]=await Promise.all([
+    const [matchups,txns,rosterScan,pregameLogs,market]=await Promise.all([
       Promise.all(priorWeeks.map(w=>optionalJson("https://api.sleeper.app/v1/league/"+id+"/matchups/"+w))),
       Promise.all(priorWeeks.map(w=>optionalJson("https://api.sleeper.app/v1/league/"+id+"/transactions/"+w))),
       s.get(rosterActionsCacheKey(id),{type:"json"}).catch(()=>null),
       Promise.all(priorWeeks.map(w=>s.get("projection_"+id+"_"+w,{type:"json"}).catch(()=>null))),
+      Number(league?.settings?.type)===2 || Number(league?.settings?.pick_trading||0)>0?getDynastyMarket(s).catch(()=>null):Promise.resolve(null),
     ]);
     const scanAge=now-Number(rosterScan?.at||0);
     const freshScan=rosterScan&&scanAge>=0&&scanAge<=rosterActionsFreshnessMs(now)*1.5&&!rosterScan.refreshing
@@ -57,7 +59,7 @@ export default async function gmAudit(request){
       league,rosters,users,playersDB:db,tradedPicks:tradedPicks||[],
       weeks:matchups.map((rows,i)=>({week:i+1,rows:rows||[]})),
       transactions:txns.map((rows,i)=>({week:i+1,rows:rows||[]})),
-      ownerId:"863128676391383040",now,scan:freshScan
+      ownerId:"863128676391383040",now,scan:freshScan,market
     });
     const gradeWeeks=matchups.flatMap((rows,i)=>{
       if(!Array.isArray(rows)||rows.length!==rosters.length)return [];
