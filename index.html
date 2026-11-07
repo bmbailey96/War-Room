@@ -92,12 +92,13 @@ footer{color:var(--muted);font-size:9px;margin-top:25px}footer a{color:var(--mut
 @media(max-width:760px){.brief-cols{grid-template-columns:1fr}.brief-panel{padding:13px}.brief-entry p{font-size:13px}.brief-head h2{font-size:18px}}
 </style>
 <link rel="stylesheet" href="/gm-audit.css">
+<link rel="stylesheet" href="/trade-lab.css">
 </head>
 <body><div class="wrap">
 <div class="title"><div><div class="stamp">GAME WEEK</div><h1>WAR ROOM</h1><div class="sub">LIVE LINEUP + ROSTER DECISION DESK</div></div><div class="controls"><select id="league" aria-label="Fantasy league"></select><button id="refresh">UPDATE NOW</button></div></div>
 <div class="status"><span id="week">CONNECTING TO SLEEPER</span><span class="status-right"><span class="modepill core">LINEUP MODEL</span><span id="live" class="modepill offline">LIVE UPDATES IDLE</span><span id="brain" class="modepill offline">CHECKING NEWS…</span><span id="learned"></span></span></div>
 <div class="guide"><span class="go">GREEN = ACT</span> · <span class="watchtone">AMBER = WATCH OR DECIDE</span> · <span class="stop">RED = BLOCKED OR RISKY</span></div>
-<nav class="board-nav" aria-label="Board sections"><a href="#brief-section">Front office</a><a href="#gm-audit-section">GM audit</a><a href="#lineup-section">Lineup changes</a><a href="#roster-section">Pickups &amp; trades</a><a href="#best-section">Best lineup</a><a href="#watch-section">Watch list</a></nav>
+<nav class="board-nav" aria-label="Board sections"><a href="#brief-section">Front office</a><a href="#gm-audit-section">GM audit</a><a href="#trade-lab-section">Trade lab</a><a href="#lineup-section">Lineup changes</a><a href="#roster-section">Pickups &amp; trades</a><a href="#best-section">Best lineup</a><a href="#watch-section">Watch list</a></nav>
 <div id="board-status" class="board-status" role="status" aria-live="polite">Connecting to your league…</div>
 
 <section class="brief-panel" id="brief-section" aria-labelledby="brief-title">
@@ -110,6 +111,7 @@ footer{color:var(--muted);font-size:9px;margin-top:25px}footer a{color:var(--mut
 <div class="panel primary-queue"><div class="panel-head"><h3>NEXT MOVES</h3><span>IN ORDER OF IMPORTANCE</span></div><div class="actionqueue" id="actionqueue"><div class="empty">Building priorities…</div></div></div>
 </div>
 <details class="panel gm-audit-panel" id="gm-audit-section" open><summary class="panel-head"><h3>LEAGUE-WIDE GM AUDIT</h3><span>STANDINGS, OWNER DEPTH, REAL WAIVERS, PICKS AND TRADE FIT</span></summary><div id="gm-audit"><div class="empty">Fetching complete Sleeper league data…</div></div></details>
+<details class="panel tl-panel" id="trade-lab-section"><summary class="panel-head"><h3>TRADE LABORATORY</h3><span>BUILD BOTH SIDES FROM ACTUAL OWNED PLAYERS AND PICKS</span></summary><div id="trade-lab"><div class="empty">Waiting for complete league assets…</div></div></details>
 <div class="panel review-panel" id="review-panel" style="display:none"><div class="panel-head"><h3 id="review-title">LAST WEEK REVIEW</h3><span>WHAT ACTUALLY DECIDED THE RESULT</span></div><div id="week-review"></div></div>
 <div class="panel" id="lineup-section"><div class="panel-head"><h3>LINEUP CHANGES</h3><span>ONLY CHANGES WORTH MAKING</span></div><div id="calls"><div class="empty">Calculating…</div></div></div>
 <details class="panel disclosure"><summary class="panel-head"><h3>MODEL MATCHUP DETAILS</h3><span>COVERAGE, ROLE, PROTECTION, AND RUN GAME</span></summary><div><div class="edgegrid" id="microedges"><div class="empty">Checking player-specific matchup edges…</div></div></div></details>
@@ -122,6 +124,8 @@ footer{color:var(--muted);font-size:9px;margin-top:25px}footer a{color:var(--mut
 </div>
 <script src="/decision-brief.js"></script>
 <script src="/gm-audit-ui.js"></script>
+<script src="/trade-lab.js"></script>
+<script src="/trade-lab-ui.js"></script>
 <script>
 const $=id=>document.getElementById(id);let league=null,base=null,movesState=null,analysisState=null,liveState=null,liveTimer=null,marketPulseTimer=null,marketPulseSignature=null,lastMarketRefresh=0,liveBusy=false,marketPulseBusy=false;
 let boardEpoch=0,boardController=null,movesTimer=null,gmAuditState=null;
@@ -131,6 +135,7 @@ function liveBoard(){return liveState&&liveState.phase!=="PREGAME"}
 function resetBoard(){
   base=null;movesState=null;analysisState=null;liveState=null;gmAuditState=null;
   $("gm-audit").innerHTML="<div class=\"empty\">Fetching complete Sleeper league data…</div>";
+  if(typeof WarRoomTradeLabUI!=="undefined")WarRoomTradeLabUI.setData(null);
   for(const id of ["calls","moves","lineup","watch","microedges","actionqueue"])$(id).innerHTML='<div class="empty">Loading selected league…</div>';
   for(const id of ["current","best","gain"])$(id).textContent="—";
   $("headline").textContent="Building your board…";$("opponent").textContent="";$("model").innerHTML="";$("learned").textContent="";$("source").textContent="";
@@ -325,6 +330,7 @@ function renderGmAudit(d){
   gmAuditState=d;
   if(typeof WarRoomGmAudit==="undefined")return;
   $("gm-audit").innerHTML=WarRoomGmAudit.renderAudit(d);
+  if(typeof WarRoomTradeLabUI!=="undefined")WarRoomTradeLabUI.setData(d);
 }
 async function loadGmAudit(force=false,epoch=boardEpoch){
   if(typeof WarRoomGmAudit==="undefined"||!currentBoard(epoch)||!league)return;
@@ -377,6 +383,7 @@ $("copy-packet").onclick=async()=>{
         me:gmAuditState.me,teams:gmAuditState.teams,
         tradePartners:gmAuditState.tradePartners,
         tradeSimulations:gmAuditState.tradeSimulations,
+        tradeInventory:gmAuditState.tradeInventory,
         validation:gmAuditState.validation,
         freeAgents:gmAuditState.freeAgents,
         limitations:gmAuditState.limitations
@@ -387,6 +394,7 @@ $("copy-packet").onclick=async()=>{
     setTimeout(()=>btn.textContent="COPY GM DOSSIER",2500);
   }catch(e){btn.textContent="COPY BLOCKED";setTimeout(()=>btn.textContent="COPY GM DOSSIER",2500)}
 };
+if(typeof WarRoomTradeLabUI!=="undefined")WarRoomTradeLabUI.install();
 $("league").onchange=e=>{league=e.target.value;lastMarketRefresh=0;load(false)};
 $("refresh").onclick=()=>load(true);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&base){const epoch=boardEpoch;clearTimeout(liveTimer);clearTimeout(marketPulseTimer);liveTimer=setTimeout(()=>loadLive(epoch),500);marketPulseTimer=null}});
