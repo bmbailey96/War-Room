@@ -50,8 +50,23 @@ function verdict(d) {
       +(d.market?'<div><b>'+esc(sign(d.market.netValue))+'</b><span>MY DYNASTY VALUE</span></div>':'')
     +'</div>'
     :'<div class="tl-warning">Historical lineup effect unavailable. There are too few recent scores to estimate every starting slot without filling gaps with invented numbers.</div>';
+  const fit=d.twoSidedFit;
+  const side=(label,part)=>'<div class="tl-fit-side"><b>'+esc(label)+'</b><small>'
+    +esc(part?.context?.inferredDirection||"Competitive needs unknown")+'</small>'
+    +'<div class="tl-fit-good">'+(part?.reasons?.length?part.reasons.map(x=>'<p>'+esc(x)+'</p>').join("")
+      :'<p>No positional shortage is demonstrably resolved. Starter quality may still improve, but needs separate evidence.</p>')+'</div>'
+    +(part?.notes?.length?'<small>'+part.notes.map(esc).join(" · ")+'</small>':"")
+    +(part?.risks?.length?'<div class="tl-fit-risk">'+part.risks.map(x=>'<p>'+esc(x)+'</p>').join("")+'</div>':"")
+    +'</div>';
+  const fitHtml=fit?'<section class="tl-fit"><h4>TWO-SIDED ROSTER FIT · NOT JUST POINTS</h4>'
+    +'<div class="tl-fit-status">'+esc(fit.status)+'</div><div class="tl-fit-grid">'
+    +side("YOUR POSITIONAL NEEDS",fit.mine)+side(d.partner+"'S NEEDS (INFERRED)",fit.partner)+'</div>'
+    +'<div class="tl-fit-unknown">'+fit.why.map(x=>'<p>'+esc(x)+'</p>').join("")+'</div>'
+    +(fit.risks?.length?'<div class="tl-fit-risk">'+fit.risks.map(x=>'<p>'+esc(x)+'</p>').join("")+'</div>':"")
+    +'<p class="audit-footnote">'+esc(fit.evidence)+'</p></section>':
+    '<div class="tl-warning">Two-sided manager-needs evidence unavailable. Do not infer willingness from model points.</div>';
   return '<div class="tl-verdict"><h4>OFFER UNDER EXAMINATION</h4><div class="tl-summary"><b>Give: '+d.send.map(a=>esc(a.name)).join(" + ")+'</b><b>Get: '+d.receive.map(a=>esc(a.name)).join(" + ")+'</b></div>'
-    +metrics+
+    +fitHtml+metrics+
     '<div class="tl-caveats">'+d.risks.map(x=>'<p>'+esc(x)+'</p>').join("")+'</div>'
     +'<div class="tl-notice">'+esc(d.classification)+' · Nothing has been offered, accepted, or sent.</div></div>';
 }
