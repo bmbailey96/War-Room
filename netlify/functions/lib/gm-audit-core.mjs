@@ -281,7 +281,7 @@ function freeAgentCandidates(scan, rosteredIds, playersDB, now, mine) {
     if(!p?.name)continue;
     const pid=p.pid?String(p.pid):byName.get(p.name.toLowerCase().replace(/[^a-z0-9]/g,""));
     // An unmatched name cannot be reliably ownership-checked.
-    if(!pid||rosteredIds.has(pid)||!playersDB[pid])continue;
+    if(!pid||rosteredIds.has(pid)||!playersDB[pid]||statusOut(playersDB[pid].inj||playersDB[pid].injury_status))continue;
     if(a.drop?.name&&!mine.depth.players.some(x=>x.name.toLowerCase().replace(/[^a-z0-9]/g,"")===a.drop.name.toLowerCase().replace(/[^a-z0-9]/g,"")))continue;
     const key=pid+"|"+a.type;
     if(out.some(x=>x.key===key))continue;
@@ -392,6 +392,7 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
     freeAgents,
     limitations:[
       "Sleeper scores and ownership are observed data. All-play expected wins are a counterfactual round-robin result, not a prediction of next week.",
+      "Computed standing sorts by wins and points for; Sleeper league-specific tiebreakers or divisions may produce a different official seed.",
       "Potential points are an optimistic lineup ceiling, not proof every bench point was attainable with information available before kickoff.",
       "Trade partner fits compare position depth and observed activity. Player-only trade simulations use War Room estimates and verify ownership but not the reliability of projected gains.",
       "Recent player averages include only completed weeks when that player appears on a league roster; they are not independent rest-of-season forecasts.",
