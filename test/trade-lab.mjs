@@ -15,7 +15,7 @@ const rosterA=[
   p("TE A2","TE",6,8)
 ];
 const rosterB=[
-  p("QB B","QB",16,22),p("RB B","RB",22,40),p("RB B2","RB",11,20),
+  p("QB B","QB",16,22),p("RB B","RB",22,40),p("RB B2","RB",11,20),p("RB B3","RB",9,7),
   p("WR B","WR",12,20),p("WR B2","WR",10,12),p("TE B","TE",12,14),
   p("TE B2","TE",4,5)
 ];
@@ -38,7 +38,7 @@ assert.equal(offer.market.sentValue,8);
 assert.equal(offer.market.receivedValue,40);
 assert.equal(offer.market.netValue,32);
 assert.equal(offer.historicalBaseline.myDelta,10);
-assert.equal(offer.historicalBaseline.theirDelta,0);
+assert.equal(offer.historicalBaseline.theirDelta,-13);
 assert.match(offer.classification,/NOT A TRADE RECOMMENDATION/);
 assert.equal(evaluate(state,"1","2",["P:RB B"],["P:RB A"]).ok,false);
 assert.equal(evaluate(state,"1","1",["P:RB A"],["P:RB A"]).ok,false);
