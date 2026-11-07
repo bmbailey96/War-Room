@@ -43,6 +43,7 @@ export function buildReviewRequest(audit) {
           myNewShortages:x.twoSidedFit.yourRisks||[],
           otherOwnerNewShortages:x.twoSidedFit.theirRisks||[],
           otherOwnerCurrentDirection:x.twoSidedFit.inferredOtherDirection||"Unknown",
+          observedBehavior:x.twoSidedFit.why||[],
           wishesVerified:false
         }:null}
     }))
@@ -67,7 +68,9 @@ export function buildReviewRequest(audit) {
     },
     otherTeams:(audit.teams||[]).filter(t=>!t.isMe).map(t=>({
       name:t.name,standing:t.standing,pfRank:t.pfRank,allPlay:t.allPlay,
-      needs:t.needs,availableDepth:t.availableDepth,tradeCount:t.tradeCount
+      needs:t.needs,availableDepth:t.availableDepth,tradeCount:t.tradeCount,
+      observedPositionsAcquired:t.tradeHistory?.positionsAcquired||{},
+      historicalPicksAcquired:t.tradeHistory?.futurePicksAcquired||0
     })),
     modelValidation:audit.validation?{
       verdict:audit.validation.verdict,overall:audit.validation.overall,
