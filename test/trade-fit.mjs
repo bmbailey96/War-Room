@@ -20,7 +20,7 @@ const audit={
     {rosterId:4,name:"Fourth and noob",standing:9,pfRank:8,tradeCount:0}]
 };
 const meTeam={rosterId:2,name:"Me",players:me};
-const partner={rosterId:4,name:"Fourth and noob",players:them};
+const partner={rosterId:4,name:"Fourth and noob",players:them,tradeHistory:{positionsAcquired:{RB:2},completedTrades:1}};
 const send=[{type:"player",id:"P:meWR4",player:me.find(x=>x.id==="meWR4")}];
 const receive=[{type:"player",id:"P:theirRB4",player:them.find(x=>x.id==="theirRB4")}];
 const good=assess({audit,me:meTeam,partner,send,receive});
@@ -30,6 +30,7 @@ assert.ok(good.mine.reasons.some(x=>/RB coverage improves/.test(x)));
 assert.ok(good.partner.reasons.some(x=>/WR coverage improves/.test(x)));
 assert.equal(good.risks.length,0);
 assert.match(good.why.join(" "),/wants and negotiating priorities are unknown/);
+assert.match(good.why.join(" "),/historical acquisition evidence/);
 assert.match(good.why.join(" "),/No completed trades observed/);
 assert.equal(good.partner.context.inferredDirection.includes("trade preference"),true);
 
