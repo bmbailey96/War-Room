@@ -117,8 +117,12 @@ function rosterNeeds(team, slots) {
   const must={RB:0,WR:0,TE:0,QB:0};
   for(const slot of slots||[])if(must[slot]!=null)must[slot]++;
   const priority=[];
+  const oneQb=must.QB===1&&!(slots||[]).includes("SUPER_FLEX");
   for(const pos of ["RB","WR","TE","QB"]) {
     const have=team.depth.active[pos]||0, required=must[pos]||0;
+    // In a one-QB league, having one healthy QB is not an urgent shortage.
+    // Backup QB depth is typically streamable; only an empty position is urgent.
+    if(pos==="QB"&&oneQb&&have>=1)continue;
     if(required>0&&have<=required)priority.push({pos,level:"urgent",have,required});
     else if(required>0&&have<=required+1)priority.push({pos,level:"thin",have,required});
   }
