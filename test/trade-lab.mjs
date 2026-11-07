@@ -3,6 +3,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 const src=fs.readFileSync(new URL("../trade-lab.js",import.meta.url),"utf8");
 const ctx=vm.createContext({});
+vm.runInContext(fs.readFileSync(new URL("../trade-fit.js",import.meta.url),"utf8"),ctx);
 vm.runInContext(src,ctx);
 const {evaluate,startingBaseline,keyPlayer,keyPick,assetsForTeam}=ctx.WarRoomTradeLab;
 const p=(id,pos,mean=10,value=20)=>({
@@ -33,6 +34,9 @@ assert.equal(before.score,83);
 assert.equal(assetsForTeam(state.tradeInventory.teams[0]).length,8);
 const offer=evaluate(state,"1","2",[keyPlayer(rosterA[6])],[keyPlayer(rosterB[1])]);
 assert.equal(offer.ok,true);
+assert.ok(offer.twoSidedFit);
+assert.ok(offer.twoSidedFit.partner.context.inferredDirection);
+assert.match(offer.twoSidedFit.why.join(" "),/wants and negotiating priorities are unknown/);
 assert.equal(offer.receive[0].name,"RB B");
 assert.equal(offer.market.sentValue,8);
 assert.equal(offer.market.receivedValue,40);
