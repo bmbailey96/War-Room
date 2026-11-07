@@ -74,7 +74,6 @@ export function gradeCapturedProjections(completedWeeks=[],predictionLogs=[],pla
   }
   const custom=results.filter(x=>["QB","RB","WR","TE"].includes(x.position)&&x.source!=="sleeper");
   const customGrade=summarize(custom);
-  const eligible=results.filter(x=>x.naive!=null);
   const trailing=results.filter(x=>x.week>=Math.max(1,Number(weeks.at(-1)?.week||0)-2));
   const verdict=base.n===0?"NO_VERIFIED_PREGAME_SAMPLES"
     :base.naiveCompared<20?"INSUFFICIENT_BASELINE_COMPARISON"
