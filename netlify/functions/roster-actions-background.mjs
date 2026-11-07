@@ -14,6 +14,7 @@ import lineup, {
 import { detectLeagueMode,validateActions,acquisitionPolicy,waiverScheduleFromSettings } from "./lib/roster-v2.mjs";
 import { getDynastyMarket,pickValue } from "./lib/market-v2.mjs";
 import { diagnoseTeamState,buildAllPlayMetrics } from "./lib/team-state.mjs";
+import { waiverEvidenceGuard } from "./lib/waiver-evidence-guard.mjs";
 import {
   buildOpportunityProfiles,buildVacatedOpportunity,vacatedOpportunityEdge,roleExpansionSafety
 } from "./lib/opportunity-v2.mjs";
@@ -2061,6 +2062,7 @@ export default async req=>{
         const dropSafety=drop
           ? dropSafetyDecision(drop,{mode,marketDelta,weeklyDelta,informationConfidence})
           : {allowed:true,profile:null};
+        const evidenceGuard=waiverEvidenceGuard({mode,action:a,add,drop,weeklyDelta,activeSlots,roster:myRoster});
         const specialist=specialistRosterDecision({
           mode,add:addForSim,drop,roster:myRoster,activeSlots,week,marginalDrop:marginal(drop)
         });
@@ -2116,10 +2118,11 @@ export default async req=>{
           signalCount:agreement.count,signalAgreement:agreement,
           fastTrending:add?.fastTrending??0,
           trendDelta:add?.trendDelta??null,trendVelocity:add?.trendVelocity??null,
-          rosterFitBlocked:!specialist.allowed||!depthFit.allowed||!dropSafety.allowed,
+          rosterFitBlocked:!specialist.allowed||!depthFit.allowed||!dropSafety.allowed||evidenceGuard.block,
           specialistMode:specialist.mode||null,
           streamWeekEdge:stream.thisWeekEdge,streamNext3Edge:stream.next3Edge,
-          rosterFitReason:specialist.reason||depthFit.reason||dropSafety.reason||null,
+          rosterFitReason:evidenceGuard.reasons.join(" ")||specialist.reason||depthFit.reason||dropSafety.reason||null,
+          evidenceGuard,
           dropSafety,
           forecastSource:add?.forecastSource||null,
           roleRatio:add?.roleRatio??null,
@@ -2312,9 +2315,7 @@ export default async req=>{
     const result={
       at:Date.now(),league:{id:chosen.id,name:league.name,mode,week,season},
       summary:irPlan?.headline||parsed.summary||actions[0]?.headline||"No urgent roster move.",
-      actions:actions.length?actions:deterministicRosterFallback({
-        waivers:waiverPlan,trades:deterministicTrades,mode,usesFaab,faabRemainingPct,teamState
-      }).actions,
+      actions:actions.length?actions:[{type:"HOLD",headline:"No transaction clears the evidence and roster-safety checks",why:"Review player roles, current ownership and independent market value before spending FAAB or proposing a trade.",confidence:"LOW"}],
       watch:Array.isArray(parsed.watch)?parsed.watch.slice(0,3):[],
       context:{
         teamState,
