@@ -55,7 +55,12 @@ const tradedPicks=[{season:"2027",round:1,roster_id:3,owner_id:1,previous_owner_
 const scan={at:now-5*60000,actions:[
   {type:"ADD_DROP",headline:"Add Free RB",add:{name:"Free RB",pid:"Free RB"},drop:{name:"My TE 4"},weeklyDelta:1.5,immediateFreeAgent:true},
   {type:"ADD_DROP",headline:"Add Already Owned",add:{name:"Partner RB 1",pid:"Partner RB 1"},weeklyDelta:3,immediateFreeAgent:true}
-]};
+],context:{deterministicTrades:[
+  {partner:"Good Partner",target:"Partner RB 1",send:[{type:"player",name:"My TE 3"}],weeklyDelta:2,partnerWeeklyDelta:0.5,marketDelta:3},
+  {partner:"Good Partner",target:"Partner RB 1",send:[{type:"pick",name:"2027 1st"}],weeklyDelta:2,partnerWeeklyDelta:1},
+  {partner:"Good Partner",target:"C RB",send:[{type:"player",name:"My TE 2"}],weeklyDelta:4,partnerWeeklyDelta:1},
+  {partner:"Good Partner",target:"Partner RB 2",send:[{type:"player",name:"Not Mine"}],weeklyDelta:3,partnerWeeklyDelta:1}
+]}};
 
 const args={league,rosters,users,playersDB:db,tradedPicks,weeks,transactions,ownerId:MY_OWNER,now,scan};
 const audit=buildGmAudit(args);
@@ -76,6 +81,10 @@ const partner=audit.tradePartners.find(p=>p.name==="Good Partner");
 assert.equal(partner.targetExamples[0].name,"Partner RB 1");
 assert.equal(partner.targetExamples[0].recentAvg,29);
 assert.match(partner.caveat,/No fair offer/);
+assert.equal(audit.tradeSimulations.length,1);
+assert.equal(audit.tradeSimulations[0].get.name,"Partner RB 1");
+assert.equal(audit.tradeSimulations[0].send[0].name,"My TE 3");
+assert.match(audit.tradeSimulations[0].caveat,/not guaranteed/);
 assert.equal(audit.freeAgents.candidates.length,1);
 assert.equal(audit.freeAgents.candidates[0].name,"Free RB");
 assert.ok(audit.me.picks.some(p=>p.season===2027&&p.round===1&&p.originalTeam==="C team"&&p.traded===true));
@@ -89,6 +98,7 @@ const redraft=buildGmAudit({...args,league:{...league,settings:{type:0,pick_trad
 assert.equal(redraft.league.mode,"REDRAFT");
 assert.equal(redraft.me.picks.length,0);
 assert.equal(redraft.freeAgents.verified,false);
+assert.equal(redraft.tradeSimulations.length,0);
 const out=buildGmAudit({...args,playersDB:{...db,"My RB 2":{...db["My RB 2"],inj:"Out"}}});
 assert.equal(out.me.depth.active.RB,1);
 assert.ok(out.me.needs.some(x=>x.pos==="RB"&&x.level==="urgent"));
