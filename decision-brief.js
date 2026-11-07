@@ -132,11 +132,16 @@
         "Roster-scan freshness"));
     }
 
-    const injured = roster.filter(p => p.out && !p.locked);
-    if (injured.length) result.investigate.push(briefItem("VERIFY",
-      "Resolve " + injured.length + " unavailable roster player" + (injured.length === 1 ? "" : "s"),
-      injured.slice(0, 4).map(p => p.name).join(", ") + ". Check reserve eligibility and whether replacements are actually available.",
-      "Sleeper player status; confirm with team reports"));
+    const injuryUnavailable = roster.filter(p => p.out && !p.bye && !p.locked);
+    const byeUnavailable = roster.filter(p => p.bye && !p.locked);
+    if (injuryUnavailable.length) result.investigate.push(briefItem("VERIFY",
+      "Review " + injuryUnavailable.length + " injury-unavailable roster player" + (injuryUnavailable.length === 1 ? "" : "s"),
+      injuryUnavailable.slice(0, 4).map(p => p.name).join(", ") + ". Verify the final designation and IR eligibility before any drop.",
+      "Sleeper player status; verify with official team report"));
+    if (byeUnavailable.length) result.investigate.push(briefItem("CONTEXT",
+      byeUnavailable.length + " player" + (byeUnavailable.length===1?" is":"s are") + " on bye",
+      byeUnavailable.slice(0, 4).map(p=>p.name).join(", ") + ". This is a schedule absence, not an injury or an excuse to cut a valuable player.",
+      "Sleeper game-week availability"));
 
     if (!result.rightNow.length) result.rightNow.push(briefItem("HOLD",
       "No clear immediate move",
