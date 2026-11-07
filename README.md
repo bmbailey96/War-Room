@@ -162,3 +162,62 @@ matchup and roster components remain. They are collapsed or reordered, not
 deleted. The old README claim that public RSS could override V2 lineup
 judgment was changed because the currently shipped module is deterministic.
 
+
+
+## Two-sided Trade Laboratory (draft branch)
+
+The Trade Laboratory uses the current Sleeper league inventory from GM Audit.
+Select another manager and up to four assets from each side, including owned
+dynasty draft picks. No transaction is made.
+
+It calculates both teams' best legal starting lineup under a recent observed
+four-game baseline *only when there are at least two league-scored appearances*
+for each needed starter. Missing history remains unknown. Dynasty reference
+values come from DynastyProcess 1QB, where published. Missing market values
+remain unknown. Pick origins and value ranges are not precisely priced.
+Roster-space imbalance and potential injury uncertainty are flagged.
+
+The tool is **not a rest-of-season forecast**, not a verified injury report,
+and not proof that an owner would accept a trade.
+
+## Independent GM Review (draft branch, opt-in)
+
+The independent GM section has two workflows:
+
+1. **COPY REVIEW PROMPT FOR CHATGPT** copies a fact-labeled audit and
+   instructions for an independent analysis. No provider key or automatic
+   inference call is needed.
+2. **RUN INDEPENDENT REVIEW** makes one expressly requested server-side AI
+   call, only after private owner authentication. It is disabled by default.
+
+To enable the paid reviewer, privately configure Netlify environment variables:
+
+- `WARROOM_GM_OWNER_CODE`: high-entropy random secret at least 24 characters.
+- `ANTHROPIC_API_KEY`: existing or new Anthropic API key.
+
+Never commit either value or paste it into a public chat. The owner enters
+the access code in the page's password field, which clears after submission.
+The server checks that the league belongs to this Sleeper owner, rejects
+audits older than an hour, attempts a per-league concurrency lock, and
+caches the validated report for 12 hours per league. A lock is not a strict
+distributed billing guarantee; monitor provider usage separately. Reviews
+never trigger on load, refresh, or switching leagues.
+
+The AI uses the GM Audit only, without external web search. It chooses
+among a server whitelist of actual reviewed waiver/trade candidates or HOLD,
+returns its strongest counterargument, and labels source fields. Free-text
+reasoning is still an AI hypothesis, not verified current news. No trade,
+waiver, or other fantasy transaction is performed.
+
+**Pre-merge security concern:** some legacy AI endpoints remain exposed with
+provider credentials server-side. The new owner-protected reviewer does not
+reuse those endpoints; assess the legacy access controls before production
+deployment. Existing legacy views and endpoints were not removed.
+
+## Live Sleeper smoke
+
+`scripts/live-gm-audit-smoke.mjs` fetches both owned current Sleeper leagues and
+verifies roster IDs, inventory ownership, counts, and conservative handling of
+missing market scans. GitHub Actions runs it with `continue-on-error` since
+third-party uptime is not under our control. Ordinary unit/UI tests remain
+mandatory.
