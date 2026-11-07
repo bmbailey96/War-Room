@@ -107,6 +107,34 @@ function tradeActivity(transactions) {
   return byId;
 }
 
+function observedTradeAcquisitions(transactions,playersDB) {
+  const byRoster={},seen=new Set();
+  const entry=id=>(byRoster[String(id)]||(byRoster[String(id)]={
+    positionsAcquired:{},futurePicksAcquired:0
+  }));
+  for(const group of transactions||[]) {
+    const rows=Array.isArray(group)?group:(group?.rows||[]);
+    for(const t of rows){
+      if(t?.type!=="trade"||t.status!=="complete")continue;
+      const id=String(t.transaction_id||"");
+      if(!id||seen.has(id))continue;
+      seen.add(id);
+      for(const [pid,rid] of Object.entries(t.adds||{})){
+        if(rid==null)continue;
+        const pos=posOf(playersDB?.[pid]||{});
+        if(pos==="OTHER")continue;
+        const counts=entry(rid).positionsAcquired;
+        counts[pos]=(counts[pos]||0)+1;
+      }
+      for(const pick of t.draft_picks||[]){
+        if(pick.owner_id==null||String(pick.owner_id)===String(pick.previous_owner_id))continue;
+        entry(pick.owner_id).futurePicksAcquired++;
+      }
+    }
+  }
+  return byRoster;
+}
+
 function rankBy(rows,key,desc=true) {
   const valid=rows.filter(x=>Number.isFinite(x[key]));
   return Object.fromEntries(valid.map(x=>[
@@ -312,6 +340,7 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
   const history=completedMatches(weeks,rosters);
   const recent=recentPoints(history);
   const completedTradeCounts=tradeActivity(transactions);
+  const historicalAcquisitions=observedTradeAcquisitions(transactions,playersDB);
   const names=Object.fromEntries(users.map(u=>[asId(u.user_id),u.metadata?.team_name||u.display_name||String(u.user_id)]));
   const pickBook=ownedPicks(league,rosters,users,tradedPicks);
   const teams=rosters.map(r=>{
@@ -336,6 +365,7 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
         luckWins:covered?round(n(st.wins)-n(allPlay.expectedWins)):null,
         comparableToRecord:covered},
       tradeCount:completedTradeCounts[rid]||0,
+      tradeHistory:historicalAcquisitions[rid]||{positionsAcquired:{},futurePicksAcquired:0},
       picks:pickBook.picksByRoster[rid]||[],
     };
     team.strength=strengthByPos(team,recent);
@@ -375,6 +405,7 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
 
   const inventory=teams.map(t=>({
     rosterId:String(t.rosterId),name:t.name,isMe:t.isMe,
+    tradeHistory:{...t.tradeHistory,completedTrades:t.tradeCount},
     players:t.depth.players.map(p=>{
       const past=recent.get(String(p.id));
       const marketKey=String(p.name||"").toLowerCase().replace(/[^a-z ]/g,"")
@@ -411,7 +442,7 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
     league:{mode:pickBook.mode,activeSlots:(league.roster_positions||[]).filter(x=>!["BN","IR","TAXI"].includes(x)),
       playoffTeams:Number(league.settings?.playoff_teams||0),teamCount},
     teams:teams.map(t=>({
-      rosterId:t.rosterId,name:t.name,standing:t.standing,pfRank:t.pfRank,tradeCount:t.tradeCount
+      rosterId:t.rosterId,name:t.name,standing:t.standing,pfRank:t.pfRank,tradeCount:t.tradeCount,tradeHistory:t.tradeHistory
     }))
   };
   const normalize=x=>String(x||"").toLowerCase().replace(/[^a-z0-9]/g,"");
@@ -456,6 +487,7 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
       pfRank:t.pfRank,potentialRank:t.potentialRank,allPlayRank:t.allPlayRank,
       allPlay:t.allPlay,needs:t.needs,
       depth:t.depth.total,availableDepth:t.depth.active,tradeCount:t.tradeCount,
+      tradeHistory:t.tradeHistory,
     })),
     tradePartners,
     tradeInventory,
