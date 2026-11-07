@@ -226,7 +226,42 @@ function opponentTradeIdeas(me, teams, league, recent) {
   return out.sort((a,b)=>b.fitScore-a.fitScore||b.completedTradesThisSeason-a.completedTradesThisSeason).slice(0,5);
 }
 
-function freeAgentCandidates(scan, rosteredIds, playersDB, now, rosterIds) {
+function verifiedTradeSimulations(scan, me, teams) {
+  // Existing War Room computes both teams' projected lineup and value math.
+  // This layer only shows player-only packages whose ownership still matches
+  // live rosters. Pick packages require manual verification and are withheld.
+  const normal=x=>String(x||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+  const others=teams.filter(t=>!t.isMe);
+  const out=[];
+  for(const idea of scan?.context?.deterministicTrades||[]) {
+    if(out.length>=5)break;
+    if(!idea?.target||!idea?.partner||!Array.isArray(idea.send)||!idea.send.length)continue;
+    if(idea.send.some(x=>x.type!=="player"||!x.name))continue;
+    const t=others.find(x=>normal(x.name)===normal(idea.partner));
+    if(!t)continue;
+    const player=t.depth.players.find(p=>normal(p.name)===normal(idea.target));
+    if(!player)continue;
+    const send=idea.send.map(x=>me.depth.players.find(p=>normal(p.name)===normal(x.name)));
+    if(send.some(x=>!x)||new Set(send.map(x=>x.id)).size!==send.length)continue;
+    if(!Number.isFinite(Number(idea.weeklyDelta))||Number(idea.weeklyDelta)<=0)continue;
+    if(!Number.isFinite(Number(idea.partnerWeeklyDelta)))continue;
+    out.push({
+      partner:t.name,
+      send:send.map(x=>({name:x.name,pos:x.pos})),
+      get:{name:player.name,pos:player.pos},
+      myWeeklyModelDelta:round(idea.weeklyDelta),
+      theirWeeklyModelDelta:round(idea.partnerWeeklyDelta),
+      dynastyModelValueDelta:idea.marketDelta==null?null:round(idea.marketDelta),
+      modelTradeRatio:idea.tradeRatio??null,
+      managerTradeCount:t.tradeCount,
+      verdict:"RESEARCH ONLY",
+      caveat:"Player ownership rechecked. The two projected lineup deltas and market valuations are model estimates, not guaranteed gains or an accepted offer."
+    });
+  }
+  return out;
+}
+
+function freeAgentCandidates(scan, rosteredIds, playersDB, now, mine) {
   const age=scan?.at!=null?(now-Number(scan.at))/60000:null;
   const valid=age!=null&&age>=0&&age<=360&&!scan?.refreshing&&!scan?.error&&!scan?.status;
   if(!valid)return {
@@ -246,6 +281,7 @@ function freeAgentCandidates(scan, rosteredIds, playersDB, now, rosterIds) {
     const pid=p.pid?String(p.pid):byName.get(p.name.toLowerCase().replace(/[^a-z0-9]/g,""));
     // An unmatched name cannot be reliably ownership-checked.
     if(!pid||rosteredIds.has(pid)||!playersDB[pid])continue;
+    if(a.drop?.name&&!mine.depth.players.some(x=>x.name.toLowerCase().replace(/[^a-z0-9]/g,"")===a.drop.name.toLowerCase().replace(/[^a-z0-9]/g,"")))continue;
     const key=pid+"|"+a.type;
     if(out.some(x=>x.key===key))continue;
     out.push({key,name:p.name,pos:posOf(playersDB[pid]),
@@ -311,7 +347,8 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
   teams.forEach((t,i)=>t.standing=i+1);
   const me=teams.find(x=>x.isMe);
   const owned=new Set(rosters.flatMap(r=>(r.players||[]).map(asId)));
-  const freeAgents=freeAgentCandidates(scan,owned,playersDB,now,rosters.map(r=>r.roster_id));
+  const freeAgents=freeAgentCandidates(scan,owned,playersDB,now,me);
+  const tradeSimulations=verifiedTradeSimulations(scan,me,teams);
   const tradePartners=opponentTradeIdeas(me,teams,league,recent);
 
   let diagnosis="Performance cannot be diagnosed without completed weekly matchups.";
@@ -350,11 +387,12 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
       depth:t.depth.total,availableDepth:t.depth.active,tradeCount:t.tradeCount,
     })),
     tradePartners,
+    tradeSimulations,
     freeAgents,
     limitations:[
       "Sleeper scores and ownership are observed data. All-play expected wins are a counterfactual round-robin result, not a prediction of next week.",
       "Potential points are an optimistic lineup ceiling, not proof every bench point was attainable with information available before kickoff.",
-      "Trade partner fits compare position depth and observed activity. A fair exchange requires separate player valuation and both teams' optimized lineups.",
+      "Trade partner fits compare position depth and observed activity. Player-only trade simulations use War Room estimates and verify ownership but not the reliability of projected gains.",
       "Recent player averages include only completed weeks when that player appears on a league roster; they are not independent rest-of-season forecasts.",
       "Injury tags from player metadata may lag official reports. Verify practice status and game locks before acting.",
       "This audit does not incorporate current external news, betting lines or updated expert projections. They must be checked separately."
