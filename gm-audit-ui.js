@@ -91,10 +91,31 @@
         :'<p class="audit-footnote">Redraft league. Future rookie picks are not dynasty assets.</p>')
       +'</div>';
 
+    const calibration=data.validation||{};
+    const compared=calibration.overall?.naiveCompared||0;
+    const evidenceCard='<div class="audit-box audit-validation"><h4>FORECAST SCORECARD / DOES THE MODEL EARN ITS COMPLEXITY?</h4>'
+      +'<div class="audit-metrics">'
+      +row("PREGAME PLAYER-WEEKS",calibration.evaluatedSamples??0,"Actual league-scored outcomes")
+      +row("COMPARABLE TO SIMPLE BASELINE",compared,"Requires 2+ prior observed games")
+      +row("MODEL MAE / SAME SAMPLE",fixed(calibration.overall?.modelMaeCompared),"Lower is better")
+      +row("TRAILING-AVG MAE",fixed(calibration.overall?.naiveMae),"Same players and weeks")
+      +'</div><div class="audit-intro"><strong>'
+      +(calibration.verdict==="MODEL_BEATS_NAIVE"?"Model beat the simple baseline on this sample"
+        :calibration.verdict==="NAIVE_BEATS_MODEL"?"Simple historical average beat War Room's model"
+        :calibration.verdict==="TIE_WITHIN_POINT_25"?"Model and simple baseline are essentially tied"
+        :"Insufficient verified comparisons to claim a model advantage")
+      +'</strong><p>'
+      +esc(calibration.note||"No validated pregame forecast data available.")
+      +'</p></div>'
+      +(calibration.recentModelMisses?.length?'<details class="audit-picks"><summary>Largest recent prediction misses</summary><div>'
+        +calibration.recentModelMisses.slice(0,6).map(p=>'<div>W'+esc(p.week)+' '+esc(p.name)+' ('
+          +esc(p.position)+'): model '+fixed(p.projection)+' / actual '+fixed(p.actual)+'</div>').join("")
+        +'</div></details>':"")
+      +'</div>';
     const quality='<details class="audit-limits"><summary>What this audit cannot establish ('+esc((data.limitations||[]).length)+')</summary>'
       +'<ul>'+(data.limitations||[]).map(x=>'<li>'+esc(x)+'</li>').join("")+'</ul></details>';
 
-    return status+intro+stats+
+    return status+intro+stats+evidenceCard+
       '<div class="audit-columns"><div>'+actualStandings+trade+tradeModels+'</div><div>'+holdings+freeHtml+'</div></div>'+quality;
   }
   root.WarRoomGmAudit={renderAudit};
