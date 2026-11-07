@@ -226,7 +226,8 @@ function opponentTradeIdeas(me, teams, league, recent) {
   return out.sort((a,b)=>b.fitScore-a.fitScore||b.completedTradesThisSeason-a.completedTradesThisSeason).slice(0,5);
 }
 
-function verifiedTradeSimulations(scan, me, teams) {
+function verifiedTradeSimulations(scan, me, teams, now) {
+  if(!scan?.at||now-Number(scan.at)>6*60*60*1000||scan.refreshing||scan.error)return [];
   // Existing War Room computes both teams' projected lineup and value math.
   // This layer only shows player-only packages whose ownership still matches
   // live rosters. Pick packages require manual verification and are withheld.
@@ -348,7 +349,7 @@ export function buildGmAudit({league,rosters=[],users=[],playersDB={},tradedPick
   const me=teams.find(x=>x.isMe);
   const owned=new Set(rosters.flatMap(r=>(r.players||[]).map(asId)));
   const freeAgents=freeAgentCandidates(scan,owned,playersDB,now,me);
-  const tradeSimulations=verifiedTradeSimulations(scan,me,teams);
+  const tradeSimulations=verifiedTradeSimulations(scan,me,teams,now);
   const tradePartners=opponentTradeIdeas(me,teams,league,recent);
 
   let diagnosis="Performance cannot be diagnosed without completed weekly matchups.";
