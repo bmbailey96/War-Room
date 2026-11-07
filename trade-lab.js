@@ -89,12 +89,14 @@ function evaluate(league,meId,partnerId,sendIds=[],receiveIds=[]) {
   if(send.concat(receive).some(a=>a.injury))risks.push("An included player carries an injury designation. Verify official status.");
   const myDelta=baselineReady?round(myAfter.score-myBefore.score):null;
   const partnerDelta=baselineReady?round(theirAfter.score-theirBefore.score):null;
+  const fit=root.WarRoomTradeFit?.assess({audit:league,me,partner,send,receive})||null;
   return {
     ok:true,
     owner:me.name,partner:partner.name,
     send:send.map(a=>({id:a.id,type:a.type,name:a.name,pos:a.pos||null,value:a.marketValue??null})),
     receive:receive.map(a=>({id:a.id,type:a.type,name:a.name,pos:a.pos||null,value:a.marketValue??null})),
     evidence:{inventoryAt:league.tradeInventory.at,marketDate:league.tradeInventory.marketSourceDate},
+    twoSidedFit:fit,
     historicalBaseline:baselineReady?{
       myBefore:myBefore.score,myAfter:myAfter.score,myDelta,
       theirBefore:theirBefore.score,theirAfter:theirAfter.score,theirDelta:partnerDelta,
