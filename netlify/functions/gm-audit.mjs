@@ -29,7 +29,7 @@ export default async function gmAudit(request){
     const chosen=leagues.find(l=>l.id===requested)||(!requested?leagues[0]:null);
     if(!chosen)return response({error:"League not among the owner's Sleeper leagues"},404);
     id=chosen.id;
-    const key="gm_audit_v1_"+id;
+    const key="gm_audit_v2_"+id;
     cache=await s.get(key,{type:"json"}).catch(()=>null);
     const target=rosterActionsFreshnessMs(now)<=10*60*1000?TTL_GAMEDAY:TTL_NORMAL;
     if(!force&&cache&&now-Number(cache.at||0)<target)
