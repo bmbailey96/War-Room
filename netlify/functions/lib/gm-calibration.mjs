@@ -57,7 +57,7 @@ export function gradeCapturedProjections(completedWeeks=[],predictionLogs=[],pla
       const naive=prev.length>=2?prev.reduce((a,b)=>a+b,0)/prev.length:null;
       const position=normalizePos(p.slot,playersDB[pid]);
       results.push({week:week.week,pid,name:p.name||playersDB[pid]?.n||pid,position,
-        source:p.source||"unknown",pred:projection,actual:currentScore,naive,
+        source:p.source||(p.fallback?"sleeper":"custom"),pred:projection,actual:currentScore,naive,
         error:round(projection-currentScore),absoluteError:round(Math.abs(projection-currentScore))});
     }
     for(const [pid,score] of Object.entries(current)){
