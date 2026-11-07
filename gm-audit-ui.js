@@ -80,7 +80,7 @@
       +["QB","RB","WR","TE","K","DEF"].map(pos=>{
         const total=me.depth?.total?.[pos]||0,available=me.depth?.active?.[pos]||0;
         const thin=me.needs?.find(x=>x.pos===pos);
-        return '<div><b>'+esc(cleanLabel(pos))+'</b><span>'+esc(available)+' active / '+esc(total)+' owned</span>'
+        return '<div><b>'+esc(cleanLabel(pos))+'</b><span>'+esc(available)+' not OUT/IR / '+esc(total)+' owned</span>'
           +(thin?'<small>'+esc(thin.level.toUpperCase())+' DEPTH</small>':"")+'</div>';
       }).join("")+'</div>'
       +(data.league?.mode==="DYNASTY"
@@ -90,6 +90,7 @@
               +(p.traded?' (acquired)':' (original)')+'</div>').join("")||'<div>No picks found.</div>')
           +'</div></details>'
         :'<p class="audit-footnote">Redraft league. Future rookie picks are not dynasty assets.</p>')
+      +'<p class="audit-footnote">Counts exclude OUT/IR/reserve designations, but NOT bye weeks or questionable game statuses. Check the weekly lineup for game-day availability.</p>'
       +'</div>';
 
     const calibration=data.validation||{};
@@ -106,6 +107,7 @@
         :calibration.verdict==="TIE_WITHIN_POINT_25"?"Model and simple baseline are essentially tied"
         :"Insufficient verified comparisons to claim a model advantage")
       +'</strong><p>'
+      +(calibration.evaluatedSamples===0?"No matching saved-before-kickoff forecasts were found for completed games. The 41 prior learner samples are not a validated forecast track record. ":"")
       +esc(calibration.note||"No validated pregame forecast data available.")
       +'</p></div>'
       +(calibration.recentModelMisses?.length?'<details class="audit-picks"><summary>Largest recent prediction misses</summary><div>'
