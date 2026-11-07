@@ -92,8 +92,11 @@ function contextFor(audit,team){
     &&standing<=playoff&&pf<=Math.ceil(count/2);
   const struggling=playoff>0&&standing!=null&&pf!=null&&count>0
     &&standing>playoff&&pf>Math.ceil(count/2);
+  const history=team.tradeHistory||row.tradeHistory||{};
   return {name:team.name||row.name||"Team",
-    observedTrades:asNum(row.tradeCount)??0,
+    observedTrades:asNum(row.tradeCount)??asNum(history.completedTrades)??0,
+    acquiredPositions:history.positionsAcquired||{},
+    futurePicksAcquired:asNum(history.futurePicksAcquired)??0,
     standing,pfRank:pf,
     inferredDirection:league.mode==="DYNASTY"?
       contender?"current contender (inferred from record and scoring)":
@@ -144,6 +147,12 @@ function assess({audit,me,partner,send=[],receive=[],partnerCuts=[],myCuts=[]}){
   if(otherProfile.observedTrades===0)
     why.push("No completed trades observed this season; that does not establish unwillingness");
   else why.push(otherProfile.observedTrades+" completed trade(s) observed this season; willingness on this offer remains unknown");
+  const past=Object.entries(otherProfile.acquiredPositions).filter(([,n])=>Number(n)>0)
+    .sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,3);
+  if(past.length)why.push("Observed completed trades brought in "+past.map(([pos,count])=>count+" "+pos).join(", ")+
+    " player(s). That is historical acquisition evidence, not proof of current demand.");
+  if(otherProfile.futurePicksAcquired>0)
+    why.push("The manager received "+otherProfile.futurePicksAcquired+" future pick(s) in completed deals; their current preference for draft capital is unknown.");
   // The manager's expressed player/pick wants are never public API facts.
   why.push("Manager wants and negotiating priorities are unknown unless stated by that manager");
   return {status,hasMutualDepthFit:positiveMe&&positivePartner&&!negativeMe&&!negativePartner,
