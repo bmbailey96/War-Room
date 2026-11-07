@@ -134,10 +134,10 @@ function assess({audit,me,partner,send=[],receive=[],partnerCuts=[],myCuts=[]}){
   const positivePartner=theirs.reasons.length>0;
   const negativeMe=mine.risks.length>0,negativePartner=theirs.risks.length>0;
   let status="NEEDS FURTHER NEGOTIATION";
-  if(positiveMe&&positivePartner&&!negativeMe&&!negativePartner)status="TWO-SIDED ROSTER FIT";
+  if(negativeMe||negativePartner)status="CREATES A DEPTH PROBLEM";
+  else if(positiveMe&&positivePartner)status="TWO-SIDED ROSTER FIT";
   else if(positiveMe&&!positivePartner)status="YOUR NEED IS CLEAR; THEIRS IS NOT";
   else if(!positiveMe&&positivePartner)status="THEIR NEED IS CLEAR; YOURS IS NOT";
-  else if(negativeMe||negativePartner)status="CREATES A DEPTH PROBLEM";
   const why=[];
   if(!positiveMe)why.push("Your roster gains no demonstrated shortage improvement by counts alone");
   if(!positivePartner)why.push("The other manager gains no demonstrated shortage improvement by counts alone");
